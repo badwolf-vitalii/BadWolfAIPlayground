@@ -86,6 +86,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Grid Grid.Row="0" Margin="0,0,0,25">
@@ -96,9 +97,9 @@
                     <StackPanel>
                         <TextBlock Text="NEURAL NETWORK LAB" Foreground="#58B5FF"
                                    FontSize="11" FontWeight="Bold" />
-                        <TextBlock Text="Teach a network to think." FontSize="29"
+                        <TextBlock Text="Learn how a neural network actually works." FontSize="29"
                                    FontWeight="Bold" Margin="0,7,0,5" />
-                        <TextBlock Text="Build, train, and explore a neural network from scratch."
+                        <TextBlock Text="One small experiment, four examples, and real results you can compare."
                                    Style="{StaticResource MutedText}" FontSize="13" />
                     </StackPanel>
                     <Border Grid.Column="1" Background="#12342F" BorderBrush="#266D61"
@@ -112,8 +113,173 @@
                     </Border>
                 </Grid>
 
+                <!-- Guided XOR lesson: explain the goal and next action before the controls. -->
+                <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,0,0,18"
+                        Background="#10243B" BorderBrush="#2A6189">
+                    <StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="START HERE" FontSize="11" FontWeight="Bold"
+                                           Foreground="#69C1FF" />
+                                <TextBlock Text="  ·  GUIDED XOR EXPERIMENT" FontSize="11"
+                                           Foreground="#8EB1D0" />
+                            </StackPanel>
+                            <Border Grid.Column="1" Background="#1B3B59" CornerRadius="7"
+                                    Padding="10,4" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding LessonStepLabel}" FontSize="10"
+                                           FontWeight="SemiBold" Foreground="#B6DEFF" />
+                            </Border>
+                        </Grid>
+                        <TextBlock Text="{Binding LessonTitle}" FontSize="21" FontWeight="SemiBold"
+                                   Margin="0,12,0,5" />
+                        <TextBlock Text="{Binding LessonDescription}" TextWrapping="Wrap"
+                                   Foreground="#C5D8ED" FontSize="13" />
+
+                        <!-- Step 1: the entire XOR dataset, with no assumed prior knowledge. -->
+                        <UniformGrid Columns="4" Margin="0,16,0,0">
+                            <UniformGrid.Style>
+                                <Style TargetType="UniformGrid">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LessonStep}" Value="1">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </UniformGrid.Style>
+                            <Border Background="#162E49" BorderBrush="#36516F" BorderThickness="1"
+                                    CornerRadius="8" Padding="10" Margin="0,0,6,0">
+                                <TextBlock Text="0 XOR 0  =  0" Foreground="#EAF4FF" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border Background="#162E49" BorderBrush="#36516F" BorderThickness="1"
+                                    CornerRadius="8" Padding="10" Margin="6,0,6,0">
+                                <TextBlock Text="0 XOR 1  =  1" Foreground="#EAF4FF" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border Background="#162E49" BorderBrush="#36516F" BorderThickness="1"
+                                    CornerRadius="8" Padding="10" Margin="6,0,6,0">
+                                <TextBlock Text="1 XOR 0  =  1" Foreground="#EAF4FF" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                            <Border Background="#162E49" BorderBrush="#36516F" BorderThickness="1"
+                                    CornerRadius="8" Padding="10" Margin="6,0,0,0">
+                                <TextBlock Text="1 XOR 1  =  0" Foreground="#EAF4FF" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+                        </UniformGrid>
+
+                        <!-- Step 2: preserve an initial baseline instead of comparing to guesses from memory. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LessonStep}" Value="2">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <Border Background="#182F46" CornerRadius="8" Padding="14,10" Margin="0,0,10,0">
+                                <StackPanel>
+                                    <TextBlock Text="STARTING ACCURACY" FontSize="10" Foreground="#91ABC8" />
+                                    <TextBlock Text="{Binding BeforeAccuracyText}" FontSize="21" FontWeight="Bold"
+                                               Foreground="#E7F0FF" />
+                                </StackPanel>
+                            </Border>
+                            <Border Background="#182F46" CornerRadius="8" Padding="14,10" Margin="0,0,10,0">
+                                <StackPanel>
+                                    <TextBlock Text="STARTING LOSS" FontSize="10" Foreground="#91ABC8" />
+                                    <TextBlock Text="{Binding BeforeLossText}" FontSize="21" FontWeight="Bold"
+                                               Foreground="#E7F0FF" />
+                                </StackPanel>
+                            </Border>
+                            <TextBlock Text="{Binding BaselineContextText}" FontSize="11"
+                                       Foreground="#9DB8D2" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <!-- Step 3: a direct action in the lesson, not a hunt for a button elsewhere. -->
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LessonStep}" Value="3">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <Button Content="▶  Train now" Command="{Binding TrainCommand}"
+                                    Style="{StaticResource PrimaryButton}" Margin="0,0,14,0"
+                                    ToolTip="Use the experiment settings below and train the XOR network" />
+                            <TextBlock Text="{Binding StatusText}" FontSize="12" Foreground="#AFC6E0"
+                                       TextWrapping="Wrap" VerticalAlignment="Center" />
+                        </StackPanel>
+
+                        <!-- Step 4: show real numbers from this session, not illustrative claims. -->
+                        <StackPanel Margin="0,16,0,0">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LessonStep}" Value="4">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                            <UniformGrid Columns="3">
+                                <Border Background="#182F46" CornerRadius="8" Padding="12,9" Margin="0,0,8,0">
+                                    <StackPanel>
+                                        <TextBlock Text="BEFORE: CORRECT" FontSize="10" Foreground="#91ABC8" />
+                                        <TextBlock Text="{Binding BeforeAccuracyText}" FontSize="18" FontWeight="SemiBold" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#182F46" CornerRadius="8" Padding="12,9" Margin="4,0,4,0">
+                                    <StackPanel>
+                                        <TextBlock Text="NOW: CORRECT" FontSize="10" Foreground="#91ABC8" />
+                                        <TextBlock Text="{Binding AccuracyText}" FontSize="18" FontWeight="SemiBold"
+                                                   Foreground="#55D9BE" />
+                                    </StackPanel>
+                                </Border>
+                                <Border Background="#182F46" CornerRadius="8" Padding="12,9" Margin="8,0,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="CHANGE IN LOSS" FontSize="10" Foreground="#91ABC8" />
+                                        <TextBlock Text="{Binding LossChangeText}" FontSize="14" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                            </UniformGrid>
+                            <TextBlock Text="{Binding LessonOutcome}" Foreground="#B8E7DA"
+                                       FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0" />
+                        </StackPanel>
+
+                        <Border Background="#0B1D31" CornerRadius="8" Padding="12,9"
+                                Margin="0,15,0,0">
+                            <TextBlock Text="{Binding LessonHint}" Foreground="#B6CDE4"
+                                       FontSize="12" TextWrapping="Wrap" />
+                        </Border>
+                        <StackPanel Orientation="Horizontal" Margin="0,13,0,0">
+                            <Button Content="←  Previous" Command="{Binding PreviousLessonCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" />
+                            <Button Content="{Binding LessonNextLabel}" Command="{Binding NextLessonCommand}"
+                                    Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
+                                    ToolTip="At step 3, train at least once before viewing the results" />
+                            <Button Content="Restart guide" Command="{Binding RestartLessonCommand}"
+                                    Style="{StaticResource SecondaryButton}"
+                                    ToolTip="Rewind the explanation without deleting learned weights" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- Visualization + experiment configuration -->
-                <Grid Grid.Row="1" Margin="0,0,0,18">
+                <Grid Grid.Row="2" Margin="0,0,0,18">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="1.48*" />
                         <ColumnDefinition Width="1*" />
@@ -154,31 +320,43 @@
                     <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
                         <StackPanel>
                             <TextBlock Text="Experiment settings" FontSize="16" FontWeight="SemiBold" />
-                            <TextBlock Text="Configure the XOR training session"
+                            <TextBlock Text="Use the defaults for your first experiment"
                                        Style="{StaticResource MutedText}" FontSize="11" Margin="0,5,0,18" />
                             <UniformGrid Columns="2" Rows="2">
                                 <StackPanel Margin="0,0,9,15">
                                     <TextBlock Text="Hidden neurons" FontSize="11" Margin="0,0,0,6"
                                                Foreground="#AFC5E1" />
                                     <TextBox Text="{Binding HiddenNeuronsText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="How many internal neurons learn patterns." Foreground="#829CB9"
+                                               FontSize="10" TextWrapping="Wrap" Margin="0,5,0,0" />
                                 </StackPanel>
                                 <StackPanel Margin="9,0,0,15">
                                     <TextBlock Text="Epochs" FontSize="11" Margin="0,0,0,6"
                                                Foreground="#AFC5E1" />
                                     <TextBox Text="{Binding EpochsText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="Passes through all four training examples." Foreground="#829CB9"
+                                               FontSize="10" TextWrapping="Wrap" Margin="0,5,0,0" />
                                 </StackPanel>
                                 <StackPanel Margin="0,0,9,15">
                                     <TextBlock Text="Learning rate" FontSize="11" Margin="0,0,0,6"
                                                Foreground="#AFC5E1" />
                                     <TextBox Text="{Binding LearningRateText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="Size of each weight adjustment." Foreground="#829CB9"
+                                               FontSize="10" TextWrapping="Wrap" Margin="0,5,0,0" />
                                 </StackPanel>
                                 <StackPanel Margin="9,0,0,15">
                                     <TextBlock Text="Random seed" FontSize="11" Margin="0,0,0,6"
                                                Foreground="#AFC5E1" />
                                     <TextBox Text="{Binding SeedText, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBlock Text="Same seed gives the same initial weights." Foreground="#829CB9"
+                                               FontSize="10" TextWrapping="Wrap" Margin="0,5,0,0" />
                                 </StackPanel>
                             </UniformGrid>
 
+                            <CheckBox Content="Watch training live (slower)"
+                                      IsChecked="{Binding WatchTraining, Mode=TwoWay}"
+                                      Foreground="#C5D8ED" FontSize="11" Margin="0,2,0,14"
+                                      ToolTip="Pace live updates so you can see weights and predictions change; uncheck for maximum speed" />
                             <Grid Margin="0,5,0,10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="2*" />
@@ -186,10 +364,13 @@
                                     <ColumnDefinition Width="1*" />
                                 </Grid.ColumnDefinitions>
                                 <Button Grid.Column="0" Content="▶  Train" Command="{Binding TrainCommand}"
+                                        ToolTip="Learn XOR by updating neural-network weights"
                                         Style="{StaticResource PrimaryButton}" Margin="0,0,5,0" />
                                 <Button Grid.Column="1" Content="Stop" Command="{Binding StopCommand}"
+                                        ToolTip="Stop training after the current epoch and keep the weights"
                                         Style="{StaticResource SecondaryButton}" Margin="5,0,5,0" />
                                 <Button Grid.Column="2" Content="Reset" Command="{Binding ResetCommand}"
+                                        ToolTip="Forget learned weights and start again from a new baseline"
                                         Style="{StaticResource SecondaryButton}" Margin="5,0,0,0" />
                             </Grid>
                             <Border Height="1" Background="#2B3D56" Margin="0,8,0,14" />
@@ -200,9 +381,11 @@
                                 </Grid.ColumnDefinitions>
                                 <Button Grid.Column="0" Content="↓  Save model"
                                         Command="{Binding SaveCommand}" Style="{StaticResource SecondaryButton}"
+                                        ToolTip="Save learned weights and network shape as a JSON file"
                                         Margin="0,0,7,0" />
                                 <Button Grid.Column="1" Content="↑  Load model"
                                         Command="{Binding LoadCommand}" Style="{StaticResource SecondaryButton}"
+                                        ToolTip="Restore a previously trained model from JSON"
                                         Margin="7,0,0,0" />
                             </Grid>
                             <TextBlock Text="Models are stored locally as JSON files."
@@ -213,7 +396,7 @@
                 </Grid>
 
                 <!-- Loss chart + live metrics -->
-                <Grid Grid.Row="2" Margin="0,0,0,18">
+                <Grid Grid.Row="3" Margin="0,0,0,18">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="1.48*" />
                         <ColumnDefinition Width="1*" />
@@ -270,7 +453,7 @@
                 </Grid>
 
                 <!-- Test predictions -->
-                <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,16">
+                <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,16">
                     <StackPanel>
                         <Grid Margin="0,0,0,18">
                             <Grid.ColumnDefinitions>
@@ -278,8 +461,8 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <StackPanel>
-                                <TextBlock Text="Test the network" FontSize="16" FontWeight="SemiBold" />
-                                <TextBlock Text="XOR: output is 1 only when the inputs differ"
+                                <TextBlock Text="Compare the four XOR predictions" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="Before = saved starting guess; now = current model; target = correct answer"
                                            Style="{StaticResource MutedText}" FontSize="11" Margin="0,5,0,0" />
                             </StackPanel>
                             <Border Grid.Column="1" Background="#183A36" CornerRadius="7"
@@ -305,7 +488,7 @@
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Text="PREDICTION" Foreground="#8DA6C3" FontSize="9" />
+                                                <TextBlock Text="NOW" Foreground="#8DA6C3" FontSize="9" />
                                                 <TextBlock Grid.Column="1" Text="{Binding Output}"
                                                            Foreground="#67C6FF" FontWeight="Bold" FontSize="14" />
                                             </Grid>
@@ -313,6 +496,17 @@
                                                          Value="{Binding Percentage, Mode=OneWay}" Height="7"
                                                          Background="#1B2C45" Foreground="#31B7DA"
                                                          BorderThickness="0" />
+                                            <Grid Margin="0,9,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="BEFORE" Foreground="#819BB7" FontSize="10" />
+                                                <TextBlock Grid.Column="1" Text="{Binding BeforeOutput}"
+                                                           Foreground="#CBD8EB" FontSize="11" />
+                                            </Grid>
+                                            <TextBlock Text="{Binding ChangeDescription}" FontSize="10"
+                                                       Foreground="#7BCFBA" Margin="0,5,0,0" />
                                             <Grid Margin="0,10,0,0">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
@@ -322,10 +516,11 @@
                                                     <Run Text="Expected: " />
                                                     <Run Text="{Binding Expected, Mode=OneWay}" />
                                                 </TextBlock>
-                                                <TextBlock Grid.Column="1" FontSize="10" Foreground="#D5E7FF">
-                                                    <Run Text="Class: " />
-                                                    <Run Text="{Binding Result, Mode=OneWay}" />
-                                                </TextBlock>
+                                                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Result}" Foreground="#D5E7FF" FontSize="10" />
+                                                    <TextBlock Text="  ·  " Foreground="#8DA6C3" FontSize="10" />
+                                                    <TextBlock Text="{Binding ResultDescription}" Foreground="#B8E7DA" FontSize="10" />
+                                                </StackPanel>
                                             </Grid>
                                         </StackPanel>
                                     </Border>
@@ -335,7 +530,7 @@
                     </StackPanel>
                 </Border>
 
-                <TextBlock Grid.Row="4" Text="Built from scratch in C# · Sigmoid activations · Backpropagation · Stochastic gradient descent"
+                <TextBlock Grid.Row="5" Text="Built from scratch in C# · Sigmoid activations · Backpropagation · Stochastic gradient descent"
                            Foreground="#6D87A4" FontSize="11" HorizontalAlignment="Center" />
             </Grid>
         </ScrollViewer>
