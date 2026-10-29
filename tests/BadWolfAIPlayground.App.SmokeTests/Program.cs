@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -172,6 +175,35 @@ internal static class Program
             Assert(searchModel.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
                 "CPU/GPU status must be unknown before Ollama provides runtime facts.");
             Console.WriteLine("PASS local model picker and performance panel with no fake CPU/GPU detection");
+
+            // Exercise the actual model picker and local status flow without
+            // requiring a Windows runner with Ollama installed.
+            using (var fakeHttp = new HttpClient(new LocalOllamaMockHandler())
+            {
+                BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+            })
+            using (var runtime = new OllamaRuntimeClient(fakeHttp))
+            using (var answer = new OllamaAnswerProvider())
+            using (var selection = new SmartSearchViewModel(
+                answerModel: answer, ollamaRuntime: runtime))
+            {
+                Task refreshing = selection.RefreshAnswerModelsAsync();
+                PumpUntil(() => refreshing.IsCompleted, TimeSpan.FromSeconds(12));
+                refreshing.GetAwaiter().GetResult();
+                Assert(selection.AnswerModelChoices.Count == 2 &&
+                       selection.AnswerModelChoices.All(model =>
+                           !model.Name.Contains("embeddinggemma", StringComparison.OrdinalIgnoreCase)),
+                    "The model selector must show installed chat models but exclude embedding-only models.");
+                Assert(selection.ProcessorStatus.Contains("100% CPU", StringComparison.Ordinal),
+                    "A running CPU-only Qwen model must be labeled from /api/ps.");
+                selection.SelectedAnswerModel = selection.AnswerModelChoices.Single(model =>
+                    model.Name == "qwen2.5:0.5b-instruct");
+                Assert(answer.ModelName == "qwen2.5:0.5b-instruct" &&
+                       selection.SelectedAnswerModel.Name == answer.ModelName &&
+                       selection.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
+                    "Changing the WPF selection must switch the actual chat provider and invalidate old telemetry.");
+                Console.WriteLine("PASS local Ollama /api/tags + /api/ps discovery and WPF model switching");
+            }
             Assert(smartSearch.FindName("AnswerTextBlock") is TextBlock,
                 "The grounded answer must have a dedicated readable area.");
             Assert(smartSearch.FindName("RetrievedEvidenceExpander") is Expander,
@@ -392,5 +424,34 @@ internal static class Program
                 yield return descendant;
             }
         }
+    }
+}
+
+
+internal sealed class LocalOllamaMockHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        string json = request.RequestUri?.AbsolutePath switch
+        {
+            "/api/tags" => """
+                {"models":[
+                    {"name":"embeddinggemma:latest","size":692000000},
+                    {"name":"qwen2.5:0.5b-instruct","size":398000000},
+                    {"name":"qwen3:4b-instruct","size":3900000000}
+                ]}
+                """,
+            "/api/ps" => """
+                {"models":[{"name":"qwen3:4b-instruct",
+                    "size":3900000000,"size_vram":0,"context_length":8192}]}
+                """,
+            _ => throw new InvalidOperationException("Only local Ollama catalogue endpoints are expected.")
+        };
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
     }
 }

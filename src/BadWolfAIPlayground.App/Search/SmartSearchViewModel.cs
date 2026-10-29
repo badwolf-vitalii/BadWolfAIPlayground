@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -126,7 +127,9 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
     public AnswerModelChoice SelectedAnswerModel
     {
-        get => _selectedAnswerModel ?? AnswerModelChoices[0];
+        get => _selectedAnswerModel ?? (AnswerModelChoices.Count > 0
+            ? AnswerModelChoices[0]
+            : new AnswerModelChoice(_answerModel.ModelName, _answerModel.ModelName));
         set
         {
             if (value is null || IsBusy || !SetProperty(ref _selectedAnswerModel, value))

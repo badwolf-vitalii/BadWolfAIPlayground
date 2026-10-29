@@ -551,9 +551,7 @@ static async Task TestRuntimeCatalogAndMetrics()
         "Processor display must come from /api/ps; an unloaded model must be unknown.");
 
     OllamaChatMetrics metrics = OllamaChatMetrics.FromResponse(
-        JsonDocument.Parse("""{"total_duration":5000000000,"load_duration":1000000000,
-            "prompt_eval_count":110,"prompt_eval_duration":2000000000,
-            "eval_count":80,"eval_duration":2000000000}""").RootElement);
+        JsonDocument.Parse("""{"total_duration":5000000000,"load_duration":1000000000,"prompt_eval_count":110,"prompt_eval_duration":2000000000,"eval_count":80,"eval_duration":2000000000}""").RootElement);
     Assert(metrics.PromptTokens == 110 && metrics.OutputTokens == 80 &&
            Math.Abs(metrics.TokensPerSecond!.Value - 40.0) < 0.0001,
         "Token speed must use output tokens divided by generation duration, not total request time.");
