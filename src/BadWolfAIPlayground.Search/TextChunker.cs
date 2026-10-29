@@ -3,13 +3,16 @@ namespace BadWolfAIPlayground.Search;
 /// <summary>Overlapping text windows with a line-break preference; never silently skips the tail.</summary>
 public static class TextChunker
 {
-    public const int DefaultChunkSize = 900;
-    public const int DefaultOverlap = 120;
+    // A larger chunk reduces Ollama calls for log and document collections while
+    // remaining small enough for the local multilingual embedding model.
+    public const int DefaultChunkSize = 1_800;
+    public const int DefaultOverlap = 180;
 
     public static IReadOnlyList<SearchChunk> Split(
         IEnumerable<SearchDocument> documents,
         int chunkSize = DefaultChunkSize,
-        int overlap = DefaultOverlap)
+        int overlap = DefaultOverlap,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(documents);
         if (chunkSize < 100)
@@ -25,6 +28,7 @@ public static class TextChunker
         var chunks = new List<SearchChunk>();
         foreach (SearchDocument document in documents)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ArgumentNullException.ThrowIfNull(document);
             if (string.IsNullOrWhiteSpace(document.Content))
             {
@@ -36,6 +40,7 @@ public static class TextChunker
             int part = 0;
             while (start < text.Length)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int end = Math.Min(text.Length, start + chunkSize);
                 if (end < text.Length)
                 {
@@ -49,6 +54,11 @@ public static class TextChunker
                 string content = text[start..end].Trim();
                 if (content.Length > 0)
                 {
+                    if (chunks.Count >= SemanticSearch.MaxChunks)
+                    {
+                        throw new InvalidDataException(
+                            $"The documents need more than {SemanticSearch.MaxChunks:N0} chunks. Select fewer or smaller files.");
+                    }
                     chunks.Add(new SearchChunk(document.Name, document.FullPath, ++part, content));
                 }
 

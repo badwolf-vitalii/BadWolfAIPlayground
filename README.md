@@ -42,7 +42,14 @@ The model download is roughly **622 MB**. The first download requires internet a
 
 **Why Ollama, not ONNX Runtime yet?** This first integration isolates model inference behind `IEmbeddingProvider` and uses Ollama's local `/api/embed` endpoint, so the WPF app needs no tokenizer, ONNX model conversion, or extra NuGet dependencies. A self-hosted ONNX provider can be added later without changing the indexing/search logic. The result is actual ML-based retrieval, not a simulated AI response.
 
-**Search limits:** select at most 40 files, 1 MiB each, 200,000 characters total, or 260 text chunks of up to 900 characters each. A new selection replaces the current set; no index or document is persisted between app runs. Unsupported or invalid UTF-8 files display an error. Results are relevance rankings, not guaranteed answers: cosine scores are not calibrated correctness probabilities.
+**Large text files:** the import now reads files in cancellable blocks, with a separate import progress bar. The lab accepts a **3.5 MB TXT file** without splitting it by hand. The limits are **40 files, 16 MiB per file, 32 MiB combined, 24 million decoded characters, and 25,000 search chunks**. Text is divided into overlapping **1,800-character** chunks (180-character overlap). Chunks are prepared off the UI thread, retained for subsequent queries and embedded in batches of eight via local Ollama. The UI shows the estimated number of batches before indexing and progress during indexing; **large files can take many minutes** depending on your hardware and text size. You can **Cancel** at any point. An interrupted index is discarded (no partial results), while loaded files are retained; the next Build starts from the beginning. All data and the completed index are currently held in memory, so imports and indexes must be recreated after restarting the app. Importing another file set replaces the previous one only on successful completion. UTF-8 and BOM-marked UTF-16 text are supported; invalid encodings or binary content are rejected. Cosine scores are relevance rankings, not calibrated correctness probabilities.
+
+#### Try your own large TXT file
+
+1. Select **Smart Search Lab → Select text files** and choose your 3.5 MB TXT file.
+2. Watch the **Reading / Preparing searchable text chunks** indicator. After import, the app displays how many chunks it created and how many local Ollama batches are needed.
+3. With Ollama and `embeddinggemma` installed, click **Check local model**, then **Build AI index**. This can take several minutes. You may cancel safely; the original imported text remains in the lab.
+4. Enter a question and click **Compare searches**. Keyword search works even before indexing; semantic search uses your newly built index. After a restart, rebuild the in-memory index.
 
 ## Requirements
 

@@ -3,7 +3,7 @@ namespace BadWolfAIPlayground.Search;
 /// <summary>Index text with a local embedding provider, then rank using cosine similarity.</summary>
 public static class SemanticSearch
 {
-    public const int MaxChunks = 260;
+    public const int MaxChunks = 25_000;
     public const int BatchSize = 8;
 
     public static async Task<SemanticIndex> BuildAsync(
@@ -24,13 +24,17 @@ public static class SemanticSearch
         for (int start = 0; start < chunks.Count; start += BatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            SearchChunk[] batch = chunks.Skip(start).Take(BatchSize).ToArray();
-            string[] texts = batch.Select(chunk =>
-                $"title: {chunk.DocumentName} | text: {chunk.Content}").ToArray();
+            int batchCount = Math.Min(BatchSize, chunks.Count - start);
+            var texts = new string[batchCount];
+            for (int offset = 0; offset < batchCount; offset++)
+            {
+                SearchChunk chunk = chunks[start + offset];
+                texts[offset] = $"title: {chunk.DocumentName} | text: {chunk.Content}";
+            }
             IReadOnlyList<float[]> output = await provider.EmbedAsync(texts, cancellationToken)
                 .ConfigureAwait(false);
 
-            if (output.Count != batch.Length)
+            if (output.Count != batchCount)
             {
                 throw new InvalidDataException("Embedding service returned an incorrect number of vectors.");
             }

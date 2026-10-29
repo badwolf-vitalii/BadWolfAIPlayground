@@ -14,6 +14,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private readonly OllamaEmbeddingProvider _embeddings;
     private readonly Dispatcher _dispatcher;
     private readonly List<SearchDocument> _documents = [];
+    // Reused by keyword and AI search. Never re-split multi-megabyte files on the UI thread.
+    private IReadOnlyList<SearchChunk> _chunks = [];
     private readonly RelayCommand _loadDemoCommand;
     private readonly RelayCommand _loadFilesCommand;
     private readonly RelayCommand _clearCommand;
@@ -27,6 +29,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private bool _isBusy;
     private bool _disposed;
     private int _indexGeneration;
+    private int _importGeneration;
     private string _query = "Чому програма не може записати дані в базу?";
     private string _statusText = "Step 1: Load example documents or select your own text files.";
     private string _modelStatus = "Check the local AI connection, then build an index.";
@@ -34,6 +37,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _indexLabel = "No AI index yet";
     private string _searchHint = "Try a Ukrainian query against English demo documents.";
     private double _indexProgress;
+    private double _importProgress;
+    private string _importLabel = "Select UTF-8 text files (up to 16 MiB each).";
 
     public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null)
     {
@@ -133,7 +138,24 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _indexProgress, value);
     }
 
-    private void LoadDemo() => ReplaceDocuments(DemoDocuments.Create());
+    public double ImportProgress
+    {
+        get => _importProgress;
+        private set => SetProperty(ref _importProgress, value);
+    }
+
+    public string ImportLabel
+    {
+        get => _importLabel;
+        private set => SetProperty(ref _importLabel, value);
+    }
+
+    private void LoadDemo()
+    {
+        ReplaceDocuments(DemoDocuments.Create());
+        ImportProgress = 0;
+        ImportLabel = "Loaded the 4 built-in demo notes.";
+    }
 
     private async Task LoadFilesAsync()
     {
@@ -148,17 +170,67 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             return;
         }
 
-        await RunOperationAsync(async token =>
-        {
-            IReadOnlyList<SearchDocument> documents = await LocalTextLoader.LoadAsync(dialog.FileNames, token);
-            await DispatchAsync(() => ReplaceDocuments(documents));
-        });
+        await ImportFilesAsync(dialog.FileNames);
     }
 
-    private void ReplaceDocuments(IReadOnlyList<SearchDocument> documents)
+    /// <summary>Atomic, cancellable import. The current documents/index survive a failed load.</summary>
+    public async Task ImportFilesAsync(IReadOnlyList<string> paths)
     {
+        ArgumentNullException.ThrowIfNull(paths);
+        if (IsBusy || _disposed)
+        {
+            return;
+        }
+
+        int generation = ++_importGeneration;
+        bool completed = false;
+        ImportProgress = 0;
+        ImportLabel = "Reading selected files...";
+        await RunOperationAsync(async token =>
+        {
+            var progress = new Progress<FileImportProgress>(state =>
+            {
+                _dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_disposed || generation != _importGeneration || !IsBusy)
+                    {
+                        return;
+                    }
+
+                    ImportProgress = state.TotalBytes == 0 ? 100 :
+                        state.BytesRead * 100.0 / state.TotalBytes;
+                    ImportLabel = $"Reading {state.CurrentFile} · {state.FilesCompleted}/{state.TotalFiles} files " +
+                                  $"· {state.BytesRead / 1048576.0:0.0}/{state.TotalBytes / 1048576.0:0.0} MiB";
+                }));
+            });
+
+            IReadOnlyList<SearchDocument> documents = await LocalTextLoader.LoadAsync(paths, token, progress);
+            await DispatchAsync(() => ImportLabel = "Preparing searchable text chunks...");
+            IReadOnlyList<SearchChunk> chunks = await Task.Run(
+                () => TextChunker.Split(documents, cancellationToken: token), token);
+            token.ThrowIfCancellationRequested();
+            await DispatchAsync(() =>
+            {
+                ReplaceDocuments(documents, chunks);
+                completed = true;
+            });
+        });
+
+        // Progress<T> callbacks are posted asynchronously; ignore any remaining old updates.
+        _importGeneration++;
+        ImportProgress = completed ? 100 : 0;
+        ImportLabel = completed
+            ? $"Imported {_documents.Count} file(s) · {_chunks.Count:N0} searchable chunks."
+            : "Import did not complete; previous documents are unchanged.";
+    }
+
+    private void ReplaceDocuments(
+        IReadOnlyList<SearchDocument> documents, IReadOnlyList<SearchChunk>? preparedChunks = null)
+    {
+        IReadOnlyList<SearchChunk> chunks = preparedChunks ?? TextChunker.Split(documents);
         _documents.Clear();
         _documents.AddRange(documents);
+        _chunks = chunks;
         DocumentNames.Clear();
         foreach (SearchDocument document in documents)
         {
@@ -171,8 +243,9 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         SemanticResults.Clear();
         OnPropertyChanged(nameof(HasDocuments));
         OnPropertyChanged(nameof(HasIndex));
-        DocumentsLabel = $"{_documents.Count} documents loaded";
-        IndexLabel = "Not indexed yet";
+        DocumentsLabel = $"{_documents.Count} document(s) · {_chunks.Count:N0} text chunks";
+        IndexLabel = _chunks.Count == 0 ? "No text to index" :
+            $"Ready to index {_chunks.Count:N0} chunks (~{(_chunks.Count + SemanticSearch.BatchSize - 1) / SemanticSearch.BatchSize:N0} local batches).";
         IndexProgress = 0;
         StatusText = "Step 2: Build AI index, or compare ordinary word matching first.";
         SearchHint = "The keyword side works immediately. The semantic side requires a local model and an index.";
@@ -184,6 +257,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private void Clear()
     {
         ReplaceDocuments([]);
+        ImportProgress = 0;
+        ImportLabel = "Select UTF-8 text files (up to 16 MiB each).";
         StatusText = "Documents cleared. Load examples or select files to begin again.";
     }
 
@@ -202,7 +277,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
     private async Task BuildIndexAsync()
     {
-        IReadOnlyList<SearchChunk> chunks = TextChunker.Split(_documents);
+        IReadOnlyList<SearchChunk> chunks = _chunks;
         if (chunks.Count == 0)
         {
             StatusText = "There is no nonempty text to index.";
@@ -227,12 +302,13 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             {
                 _dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (generation != _indexGeneration || !IsBusy || _disposed)
+                    if (generation != _indexGeneration || !IsBusy || _disposed || _index is not null)
                     {
                         return;
                     }
                     IndexProgress = step.Completed * 100.0 / step.Total;
-                    IndexLabel = $"Indexing {step.Completed}/{step.Total} chunks";
+                    IndexLabel = $"Indexing {step.Completed:N0}/{step.Total:N0} chunks " +
+                                 $"({IndexProgress:0.0}%). Cancel is safe; no partial index is saved.";
                 }));
             });
             SemanticIndex built = await SemanticSearch.BuildAsync(chunks, _embeddings, progress, token);
@@ -252,25 +328,32 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private async Task CompareAsync()
     {
         string query = Query.Trim();
-        IReadOnlyList<SearchChunk> chunks = _index?.Chunks ?? TextChunker.Split(_documents);
-        IReadOnlyList<SearchHit> keyword = KeywordSearch.Find(chunks, query);
-        KeywordResults.Clear();
-        foreach (SearchHit result in keyword)
-        {
-            KeywordResults.Add(new SearchResultRow(result, semantic: false));
-        }
-
-        SemanticResults.Clear();
-        if (_index is null)
-        {
-            StatusText = $"Keyword search returned {keyword.Count} results. Build the AI index to compare semantic matches.";
-            SearchHint = "Semantic search is not available until the local embedding index is built.";
-            return;
-        }
-
+        IReadOnlyList<SearchChunk> chunks = _chunks;
+        SemanticIndex? activeIndex = _index;
         await RunOperationAsync(async token =>
         {
-            SemanticIndex activeIndex = _index!;
+            IReadOnlyList<SearchHit> keyword = await Task.Run(
+                () => KeywordSearch.Find(chunks, query, cancellationToken: token), token);
+            await DispatchAsync(() =>
+            {
+                KeywordResults.Clear();
+                foreach (SearchHit result in keyword)
+                {
+                    KeywordResults.Add(new SearchResultRow(result, semantic: false, query: query));
+                }
+                SemanticResults.Clear();
+            });
+
+            if (activeIndex is null)
+            {
+                await DispatchAsync(() =>
+                {
+                    StatusText = $"Keyword search returned {keyword.Count} results. Build the AI index to compare semantic matches.";
+                    SearchHint = "Semantic search needs a local model and an index.";
+                });
+                return;
+            }
+
             IReadOnlyList<SearchHit> semantic = await SemanticSearch.FindAsync(
                 activeIndex, _embeddings, query, cancellationToken: token);
             await DispatchAsync(() =>
@@ -307,7 +390,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 StatusText = "Operation cancelled.";
                 if (!HasIndex)
                 {
-                    IndexLabel = "No completed AI index";
+                    IndexProgress = 0;
+                    IndexLabel = "No completed AI index (cancelled; source documents are retained).";
                 }
             });
         }
@@ -318,7 +402,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 StatusText = $"Operation failed: {exception.Message}";
                 if (!HasIndex)
                 {
-                    IndexLabel = "No completed AI index";
+                    IndexProgress = 0;
+                    IndexLabel = "No completed AI index (source documents are retained).";
                 }
             });
         }

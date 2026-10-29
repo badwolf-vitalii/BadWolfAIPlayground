@@ -6,7 +6,8 @@ namespace BadWolfAIPlayground.Search;
 public static partial class KeywordSearch
 {
     public static IReadOnlyList<SearchHit> Find(
-        IReadOnlyList<SearchChunk> chunks, string query, int limit = 5)
+        IReadOnlyList<SearchChunk> chunks, string query, int limit = 5,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(chunks);
         ArgumentNullException.ThrowIfNull(query);
@@ -24,12 +25,22 @@ public static partial class KeywordSearch
             return [];
         }
 
-        return chunks.Select(chunk => new SearchHit(chunk, Score(chunk.Content, terms)))
-            .Where(hit => hit.Score > 0)
-            .OrderByDescending(hit => hit.Score)
+        // Search text on a worker thread when invoked by the UI; support cancellation
+        // between chunks so a large log cannot lock the search screen.
+        var matches = new List<SearchHit>();
+        foreach (SearchChunk chunk in chunks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int score = Score(chunk.Content, terms);
+            if (score > 0)
+            {
+                matches.Add(new SearchHit(chunk, score));
+            }
+        }
+
+        return matches.OrderByDescending(hit => hit.Score)
             .ThenBy(hit => hit.Chunk.DocumentName, StringComparer.Ordinal)
-            .Take(limit)
-            .ToArray();
+            .Take(limit).ToArray();
     }
 
     private static int Score(string text, IReadOnlyList<string> terms)

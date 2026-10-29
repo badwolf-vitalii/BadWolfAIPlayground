@@ -10,7 +10,9 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Embedding validation", TestValidation),
     ("Cancellation", TestCancellation),
     ("Ollama API protocol", TestOllamaProtocol),
-    ("Text file safety limits", TestFileLoader)
+    ("Large text file imports and safety limits", TestFileLoader),
+    ("Incremental embedding batches and progress", TestLargeIndex),
+    ("Oversized index protection", TestIndexLimit)
 };
 int passed = 0;
 foreach ((string name, Func<Task> check) in tests)
@@ -33,9 +35,11 @@ static Task TestChunking()
 {
     var original = new SearchDocument("long.txt", new string('a', 2_300));
     IReadOnlyList<SearchChunk> chunks = TextChunker.Split([original]);
-    Assert(chunks.Count == 3, "Expected 3 overlapping windows.");
-    Assert(chunks.All(x => x.Content.Length <= 900), "Chunks must not exceed the configured limit.");
-    Assert(chunks[1].Content.StartsWith(new string('a', 120), StringComparison.Ordinal), "Overlap is missing.");
+    Assert(chunks.Count == 2, "Expected 2 overlapping windows after increasing the chunk size.");
+    Assert(chunks.All(x => x.Content.Length <= TextChunker.DefaultChunkSize),
+        "Chunks must not exceed the configured limit.");
+    Assert(chunks[1].Content.StartsWith(new string('a', TextChunker.DefaultOverlap), StringComparison.Ordinal),
+        "Overlap is missing.");
     Assert(chunks[^1].Content.Length > 0, "The end of the document was lost.");
     Assert(TextChunker.Split([new SearchDocument("blank", "  ")]).Count == 0, "Blank files must be ignored.");
     return Task.CompletedTask;
@@ -98,19 +102,85 @@ static async Task TestOllamaProtocol()
 
 static async Task TestFileLoader()
 {
-    string path = Path.Combine(Path.GetTempPath(), $"badwolf-search-{Guid.NewGuid():N}.txt");
+    string folder = Path.Combine(Path.GetTempPath(), $"badwolf-search-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(folder);
+    string path = Path.Combine(folder, "large.txt");
+    string other = Path.Combine(folder, "other.txt");
     try
     {
-        await File.WriteAllTextAsync(path, "alpha\nbeta");
-        var files = await LocalTextLoader.LoadAsync([path]);
-        Assert(files.Count == 1 && files[0].Content == "alpha\nbeta", "Text import failed.");
-        await File.WriteAllTextAsync(path, new string('x', LocalTextLoader.MaxFileBytes + 1));
+        const string marker = "UNIQUE_DATABASE_ERROR_TAIL_MARKER";
+        // The requested real-world use case: a roughly 3.5 MiB TXT file.
+        string content = new string('x', 3_670_016) + "\n" + marker + "\n";
+        await File.WriteAllTextAsync(path, content);
+        var measurements = new List<FileImportProgress>();
+        var progress = new InlineProgress<FileImportProgress>(x => measurements.Add(x));
+        IReadOnlyList<SearchDocument> loaded = await LocalTextLoader.LoadAsync([path], progress: progress);
+        Assert(loaded.Count == 1 && loaded[0].Content == content,
+            "The multi-megabyte import changed the text or dropped the tail.");
+        Assert(measurements.Count > 2 && measurements[^1].FilesCompleted == 1 &&
+               measurements[^1].BytesRead == measurements[^1].TotalBytes,
+            "Block-by-block import must report completion in bytes.");
+        Assert(measurements.Zip(measurements.Skip(1)).All(pair => pair.First.BytesRead <= pair.Second.BytesRead),
+            "Import progress must never go backwards.");
+
+        IReadOnlyList<SearchChunk> chunks = TextChunker.Split(loaded);
+        Assert(chunks.Count > 260 && chunks[^1].Content.Contains(marker, StringComparison.Ordinal),
+            "Large file splitting must include all text, including the final chunk.");
+        Assert(KeywordSearch.Find(chunks, marker).Count > 0,
+            "Keyword search should find a marker near the end of a large imported file.");
+
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        await AssertThrowsAsync<OperationCanceledException>(() => LocalTextLoader.LoadAsync([path], cancelled.Token));
+        await AssertThrowsAsync<OperationCanceledException>(() =>
+            Task.Run(() => TextChunker.Split(loaded, cancellationToken: cancelled.Token)));
+
+        // Sparse files make safety limit checks fast, without allocating huge strings.
+        await using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write))
+        {
+            stream.SetLength(LocalTextLoader.MaxFileBytes + 1);
+        }
         await AssertThrowsAsync<InvalidDataException>(() => LocalTextLoader.LoadAsync([path]));
+
+        await File.WriteAllBytesAsync(path, [0xC3, 0x28]);
+        await AssertThrowsAsync<InvalidDataException>(() => LocalTextLoader.LoadAsync([path]));
+
+        // Cumulative limits must be checked before attempting to read a single file.
+        string[] paths = [path, other, Path.Combine(folder, "third.txt")];
+        foreach (string file in paths)
+        {
+            await using var stream = new FileStream(file, FileMode.Create, FileAccess.Write);
+            stream.SetLength(LocalTextLoader.MaxFileBytes);
+        }
+        await AssertThrowsAsync<InvalidDataException>(() => LocalTextLoader.LoadAsync(paths));
     }
     finally
     {
-        File.Delete(path);
+        Directory.Delete(folder, recursive: true);
     }
+}
+
+static async Task TestLargeIndex()
+{
+    var sample = new SearchChunk("log.txt", null, 1, "Database write was blocked.");
+    SearchChunk[] chunks = Enumerable.Repeat(sample, 49).ToArray();
+    var embeddings = new FakeEmbeddings();
+    var updates = new List<IndexProgress>();
+    SemanticIndex index = await SemanticSearch.BuildAsync(
+        chunks, embeddings, new InlineProgress<IndexProgress>(step => updates.Add(step)));
+    Assert(index.Chunks.Count == 49 && embeddings.Batches.Count == 7,
+        "49 items must be embedded in seven bounded batches, not one giant HTTP request.");
+    Assert(embeddings.Batches.Max() <= SemanticSearch.BatchSize &&
+           embeddings.Batches[^1] == 1, "Unexpected embedding batch size.");
+    Assert(updates.Count == 7 && updates[^1].Completed == 49 && updates[^1].Total == 49,
+        "Index progress must include the final completed batch.");
+}
+
+static async Task TestIndexLimit()
+{
+    var sample = new SearchChunk("log.txt", null, 1, "test");
+    SearchChunk[] tooMany = Enumerable.Repeat(sample, SemanticSearch.MaxChunks + 1).ToArray();
+    await AssertThrowsAsync<ArgumentException>(() => SemanticSearch.BuildAsync(tooMany, new FakeEmbeddings()));
 }
 
 static void Assert(bool condition, string reason)
@@ -138,10 +208,12 @@ sealed class FakeEmbeddings : IEmbeddingProvider
 {
     public string ModelName => "test-vectors";
     public List<string> Queries { get; } = [];
+    public List<int> Batches { get; } = [];
 
     public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs, CancellationToken token = default)
     {
         token.ThrowIfCancellationRequested();
+        Batches.Add(inputs.Count);
         var output = new List<float[]>();
         foreach (string input in inputs)
         {
@@ -165,4 +237,9 @@ sealed class StubHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpRe
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         action(request, cancellationToken);
+}
+
+sealed class InlineProgress<T>(Action<T> callback) : IProgress<T>
+{
+    public void Report(T value) => callback(value);
 }

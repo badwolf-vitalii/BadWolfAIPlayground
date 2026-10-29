@@ -133,11 +133,61 @@ internal static class Program
             Assert(!searchModel.HasIndex, "A demo must not pretend to have generated AI embeddings.");
             searchModel.Query = "SQLite locked";
             searchModel.CompareCommand.Execute(null);
+            PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
             Assert(searchModel.KeywordResults.Count > 0 &&
                    searchModel.KeywordResults[0].Title.Contains("database_errors", StringComparison.Ordinal),
                 "Keyword ranking did not find the database troubleshooting note.");
             Assert(searchModel.SemanticResults.Count == 0,
                 "AI matches must not be faked when the model is unavailable.");
+
+            // Regression: a real 3.5 MiB file must import without blocking the dispatcher.
+            string largePath = Path.Combine(Path.GetTempPath(), $"badwolf-ui-{Guid.NewGuid():N}.txt");
+            int searchWrongThreadNotifications = 0;
+            searchModel.PropertyChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref searchWrongThreadNotifications);
+                }
+            };
+            searchModel.DocumentNames.CollectionChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref searchWrongThreadNotifications);
+                }
+            };
+            try
+            {
+                File.WriteAllText(largePath, new string('a', 3_670_016) + "\nFINAL_SEARCH_MARKER\n");
+                Task importing = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => importing.IsCompleted, TimeSpan.FromSeconds(30));
+                importing.GetAwaiter().GetResult();
+                Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 1,
+                    "The multi-megabyte file was not imported.");
+                Assert(searchModel.ImportProgress == 100 &&
+                       searchModel.ImportLabel.StartsWith("Imported", StringComparison.Ordinal),
+                    "Large import did not report successful completion.");
+                Assert(searchModel.DocumentsLabel.Contains("chunks", StringComparison.Ordinal) &&
+                       searchModel.IndexLabel.Contains("batches", StringComparison.Ordinal),
+                    "The UI should show the chunk and batch counts before starting Ollama.");
+                Assert(!searchModel.HasIndex,
+                    "Importing text must not manufacture semantic vectors without Ollama.");
+
+                searchModel.Query = "FINAL_SEARCH_MARKER";
+                searchModel.CompareCommand.Execute(null);
+                PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
+                Assert(searchModel.KeywordResults.Count > 0 &&
+                       searchModel.KeywordResults[0].Snippet.Contains("FINAL_SEARCH_MARKER", StringComparison.Ordinal),
+                    "Keyword search must find the end of a multi-megabyte file.");
+                Assert(searchWrongThreadNotifications == 0,
+                    "Large-file import and searches must update the ViewModel on the WPF UI thread.");
+                Console.WriteLine("PASS 3.5 MiB import, progress, preserved tail and large-file keyword search");
+            }
+            finally
+            {
+                File.Delete(largePath);
+            }
             window.NavigateToNeuralLab();
             Assert(smartSearch.Visibility == Visibility.Collapsed,
                 "Neural Network Lab navigation failed.");
@@ -153,6 +203,23 @@ internal static class Program
         {
             window?.Close();
             application?.Shutdown();
+        }
+    }
+
+    private static void PumpUntil(Func<bool> completed, TimeSpan timeout)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!completed())
+        {
+            if (clock.Elapsed > timeout)
+            {
+                throw new TimeoutException($"Timed out after {timeout.TotalSeconds:0}s while pumping WPF.");
+            }
+            var frame = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
+            Thread.Sleep(2);
         }
     }
 

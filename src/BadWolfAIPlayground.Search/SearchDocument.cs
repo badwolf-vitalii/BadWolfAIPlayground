@@ -10,6 +10,9 @@ public sealed record SearchHit(SearchChunk Chunk, double Score);
 
 public sealed record IndexProgress(int Completed, int Total);
 
+/// <summary>Progress of a cancellable local file import, measured in bytes.</summary>
+public sealed record FileImportProgress(long BytesRead, long TotalBytes, int FilesCompleted, int TotalFiles, string CurrentFile);
+
 /// <summary>An immutable semantic index. Its scores are cosine similarities, NOT probabilities.</summary>
 public sealed class SemanticIndex
 {
