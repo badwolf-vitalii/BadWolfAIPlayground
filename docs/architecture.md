@@ -60,3 +60,269 @@ Progress callbacks are explicitly dispatched to the captured WPF `Dispatcher`, e
 1. Custom datasets / train-validation split / experiment export.
 2. Local vector embeddings for semantic document search.
 3. Log and telemetry anomaly detection with baseline comparisons.
+
+## Smart Search Lab (v0.2.0)
+
+- **Search library (`net8.0`):** `LocalTextLoader` imports bounded text files in cancellable ~32K-character reads with byte-based import progress. Auto mode performs strict UTF-8 decoding with Unicode BOM detection; users can explicitly override decoding to Windows-1251, Windows-1252 or BOM-less UTF-16LE/BE, `TextChunker` splits documents into 1,800-character windows with 180-character overlap, `KeywordSearch` counts whole-word query-term occurrences with cancellation, suppresses frequent question filler words and prioritizes distinct matched terms, and `SemanticSearch` builds a normalized vector index and computes cosine similarity. The public `IEmbeddingProvider` interface keeps model inference interchangeable.
+- **Local model adapter:** `OllamaEmbeddingProvider` sends only to local loopback HTTP (`127.0.0.1:11434/api/embed`) by default, using EmbeddingGemma. It posts arrays of inputs in batches of eight and validates counts, vector sizes, finite values, and nonzero norms. The UI exposes an explicit connection check and a user-copied model installation command. It never downloads or uploads files on its own.
+- **Retrieval prompts:** for documents, `title: {document name} | text: {chunk}`; for queries, `task: search result | query: {query}`. The model supports multilingual text; cross-language quality depends on model/data and is not guaranteed.
+- **UI:** `SmartSearchView` is a second navigable lab within `MainWindow`, with its own `SmartSearchViewModel`. It exposes sample text, file import, AI index creation with progress/cancellation, and side-by-side raw lexical versus semantic results. The lab works in a keyword-only mode if Ollama is unavailable, without presenting fabricated semantic results.
+- **Index lifecycle:** queryable indexes are assembled in memory and become invalid when the document set changes. They carry the embedding model name so query embeddings cannot accidentally be compared to vectors from a different model. Document import and text splitting are cancellable and publish the new set atomically, preserving the previous set on failure. Parsed chunks are cached, avoiding repeated split work on the UI thread; keyword scanning runs on a worker. Indexing checks cancellation between embedding batches; a completed in-memory index is published atomically. Each completed batch of eight normalized float vectors is also checksummed and written via a uniquely named temporary file and atomic rename in `%LOCALAPPDATA%\BadWolfAIPlayground\SearchIndexes`. The key is SHA-256 over exact ordered chunks, source identity, the retrieval-format version and model fingerprint, including Ollama's **digest** from `/api/tags`. Cached batches are validated (structure, dimension, finite values, normalized magnitude, checksum) before reuse; corrupt batches are individually recomputed. Interrupted builds preserve completed batches; resumed builds reassemble the in-memory index without repeating successful Ollama embeddings. One index is bounded to 25,000 chunks (up to 16 MiB per input file, 32 MiB total, 24 million characters). The UI displays the approximate number of eight-chunk batches and per-batch progress. Building a large index can take minutes and requires free RAM for the document text, chunks, and vectors.
+- **Scoring:** lexical results are ranked by term occurrences; semantic results use normalized dot product, equal to cosine similarity. A value like `0.71` is **not a 71% probability**. Review the retrieved source before trusting any result.
+- **Security and limitations:** only user-selected local text files are read; text import enforces file count, size and decoded character limits, rejecting NULs and invalid sequences in the selected encoding. Legacy code pages are never guessed automatically, since incorrect decoding may return plausible but incorrect search hits. The import card displays failures inline, retains the true exception message and preserves the previous document set on failure or cancellation. Search does not execute file content or follow internet links. A model's local endpoint may write its own logs/cache as configured by Ollama. Document text itself is not written to the checkpoint cache, but the local binary embedding vectors may reveal information and are not encrypted. The most recent selected paths and encoding are stored locally in `last-search-files.json` and only read on user-initiated **Restore previous files**. Neither source text nor files are loaded automatically on startup. Old caches are not automatically deleted; remove the local files from Explorer if needed. OCR, PDF import, and background file watching are not included.
+- **Verification:** package-free search smoke tests use a deterministic mock embedding provider, an HTTP handler stub for Ollama, chunk boundaries, multi-megabyte UTF-8 import, byte-based progress, legacy Windows encodings, explicit BOM-less UTF-16, actionable failures, safety limits, batch indexing, cancellation, cross-language ranking behavior, and validation. The Windows WPF smoke test navigates between labs, verifies keyword search with Ollama absent, and imports a synthetic 3.5 MiB file, checks actual error display and retries a Windows-1251 file to catch regressions in UI responsiveness, threading, encoding and file limits. Search smoke tests also simulate an interrupted build, saved-batch resumption, a fully cached index, changed text/model digests, corrupt checkpoint recovery and Ollama fingerprint validation. The WPF smoke test checks ComboBox dark-theme contrast and restoring the previous selected files/encoding after a new ViewModel is created. Actual embedding model performance still requires a manual local test with EmbeddingGemma installed.
+
+## Grounded document answers (optional Ollama model)
+
+The **Compare searches** mode intentionally shows only keyword matches and
+cosine-similarity rankings. Those scores are not correctness probabilities,
+and the top-ranked text may have no answer to a natural-language question.
+
+**Ask document** uses an additional, user-installed local generator
+(`qwen3:4b-instruct`, via Ollama `/api/chat`). EmbeddingGemma remains the
+separate vector-retrieval model. The answer pipeline:
+
+1. Propose at most two alternative retrieval phrases with a local chat model.
+   These phrases are search hints, **not verified facts**.
+2. Search both the original and rewritten phrases using dense embeddings
+   and lexical matching. Merge candidates by reciprocal-rank fusion.
+3. Send the seven best snippets (not the whole file) to the local chat model
+   with source IDs and an instruction to use only those snippets.
+4. Parse structured JSON with `supported`, `answer`, and verbatim
+   `{id, quote}` evidence. Verify that every cited substring exists in
+   the referenced original chunk, allowing only whitespace normalization.
+5. Show cited answers with source filenames/chunk IDs; otherwise show an
+   explicit "not found in selected text" message. Never return an
+   unsupported answer as if it were verified.
+
+The source documents are untrusted input; instructions embedded in them
+must be treated as data, and no tool or filesystem action is driven by
+model-generated content. Quote matching is only an authenticity check:
+it cannot guarantee a correct inference or a relevant answer. Source
+omissions, translation differences, incomplete passages, contextual
+ambiguities and model quality still matter. The WPF UI labels the
+response as AI-generated and asks users to read the quotes. A missing
+answer model generates an actionable Ollama installation error; no model
+download or cloud call is automatic.
+
+Search-library smoke tests use fake answer/embedding models and mocked
+Ollama `/api/chat`, verify query expansion, source/citation validation,
+unsupported-answer handling, and local JSON response parsing. They do
+not measure the quality of the real Qwen3 model.
+
+
+### Bounded local answer context
+
+Ollama's local default may be 4,096 tokens depending on available VRAM.
+The optional Ollama answer provider explicitly requests `num_ctx=8192`
+through `/api/chat`, while bounding each retrieved source excerpt to
+900 original characters and preserving up to seven labeled evidence IDs.
+It favors a window around significant exact query terms when possible.
+The source quotation check still uses the complete underlying chunk.
+The semantic index and on-disk embedding checkpoints are unaffected by
+this answer-only change. Invalid context size responses are explained
+as a context setting issue rather than misleading the user into
+reinstalling an already working model. Ask-document failures are shown
+only in the answer panel instead of overwriting Compare-searches status.
+The HTTP smoke test checks explicit context length, bounded input
+and friendly recovery from an Ollama 400 context-window error.
+
+
+### Inspecting retrieval and failure reasons
+
+The grounded Q&A pipeline surfaces `AnswerOutcome`: `Verified`,
+`NoCandidates`, `ModelDeclined`, or `UnverifiableCitation`.
+Even unsuccessful model answers return the original search queries and all
+candidate passages so the WPF evidence expander can display exactly
+what was sent to the local model. This distinguishes failed retrieval
+from a model refusal and from invalid generated quotations, without
+pretending that the original source lacks the answer.
+
+Diverse selection reserves up to two keyword candidates and two
+embedding candidates from the **original** question before adding
+remaining candidates by reciprocal-rank fusion across rewritten
+queries. This protects rare exact query anchors when semantic ranking
+is noisy. All shown excerpts come directly from the indexed document;
+the quotation verifier checks against that same clipped excerpt,
+not hidden content elsewhere in the parent chunk. UI and engine
+smoke tests verify result statuses, evidence provenance, candidate
+limits, and exact-anchor retention with intentionally noisy
+semantic vectors. Real model relevance remains unverified without
+an end-to-end test against a supplied source corpus.
+
+
+### File-decoding corruption guard and Q&A latency
+
+StreamReader's single-byte codepage decoders may successfully decode UTF-8
+as Windows-1251 while producing mojibake. A sampled strict UTF-8 validation
+now rejects legacy decoding if the file is convincingly UTF-8, and a
+post-decode high-frequency marker heuristic rejects texts that were
+already incorrectly decoded/saved. Imports remain atomic: a rejected
+file does not replace the last valid document set. WPF displays a
+260-character original-text preview before the user builds an embedding
+index, helping to spot errors without running either model.
+
+Default local Q&A skips the initial, sequential Qwen query rewriting call.
+The original question is ranked with keyword + embeddings and sent to
+a single local Qwen answer request. An opt-in WPF checkbox re-enables
+the expensive query expansion for deeper searches when needed. This
+lowers expected latency but real GPU/offloading performance and relevance
+need user-side validation on actual source text.
+
+
+### Runtime model selection and measured performance
+
+`OllamaRuntimeClient` reads Ollama's loopback `GET /api/tags` for
+local model names/sizes, and `GET /api/ps` for currently loaded model
+memory placement (`size_vram`, `size`, `context_length`).
+`SmartSearchViewModel.SelectedAnswerModel` changes only the optional
+`OllamaAnswerProvider` generation model; it never changes the
+EmbeddingGemma index. The UI disables changes while a request is
+running to avoid mixing results between different generation models.
+The default remains `qwen3:4b-instruct`, with small CPU-oriented
+alternatives shown as copyable `ollama pull` commands (no download
+performed by the app).
+
+`GroundedQuestionAnswering` separately measures retrieval time
+(including optional query rewriting) and generation wall time.
+`OllamaChatMetrics` parses Ollama's non-streamed response
+`prompt_eval_count`, `eval_count`, `eval_duration`,
+`load_duration` and `total_duration` (nanoseconds), with
+`eval_count * 1e9 / eval_duration` as output tokens/second.
+The WPF panel also reports total elapsed time. Processor placement
+is from Ollama's loaded model API, not inferred from the computer's
+graphics card or assumed from model parameter count. Unloaded models
+and absent metrics remain *unknown*.
+
+Search-library smoke tests use stub local HTTP responses to check
+installed model discovery, processor reporting (CPU/GPU/unloaded),
+model selection forwarded into `/api/chat`, and output token math.
+The Windows WPF smoke test checks the picker and performance panel.
+Real CPU throughput and answer quality remain manual user-side checks.
+
+
+### Two-stage adaptive retrieval and accounting
+
+`GroundedQuestionAnswering.AskAsync` retrieves and ranks up to seven
+source candidates **once**. The ordered candidate set reserves slots for
+the best original-question whole-word and dense matches before filling
+from the fused ranking. It sends the first three candidates with a
+480-character budget each to the local generator; only if this result
+is absent or has no verbatim citation does it try the complete
+candidate set once, bounded to 700 characters each. The same stable
+source IDs and source-document identity are maintained between
+attempts. A retry is skipped if there are no new passages **and**
+the existing passages cannot provide additional source characters;
+a single long passage can still be expanded on the second attempt.
+Both the generator and the verifier use each
+`EvidencePassage.ExcerptCharacters` value, preventing citation checks
+against text not actually submitted to the model. The evidence
+inspector displays only the final submitted set. No third attempt is
+permitted. Cancellation is checked before every model call.
+
+`GroundedAnswer` carries answer-attempt count, candidate count,
+cumulative submitted passage count, cumulative excerpt characters
+and the full-context character baseline. These are deterministic
+*character* measurements, not estimated token or speed savings.
+`OllamaAnswerProvider.BeginQuestion` clears the metric series and
+records all subsequent successful `/api/chat` replies; Qwen query
+rewrites and fallback generations are accumulated by
+`OllamaChatMetrics.Sum`. If any measurement field is missing in one
+reply, its aggregate remains unknown rather than being set to zero.
+The WPF metrics panel shows the actual prompt/output tokens,
+generation wall time, model load and rate across replies. First-pass
+success avoids a second text-generation request; failure may cost
+two requests and should be interpreted as a speed/recall tradeoff,
+not a guaranteed optimization.
+
+Deterministic tests cover initial success, a declined answer retried
+with wider evidence, rejection of fabricated quotations after retry,
+cancellation between attempts, accurate character counts and real
+multi-response metric aggregation. Live CPU timings and correctness
+on source books are manual acceptance tests.
+
+
+### Answer-bearing citation validation
+
+The original `GroundedQuestionAnswering.ValidateEvidence` confirmed that
+a quote was copied from the candidate excerpt but never checked whether
+that quote supported the answer. This led to a real-world bug: Qwen
+answered `Лиса Микита` yet quoted a line about the fox that did not
+mention the name.
+
+The new `AnswerEvidenceValidator` operates *after* the exact-substring
+provenance check, never instead of it. It identifies distinctive
+non-stopword answer terms not already contained in the question,
+and conservatively checks their occurrence in the quoted text. All
+new names and numeric facts must be present, allowing narrow nominal
+suffix variation for inflected forms. At least half of distinctive answer
+terms must match the cited source text. Quotes that match no distinctive
+answer term are filtered out rather than shown as supporting citations.
+
+An unrelated verbatim citation triggers the existing single bounded
+retry, not an additional independent LLM verification call. Failure
+after the retry is reported as `UnsubstantiatedAnswer`, distinct from
+`UnverifiableCitation` (no exact quote) and `ModelDeclined`.
+Only quotes passing both provenance and lexical corroboration can be
+displayed in the supported-answer area. The UI explains that matching
+words/names is NOT semantic proof or an entailment guarantee; correct
+paraphrases may need better textual evidence, while some semantically
+misleading matches remain possible.
+
+Search tests reproduce the user's *Farbovanyi Lys* mismatch with an
+exact but irrelevant quote, verify positive and negative citations,
+Ukrainian name inflections, missing years, one adaptive fallback
+after weak evidence, and an unsupported outcome if retries remain weak.
+
+
+### Avoiding slow repeated generation for irrelevant citations
+
+A real Qwen2.5 1.5B CPU test regressed from a prior 13.77-second
+successful answer to 47.05 seconds and no answer (two LLM calls).
+The model's exact quote was unrelated to the generated proper name;
+the previous validator always triggered another generation.
+
+`AnswerEvidenceValidator.LocateSupportingQuote` now attempts bounded,
+deterministic sentence extraction from the user's imported TXT after
+at least one genuine model quote has passed exact-source validation.
+It searches the submitted original chunks and up to 24 keyword
+matches for the answer-specific words, selecting a quote that both
+passes lexical fact checks and shares a topic word with the question.
+No additional Ollama generation or embedding request is made. A
+locally extracted quote is marked `VerifiedCitation.LocatedInSource`
+and labeled distinctly in WPF, since Qwen did not cite it. Such a
+quote may lie beyond the snippets actually sent to Qwen but must
+come from an indexed user-selected source document.
+
+An irrelevant but genuine model quote no longer triggers automatic
+retry, even if local evidence is missing; the answer is marked
+`UnsubstantiatedAnswer`. Refused answers and wholly invalid source
+quotations still use the bounded second attempt when appropriate.
+This prevents obvious wasted CPU work without weakening fabricated
+citation rejection. It cannot fully prove semantic entailment.
+
+Regression tests reproduce the user's false negative, local
+one-call recovery, an answer absent from the book, an unrelated
+same-name match, and a fact located after the clipped prompt excerpt.
+
+
+### Deterministic source order as citation ranking tiebreaker
+
+`AnswerEvidenceValidator.LocateSupportingQuote` previously used
+`questionOverlap*10 + answerOverlap*5 + submittedPriority`.
+The `submittedPriority` bonus could favor a later passage sent to
+the local language model over the introductory sentence of the same
+original book, despite identical evidence coverage.
+
+The scorer now uses textual overlap alone for relevance, and resolves
+equal-score citations by their index in `SemanticIndex.Chunks` and
+then by the sentence's offset within that chunk. Thus the earliest
+sufficiently supporting source sentence is preferred on a tie.
+A bounded local scan also retains the first chunk mentioning the
+proposed distinctive answer terms, preventing top-24 frequency-based
+retrieval from hiding an introductory mention. This happens only
+after the ordinary answer model has produced a genuine but
+irrelevant quote; it adds no additional Qwen or embedding call.
+More relevant later evidence remains preferred to weaker early
+mentions. Test coverage includes the user's exact fox-name
+introductory sentence and the later chunk-2 citation.

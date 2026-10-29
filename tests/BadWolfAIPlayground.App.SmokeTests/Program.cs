@@ -1,4 +1,8 @@
 using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -7,6 +11,8 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
+using BadWolfAIPlayground.App.Search;
+using BadWolfAIPlayground.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
 
@@ -120,6 +126,253 @@ internal static class Program
                 "Reset should create a fresh baseline.");
 
             Console.WriteLine("PASS guided lessons, before/after comparison, training and reset");
+
+            // Navigation and the keyword-only path must work without Ollama installed.
+            window.NavigateToSmartSearch();
+            var smartSearch = FindDescendants<SmartSearchView>(window).Single();
+            Assert(smartSearch.Visibility == Visibility.Visible, "Smart Search navigation failed.");
+            SmartSearchViewModel searchModel = smartSearch.SearchModel;
+            ComboBox encodingSelector = smartSearch.FindName("FileEncodingSelector") as ComboBox
+                ?? throw new InvalidOperationException("Smart Search file encoding selector is missing.");
+            Assert(encodingSelector.SelectedItem is FileEncodingChoice initialChoice &&
+                   initialChoice.Encoding == TextFileEncoding.Auto,
+                "The file encoding selector must be visible and default to strict UTF-8 / BOM detection.");
+            Assert(encodingSelector.Style is not null &&
+                   encodingSelector.Style.BasedOn is null,
+                "File encoding must use the dedicated dark ComboBox style.");
+            encodingSelector.ApplyTemplate();
+            Assert(encodingSelector.Template.FindName("DropDownToggle", encodingSelector) is ToggleButton,
+                "The dark ComboBox template must render a visible dropdown arrow.");
+            Assert(encodingSelector.Template.FindName("ContentSite", encodingSelector) is ContentPresenter,
+                "The selected encoding must remain visible on the dark ComboBox surface.");
+            Assert(encodingSelector.Foreground is SolidColorBrush foreground &&
+                   foreground.Color.R > 190 && foreground.Color.G > 190 &&
+                   encodingSelector.Background is SolidColorBrush background &&
+                   background.Color.R < 70 && background.Color.G < 90,
+                "File encoding must have legible light text on a dark background.");
+            Assert(encodingSelector.ItemContainerStyle is not null &&
+                   encodingSelector.ItemContainerStyle.Setters.OfType<Setter>().Any(setter =>
+                       setter.Property == Control.ForegroundProperty),
+                "Every dropdown option must use a high-contrast foreground.");
+            Console.WriteLine("PASS dark file encoding selector and dropdown item styling");
+            searchModel.LoadDemoCommand.Execute(null);
+            Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 4,
+                "The local demonstration corpus did not load.");
+            Assert(!searchModel.HasIndex, "A demo must not pretend to have generated AI embeddings.");
+            Assert(!searchModel.AskDocumentCommand.CanExecute(null),
+                "Answer generation must not run before a real semantic index exists.");
+            Assert(smartSearch.FindName("AskDocumentButton") is Button,
+                "The Smart Search Lab must expose a separate Ask document action.");
+            Assert(smartSearch.FindName("AnswerModelSelector") is ComboBox modelSelector &&
+                   modelSelector.Style is not null &&
+                   searchModel.AnswerModelChoices.Count > 0 &&
+                   searchModel.SelectedAnswerModel.Name == OllamaAnswerProvider.DefaultModel,
+                "The model selector must start with the existing default and a dark readable style.");
+            Assert(smartSearch.FindName("RefreshAnswerModelsButton") is Button,
+                "The UI must allow refreshing the locally installed Ollama models.");
+            Assert(smartSearch.FindName("AnswerMetricsTextBlock") is TextBlock,
+                "The UI must provide a visible generation-performance panel.");
+            Assert(smartSearch.FindName("AdaptiveContextTextBlock") is TextBlock &&
+                   searchModel.AdaptiveContextSummary.Contains("3 short passages", StringComparison.Ordinal),
+                "The user must see an accurate adaptive-context summary near timing metrics.");
+            Assert(searchModel.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
+                "CPU/GPU status must be unknown before Ollama provides runtime facts.");
+            Console.WriteLine("PASS local model picker and performance panel with no fake CPU/GPU detection");
+
+            // Exercise the actual model picker and local status flow without
+            // requiring a Windows runner with Ollama installed.
+            using (var fakeHttp = new HttpClient(new LocalOllamaMockHandler())
+            {
+                BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+            })
+            using (var runtime = new OllamaRuntimeClient(fakeHttp))
+            using (var answer = new OllamaAnswerProvider())
+            using (var selection = new SmartSearchViewModel(
+                answerModel: answer, ollamaRuntime: runtime))
+            {
+                Task refreshing = selection.RefreshAnswerModelsAsync();
+                PumpUntil(() => refreshing.IsCompleted, TimeSpan.FromSeconds(12));
+                refreshing.GetAwaiter().GetResult();
+                Assert(selection.AnswerModelChoices.Count == 2 &&
+                       selection.AnswerModelChoices.All(model =>
+                           !model.Name.Contains("embeddinggemma", StringComparison.OrdinalIgnoreCase)),
+                    "The model selector must show installed chat models but exclude embedding-only models.");
+                Assert(selection.ProcessorStatus.Contains("100% CPU", StringComparison.Ordinal),
+                    "A running CPU-only Qwen model must be labeled from /api/ps.");
+                selection.SelectedAnswerModel = selection.AnswerModelChoices.Single(model =>
+                    model.Name == "qwen2.5:0.5b-instruct");
+                Assert(answer.ModelName == "qwen2.5:0.5b-instruct" &&
+                       selection.SelectedAnswerModel.Name == answer.ModelName &&
+                       selection.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
+                    "Changing the WPF selection must switch the actual chat provider and invalidate old telemetry.");
+                Console.WriteLine("PASS local Ollama /api/tags + /api/ps discovery and WPF model switching");
+            }
+            Assert(smartSearch.FindName("AnswerTextBlock") is TextBlock,
+                "The grounded answer must have a dedicated readable area.");
+            Assert(smartSearch.FindName("RetrievedEvidenceExpander") is Expander,
+                "The QA UI must expose actual model evidence even when no answer can be verified.");
+            Assert(searchModel.RetrievedPassages.Count == 0 &&
+                   searchModel.RetrievalDetails.Contains("Ask document", StringComparison.Ordinal),
+                "Evidence inspector must start empty without fabricated passages.");
+            Assert(searchModel.AnswerSources.Count == 0,
+                "An unloaded document must not display fabricated citations.");
+            Assert(Enum.IsDefined(AnswerOutcome.UnsubstantiatedAnswer),
+                "The UI must distinguish an irrelevant verbatim citation from a fabricated quote.");
+            Console.WriteLine("PASS separate grounded-answer UI and no fabricated pre-index answer");
+            searchModel.Query = "SQLite locked";
+            searchModel.CompareCommand.Execute(null);
+            PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
+            Assert(searchModel.KeywordResults.Count > 0 &&
+                   searchModel.KeywordResults[0].Title.Contains("database_errors", StringComparison.Ordinal),
+                "Keyword ranking did not find the database troubleshooting note.");
+            Assert(searchModel.SemanticResults.Count == 0,
+                "AI matches must not be faked when the model is unavailable.");
+
+            // Regression: a real 3.5 MiB file must import without blocking the dispatcher.
+            string largePath = Path.Combine(Path.GetTempPath(), $"badwolf-ui-{Guid.NewGuid():N}.txt");
+            int searchWrongThreadNotifications = 0;
+            searchModel.PropertyChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref searchWrongThreadNotifications);
+                }
+            };
+            searchModel.DocumentNames.CollectionChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref searchWrongThreadNotifications);
+                }
+            };
+            try
+            {
+                File.WriteAllText(largePath, new string('a', 3_670_016) + "\nFINAL_SEARCH_MARKER\n");
+                Task importing = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => importing.IsCompleted, TimeSpan.FromSeconds(30));
+                importing.GetAwaiter().GetResult();
+                Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 1,
+                    "The multi-megabyte file was not imported.");
+                Assert(searchModel.ImportProgress == 100 &&
+                       searchModel.ImportLabel.StartsWith("Imported", StringComparison.Ordinal),
+                    "Large import did not report successful completion.");
+                Assert(searchModel.DocumentsLabel.Contains("chunks", StringComparison.Ordinal) &&
+                       searchModel.IndexLabel.Contains("batches", StringComparison.Ordinal),
+                    "The UI should show the chunk and batch counts before starting Ollama.");
+                Assert(!searchModel.HasIndex,
+                    "Importing text must not manufacture semantic vectors without Ollama.");
+
+                searchModel.Query = "FINAL_SEARCH_MARKER";
+                searchModel.CompareCommand.Execute(null);
+                PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
+                Assert(searchModel.KeywordResults.Count > 0 &&
+                       searchModel.KeywordResults[0].Snippet.Contains("FINAL_SEARCH_MARKER", StringComparison.Ordinal),
+                    "Keyword search must find the end of a multi-megabyte file.");
+                Assert(searchWrongThreadNotifications == 0,
+                    "Large-file import and searches must update the ViewModel on the WPF UI thread.");
+                Console.WriteLine("PASS 3.5 MiB import, progress, preserved tail and large-file keyword search");
+
+                // A legacy Windows TXT must display its real error in the import card
+                // while keeping the previous large file, then succeed after choosing
+                // the original code page without converting the file manually.
+                byte[] legacyText = System.Text.CodePagesEncodingProvider.Instance.GetEncoding(1251)!
+                    .GetBytes("Помилка запису в базу даних. З'єднання закрито.");
+                File.WriteAllBytes(largePath, legacyText);
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Auto);
+                Task invalidImport = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => invalidImport.IsCompleted, TimeSpan.FromSeconds(20));
+                invalidImport.GetAwaiter().GetResult();
+                Assert(searchModel.HasImportError &&
+                       searchModel.ImportLabel.Contains("Import failed:", StringComparison.Ordinal) &&
+                       searchModel.ImportLabel.Contains("Windows-1251", StringComparison.Ordinal),
+                    "The import card must show the actual file decoding error and a usable retry suggestion.");
+                Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 1 &&
+                       searchModel.DocumentsLabel.Contains("chunks", StringComparison.Ordinal),
+                    "A rejected import must preserve the previous searchable document.");
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Windows1251);
+                Assert(encodingSelector.SelectedItem is FileEncodingChoice selected &&
+                       selected.Encoding == TextFileEncoding.Windows1251,
+                    "The encoding choice must remain synchronized with the WPF selector.");
+                Task legacyImport = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => legacyImport.IsCompleted, TimeSpan.FromSeconds(20));
+                legacyImport.GetAwaiter().GetResult();
+                Assert(!searchModel.HasImportError && searchModel.ImportProgress == 100 &&
+                       searchModel.ImportLabel.StartsWith("Imported", StringComparison.Ordinal),
+                    "Retrying with Windows-1251 should import the original file without errors.");
+                searchModel.Query = "Помилка";
+                searchModel.CompareCommand.Execute(null);
+                PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
+                Assert(searchModel.KeywordResults.Count > 0 &&
+                       searchModel.KeywordResults[0].Snippet.Contains("Помилка", StringComparison.Ordinal),
+                    "The correctly decoded legacy file must be searchable.");
+                Assert(searchWrongThreadNotifications == 0,
+                    "Decoding errors, encoding selection and retry must remain on the WPF dispatcher.");
+                Assert(searchModel.HasPreviousFiles && searchModel.RestoreFilesCommand.CanExecute(null),
+                    "A successful file import must remember source paths for the next session.");
+
+                // Simulate restarting: a brand-new ViewModel must restore file paths
+                // and the encoding choice without reading source content automatically.
+                using (var restarted = new SmartSearchViewModel())
+                {
+                    Assert(restarted.HasPreviousFiles && !restarted.HasDocuments,
+                        "A new session must offer explicit restore without auto-opening private files.");
+                    Task restoring = restarted.RestorePreviousFilesAsync();
+                    PumpUntil(() => restoring.IsCompleted, TimeSpan.FromSeconds(20));
+                    restoring.GetAwaiter().GetResult();
+                    Assert(restarted.HasDocuments && !restarted.HasImportError &&
+                           restarted.SelectedFileEncoding.Encoding == TextFileEncoding.Windows1251,
+                        "Restored files must preserve the original decoding choice.");
+                    restarted.Query = "Помилка";
+                    restarted.CompareCommand.Execute(null);
+                    PumpUntil(() => !restarted.IsBusy, TimeSpan.FromSeconds(20));
+                    Assert(restarted.KeywordResults.Count > 0,
+                        "Restored files must be searchable without a new file picker.");
+                }
+
+                // Regression: a UTF-8 Ukrainian story must not be accepted as
+                // Windows-1251 just because the old file used that codepage.
+                const string foxText = "Жив собі Лис Микита, хитрий та розумний. ";
+                File.WriteAllText(largePath, string.Concat(Enumerable.Repeat(foxText, 30)),
+                    new System.Text.UTF8Encoding(false));
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Windows1251);
+                Task wrongStory = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => wrongStory.IsCompleted, TimeSpan.FromSeconds(20));
+                wrongStory.GetAwaiter().GetResult();
+                Assert(searchModel.HasImportError &&
+                       searchModel.ImportLabel.Contains("UTF-8", StringComparison.Ordinal) &&
+                       searchModel.DocumentPreview.Contains("Помилка", StringComparison.Ordinal),
+                    "Wrong legacy decoding must fail without replacing the old documents or their preview.");
+
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Auto);
+                Task correctStory = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => correctStory.IsCompleted, TimeSpan.FromSeconds(20));
+                correctStory.GetAwaiter().GetResult();
+                Assert(!searchModel.HasImportError &&
+                       searchModel.DocumentPreview.Contains("Лис Микита", StringComparison.Ordinal) &&
+                       !searchModel.DocumentPreview.Contains("Рџ", StringComparison.Ordinal),
+                    "A correctly decoded Ukrainian TXT must be readable before indexing.");
+                Assert(smartSearch.FindName("DocumentPreviewText") is TextBlock preview &&
+                       preview.Text.Contains("Лис Микита", StringComparison.Ordinal),
+                    "WPF must show a readable decoded sample so the user can verify it.");
+                Assert(smartSearch.FindName("DeepSearchToggle") is CheckBox deepToggle &&
+                       deepToggle.IsChecked == false,
+                    "Fast one-call document answering must be the default.");
+                Console.WriteLine("PASS UTF-8 vs Windows-1251 detection and readable preview in WPF");
+                Console.WriteLine("PASS saved file selection and restore after restarting the ViewModel");
+                Console.WriteLine("PASS failed TXT import diagnostics and Windows-1251 retry in WPF");
+            }
+            finally
+            {
+                File.Delete(largePath);
+            }
+            window.NavigateToNeuralLab();
+            Assert(smartSearch.Visibility == Visibility.Collapsed,
+                "Neural Network Lab navigation failed.");
+            Console.WriteLine("PASS Smart Search navigation, demo and offline keyword comparison");
             return 0;
         }
         catch (Exception exception)
@@ -131,6 +384,23 @@ internal static class Program
         {
             window?.Close();
             application?.Shutdown();
+        }
+    }
+
+    private static void PumpUntil(Func<bool> completed, TimeSpan timeout)
+    {
+        var clock = Stopwatch.StartNew();
+        while (!completed())
+        {
+            if (clock.Elapsed > timeout)
+            {
+                throw new TimeoutException($"Timed out after {timeout.TotalSeconds:0}s while pumping WPF.");
+            }
+            var frame = new DispatcherFrame();
+            Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
+            Thread.Sleep(2);
         }
     }
 
@@ -159,5 +429,34 @@ internal static class Program
                 yield return descendant;
             }
         }
+    }
+}
+
+
+internal sealed class LocalOllamaMockHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        string json = request.RequestUri?.AbsolutePath switch
+        {
+            "/api/tags" => """
+                {"models":[
+                    {"name":"embeddinggemma:latest","size":692000000},
+                    {"name":"qwen2.5:0.5b-instruct","size":398000000},
+                    {"name":"qwen3:4b-instruct","size":3900000000}
+                ]}
+                """,
+            "/api/ps" => """
+                {"models":[{"name":"qwen3:4b-instruct",
+                    "size":3900000000,"size_vram":0,"context_length":8192}]}
+                """,
+            _ => throw new InvalidOperationException("Only local Ollama catalogue endpoints are expected.")
+        };
+
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
     }
 }
