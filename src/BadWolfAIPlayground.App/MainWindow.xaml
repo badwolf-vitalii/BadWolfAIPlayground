@@ -1,0 +1,343 @@
+<Window x:Class="BadWolfAIPlayground.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:BadWolfAIPlayground.App.Controls"
+        Title="BadWolf AI Playground"
+        Width="1400" Height="900" MinWidth="1090" MinHeight="760"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource PageBrush}">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="232" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- App navigation -->
+        <Border Grid.Column="0" Background="#0C1729" BorderBrush="#233047"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="22,30,16,22">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="42" Height="42" CornerRadius="12" Background="#176CD0">
+                            <TextBlock Text="◆" Foreground="White" FontSize="24"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="BADWOLF" FontSize="16" FontWeight="Bold" />
+                            <TextBlock Text="AI PLAYGROUND" FontSize="10" FontWeight="SemiBold"
+                                       Foreground="#64B4FF" />
+                        </StackPanel>
+                    </StackPanel>
+                    <Border Height="1" Margin="0,28,0,23" Background="#27374E" />
+                    <TextBlock Text="EXPERIMENTS" FontSize="10" FontWeight="SemiBold"
+                               Foreground="#748AA7" Margin="9,0,0,15" />
+                    <Border Background="#17385D" CornerRadius="10" Padding="13,13">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="◎" FontSize="19" Foreground="#5BB4FF"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Text="Neural Network Lab" FontWeight="SemiBold"
+                                       FontSize="12" Margin="11,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Orientation="Horizontal" Margin="13,19,0,0">
+                        <TextBlock Text="⌕" FontSize="23" Foreground="#7187A4" />
+                        <TextBlock Text="Smart Search" FontSize="12" Foreground="#899DB8"
+                                   Margin="12,5,0,0" />
+                    </StackPanel>
+                    <TextBlock Text="COMING SOON" FontSize="9" Foreground="#5D738C"
+                               Margin="48,0,0,0" />
+                    <StackPanel Orientation="Horizontal" Margin="13,23,0,0">
+                        <TextBlock Text="⌁" FontSize="24" Foreground="#7187A4" />
+                        <TextBlock Text="Anomaly Detection" FontSize="12" Foreground="#899DB8"
+                                   Margin="12,4,0,0" />
+                    </StackPanel>
+                    <TextBlock Text="COMING SOON" FontSize="9" Foreground="#5D738C"
+                               Margin="48,0,0,0" />
+                </StackPanel>
+
+                <Border Grid.Row="2" Background="#101F34" CornerRadius="12"
+                        BorderBrush="#27405E" BorderThickness="1" Padding="13">
+                    <StackPanel>
+                        <TextBlock Text="LOCAL-FIRST AI" FontSize="10" FontWeight="Bold"
+                                   Foreground="#48CEBB" />
+                        <TextBlock Text="No API keys. No cloud. Just C# and experiments."
+                                   TextWrapping="Wrap" FontSize="12" Margin="0,9,0,9"
+                                   Foreground="#A2B8D0" />
+                        <TextBlock Text="v0.1.0  ·  .NET 8" FontSize="10"
+                                   Foreground="#7088A6" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Main content -->
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <Grid Margin="32,28,32,30" MaxWidth="1500">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,25">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="NEURAL NETWORK LAB" Foreground="#58B5FF"
+                                   FontSize="11" FontWeight="Bold" />
+                        <TextBlock Text="Teach a network to think." FontSize="29"
+                                   FontWeight="Bold" Margin="0,7,0,5" />
+                        <TextBlock Text="Build, train, and explore a neural network from scratch."
+                                   Style="{StaticResource MutedText}" FontSize="13" />
+                    </StackPanel>
+                    <Border Grid.Column="1" Background="#12342F" BorderBrush="#266D61"
+                            BorderThickness="1" CornerRadius="12" Padding="13,8"
+                            VerticalAlignment="Top" Margin="12,5,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7" Fill="#45E5B7" Margin="0,0,8,0" />
+                            <TextBlock Text="100% LOCAL ENGINE" Foreground="#7EE5C6"
+                                       FontWeight="SemiBold" FontSize="10" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- Visualization + experiment configuration -->
+                <Grid Grid.Row="1" Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.48*" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,9,0">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Network architecture" FontSize="16" FontWeight="SemiBold" />
+                                    <TextBlock Text="Live connections and learned weights"
+                                               Style="{StaticResource MutedText}" FontSize="11" Margin="0,5,0,0" />
+                                </StackPanel>
+                                <Border Grid.Column="1" CornerRadius="7" Padding="9,5"
+                                        Background="#1E344D" VerticalAlignment="Top">
+                                    <TextBlock Text="2 → H → 1" Foreground="#9DCCFF"
+                                               FontSize="11" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                            <controls:NeuralNetworkView Snapshot="{Binding CurrentSnapshot}"
+                                                        Height="265" Margin="0,13,0,0" />
+                            <Border Height="1" Background="#283B54" Margin="0,2,0,14" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                <Ellipse Width="9" Height="9" Fill="#20C6D8" Margin="0,3,7,0" />
+                                <TextBlock Text="Positive weight" FontSize="11"
+                                           Style="{StaticResource MutedText}" Margin="0,0,19,0" />
+                                <Ellipse Width="9" Height="9" Fill="#B96BFC" Margin="0,3,7,0" />
+                                <TextBlock Text="Negative weight" FontSize="11"
+                                           Style="{StaticResource MutedText}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Experiment settings" FontSize="16" FontWeight="SemiBold" />
+                            <TextBlock Text="Configure the XOR training session"
+                                       Style="{StaticResource MutedText}" FontSize="11" Margin="0,5,0,18" />
+                            <UniformGrid Columns="2" Rows="2">
+                                <StackPanel Margin="0,0,9,15">
+                                    <TextBlock Text="Hidden neurons" FontSize="11" Margin="0,0,0,6"
+                                               Foreground="#AFC5E1" />
+                                    <TextBox Text="{Binding HiddenNeuronsText, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Margin="9,0,0,15">
+                                    <TextBlock Text="Epochs" FontSize="11" Margin="0,0,0,6"
+                                               Foreground="#AFC5E1" />
+                                    <TextBox Text="{Binding EpochsText, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Margin="0,0,9,15">
+                                    <TextBlock Text="Learning rate" FontSize="11" Margin="0,0,0,6"
+                                               Foreground="#AFC5E1" />
+                                    <TextBox Text="{Binding LearningRateText, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                                <StackPanel Margin="9,0,0,15">
+                                    <TextBlock Text="Random seed" FontSize="11" Margin="0,0,0,6"
+                                               Foreground="#AFC5E1" />
+                                    <TextBox Text="{Binding SeedText, UpdateSourceTrigger=PropertyChanged}" />
+                                </StackPanel>
+                            </UniformGrid>
+
+                            <Grid Margin="0,5,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="1*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="▶  Train" Command="{Binding TrainCommand}"
+                                        Style="{StaticResource PrimaryButton}" Margin="0,0,5,0" />
+                                <Button Grid.Column="1" Content="Stop" Command="{Binding StopCommand}"
+                                        Style="{StaticResource SecondaryButton}" Margin="5,0,5,0" />
+                                <Button Grid.Column="2" Content="Reset" Command="{Binding ResetCommand}"
+                                        Style="{StaticResource SecondaryButton}" Margin="5,0,0,0" />
+                            </Grid>
+                            <Border Height="1" Background="#2B3D56" Margin="0,8,0,14" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="1*" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="↓  Save model"
+                                        Command="{Binding SaveCommand}" Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,7,0" />
+                                <Button Grid.Column="1" Content="↑  Load model"
+                                        Command="{Binding LoadCommand}" Style="{StaticResource SecondaryButton}"
+                                        Margin="7,0,0,0" />
+                            </Grid>
+                            <TextBlock Text="Models are stored locally as JSON files."
+                                       Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                                       FontSize="10" Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- Loss chart + live metrics -->
+                <Grid Grid.Row="2" Margin="0,0,0,18">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="1.48*" />
+                        <ColumnDefinition Width="1*" />
+                    </Grid.ColumnDefinitions>
+                    <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,9,0">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock Text="Training loss" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="MEAN SQUARED ERROR · LOG SCALE"
+                                           HorizontalAlignment="Right" VerticalAlignment="Center"
+                                           Foreground="#7292B2" FontSize="9" />
+                            </Grid>
+                            <controls:LossChartView Points="{Binding LossHistory}" Height="158"
+                                                    Margin="0,12,0,0" />
+                            <TextBlock Text="A lower curve means the model is learning the examples."
+                                       Style="{StaticResource MutedText}" FontSize="10" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </Border>
+                    <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Live metrics" FontSize="16" FontWeight="SemiBold" />
+                            <Grid Margin="0,20,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="1*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Text="CURRENT LOSS" FontSize="10" Foreground="#8CA4C3" />
+                                    <TextBlock Text="{Binding LossText}" FontSize="23" FontWeight="SemiBold"
+                                               Margin="0,5,0,0" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1">
+                                    <TextBlock Text="CORRECT PREDICTIONS" FontSize="10" Foreground="#8CA4C3" />
+                                    <TextBlock Text="{Binding AccuracyText}" FontSize="23" FontWeight="SemiBold"
+                                               Foreground="#55D9BE" Margin="0,5,0,0" />
+                                </StackPanel>
+                            </Grid>
+                            <Grid Margin="0,18,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="EPOCHS" FontSize="10" Foreground="#8CA4C3" />
+                                <TextBlock Grid.Column="1" Text="{Binding EpochText}" FontSize="11"
+                                           HorizontalAlignment="Right" />
+                            </Grid>
+                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Completion}"
+                                         Height="7" Foreground="#3E9BFF" Background="#192A43"
+                                         BorderThickness="0" />
+                            <TextBlock Text="{Binding StatusText}" Foreground="#A5BDD7"
+                                       TextWrapping="Wrap" FontSize="11" Margin="0,12,0,0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- Test predictions -->
+                <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,16">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,18">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="Test the network" FontSize="16" FontWeight="SemiBold" />
+                                <TextBlock Text="XOR: output is 1 only when the inputs differ"
+                                           Style="{StaticResource MutedText}" FontSize="11" Margin="0,5,0,0" />
+                            </StackPanel>
+                            <Border Grid.Column="1" Background="#183A36" CornerRadius="7"
+                                    Padding="10,5" VerticalAlignment="Top">
+                                <TextBlock Text="LIVE INFERENCE" Foreground="#68DCC1" FontSize="10" />
+                            </Border>
+                        </Grid>
+                        <ItemsControl ItemsSource="{Binding Predictions}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <UniformGrid Columns="4" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#0A172A" BorderBrush="#29415E"
+                                            BorderThickness="1" CornerRadius="11"
+                                            Padding="14" Margin="0,0,12,0">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Input}" FontSize="13" FontWeight="SemiBold" />
+                                            <Grid Margin="0,13,0,8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="PREDICTION" Foreground="#8DA6C3" FontSize="9" />
+                                                <TextBlock Grid.Column="1" Text="{Binding Output}"
+                                                           Foreground="#67C6FF" FontWeight="Bold" FontSize="14" />
+                                            </Grid>
+                                            <ProgressBar Minimum="0" Maximum="100"
+                                                         Value="{Binding Percentage}" Height="7"
+                                                         Background="#1B2C45" Foreground="#31B7DA"
+                                                         BorderThickness="0" />
+                                            <Grid Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock FontSize="10" Foreground="#9AAEC8">
+                                                    <Run Text="Expected: " />
+                                                    <Run Text="{Binding Expected, Mode=OneWay}" />
+                                                </TextBlock>
+                                                <TextBlock Grid.Column="1" FontSize="10" Foreground="#D5E7FF">
+                                                    <Run Text="Class: " />
+                                                    <Run Text="{Binding Result, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Grid.Row="4" Text="Built from scratch in C# · Sigmoid activations · Backpropagation · Stochastic gradient descent"
+                           Foreground="#6D87A4" FontSize="11" HorizontalAlignment="Center" />
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</Window>

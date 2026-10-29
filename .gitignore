@@ -1,0 +1,19 @@
+# .NET and Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+*.pdb
+TestResults/
+artifacts/
+
+# IDEs and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local experiment files
+*.ai-model.json
