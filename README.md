@@ -151,3 +151,26 @@ CI tests both search algorithms using deterministic fake embeddings and the Olla
 ## License
 
 [MIT](LICENSE) © 2026 Bad Wolf.
+
+
+#### Preventing garbled text from incorrect encodings
+
+**Check the decoded text preview in Choose documents before building an AI index.**
+Selecting Windows-1251 for a UTF-8 Ukrainian book turns normal text into
+mojibake such as `РџРµС...`. Since most legacy codepages accept arbitrary
+bytes, decoding may "succeed" while producing unusable text. The importer
+now rejects a legacy codepage selection if a sampled file is convincingly
+valid UTF-8, and also rejects text already strongly marked by common
+UTF-8/ANSI mojibake patterns. It names the file and suggests
+**File encoding: Auto (UTF-8)**. Previously indexed garbage cannot be
+repaired from embeddings: reimport the original file with the correct
+encoding and **Build AI index** again. The cache fingerprint detects
+the changed source text and does not reuse the corrupted vectors.
+
+**Faster document answers:** by default **Ask document** uses semantic
+and lexical retrieval with the original question and calls the Qwen text
+model only once. An optional **Deep query expansion (slower)** checkbox
+restores the extra Qwen rewrite call if needed for harder searches.
+Timing still depends on whether Ollama runs Qwen on GPU or CPU; check
+`ollama ps` while answering (the `PROCESSOR` column should ideally be
+`100% GPU`). This speedup does not guarantee relevance or answer quality.

@@ -14,6 +14,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Ollama API protocol", TestOllamaProtocol),
     ("Large text file imports and safety limits", TestFileLoader),
     ("Explicit legacy encodings and readable import errors", TestTextEncodings),
+    ("Fast document Q&A skips slow query-expansion call", TestFastAnswers),
     ("Incremental embedding batches and progress", TestLargeIndex),
     ("Oversized index protection", TestIndexLimit),
     ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
@@ -241,6 +242,30 @@ static async Task TestTextEncodings()
         IReadOnlyList<SearchDocument> normal = await LocalTextLoader.LoadAsync([file]);
         Assert(normal[0].Content == "Valid UTF-8 text — тест.",
             "Auto detection must continue to read ordinary UTF-8.");
+
+        // Regression from an actual WPF screenshot: the user retained a
+        // Windows-1251 selection when importing a UTF-8 Ukrainian book.
+        const string fox = "Жив собі Лис Микита, і вся лісова громада знала його ім'я. ";
+        await File.WriteAllTextAsync(file, string.Concat(Enumerable.Repeat(fox, 40)),
+            new UTF8Encoding(false));
+        InvalidDataException wrongLegacy = await CaptureAsync<InvalidDataException>(
+            () => LocalTextLoader.LoadAsync([file], fileEncoding: TextFileEncoding.Windows1251));
+        Assert(wrongLegacy.Message.Contains("valid UTF-8", StringComparison.OrdinalIgnoreCase) &&
+               wrongLegacy.Message.Contains("Auto", StringComparison.Ordinal),
+            "UTF-8 imported as Windows-1251 must be rejected before indexing mojibake.");
+        IReadOnlyList<SearchDocument> fixedFox = await LocalTextLoader.LoadAsync([file]);
+        Assert(fixedFox[0].Content.StartsWith("Жив собі Лис Микита", StringComparison.Ordinal),
+            "Auto must correctly decode the original Ukrainian characters.");
+
+        // Even when the broken text was already saved to disk as UTF-8,
+        // visible mojibake must not be silently indexed.
+        string corrupted = CodePagesEncodingProvider.Instance.GetEncoding(1251)!
+            .GetString(Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat(fox, 40))));
+        await File.WriteAllTextAsync(file, corrupted, new UTF8Encoding(false));
+        InvalidDataException doubleCorrupted = await CaptureAsync<InvalidDataException>(
+            () => LocalTextLoader.LoadAsync([file]));
+        Assert(doubleCorrupted.Message.Contains("garbled", StringComparison.OrdinalIgnoreCase),
+            "Repeated UTF-8/code-page corruption patterns must be rejected.");
     }
     finally
     {
@@ -454,6 +479,30 @@ static async Task TestSourceAnchorRetrieval()
     }
 }
 
+static async Task TestFastAnswers()
+{
+    SearchChunk[] chunks =
+    [
+        new("Fox.txt", null, 1,
+            "У лісі жив Лис Микита. Всі звірі знали, що його звали Микита.")
+    ];
+    var embedding = new FakeEmbeddings();
+    SemanticIndex index = await SemanticSearch.BuildAsync(chunks, embedding);
+
+    var fast = new FakeAnswerGenerator(refuse: true);
+    GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
+        index, embedding, fast, "Як звали лиса?");
+    Assert(fast.ExpandCalls == 0 && fast.ReceivedPassages.Count > 0 &&
+           answer.SearchQueries.Count == 1,
+        "Fast document answers must use only one generation call (no query rewrite).");
+
+    var deep = new FakeAnswerGenerator(refuse: true);
+    GroundedAnswer expanded = await GroundedQuestionAnswering.AskAsync(
+        index, embedding, deep, "Як звали лиса?", expandQueries: true);
+    Assert(deep.ExpandCalls == 1 && expanded.SearchQueries.Count == 2,
+        "The slower multi-query expansion must remain explicitly opt-in.");
+}
+
 static async Task TestOllamaAnswerProtocol()
 {
     int requests = 0;
@@ -593,9 +642,13 @@ sealed class FakeAnswerGenerator(bool inventQuote = false, bool refuse = false) 
 {
     public string ModelName => "fake-local-answer-model";
     public IReadOnlyList<EvidencePassage> ReceivedPassages { get; private set; } = [];
+    public int ExpandCalls { get; private set; }
 
-    public Task<IReadOnlyList<string>> ExpandSearchAsync(string question, CancellationToken token = default) =>
-        Task.FromResult<IReadOnlyList<string>>(["жінка взяла плід дерева"]);
+    public Task<IReadOnlyList<string>> ExpandSearchAsync(string question, CancellationToken token = default)
+    {
+        ExpandCalls++;
+        return Task.FromResult<IReadOnlyList<string>>(["жінка взяла плід дерева"]);
+    }
 
     public Task<ProposedAnswer> GenerateAsync(
         string question, IReadOnlyList<EvidencePassage> passages, CancellationToken token = default)

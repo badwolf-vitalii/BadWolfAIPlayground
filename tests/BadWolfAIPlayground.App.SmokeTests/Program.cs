@@ -281,6 +281,38 @@ internal static class Program
                     Assert(restarted.KeywordResults.Count > 0,
                         "Restored files must be searchable without a new file picker.");
                 }
+
+                // Regression: a UTF-8 Ukrainian story must not be accepted as
+                // Windows-1251 just because the old file used that codepage.
+                const string foxText = "Жив собі Лис Микита, хитрий та розумний. ";
+                File.WriteAllText(largePath, string.Concat(Enumerable.Repeat(foxText, 30)),
+                    new System.Text.UTF8Encoding(false));
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Windows1251);
+                Task wrongStory = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => wrongStory.IsCompleted, TimeSpan.FromSeconds(20));
+                wrongStory.GetAwaiter().GetResult();
+                Assert(searchModel.HasImportError &&
+                       searchModel.ImportLabel.Contains("UTF-8", StringComparison.Ordinal) &&
+                       searchModel.DocumentPreview.Contains("Помилка", StringComparison.Ordinal),
+                    "Wrong legacy decoding must fail without replacing the old documents or their preview.");
+
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Auto);
+                Task correctStory = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => correctStory.IsCompleted, TimeSpan.FromSeconds(20));
+                correctStory.GetAwaiter().GetResult();
+                Assert(!searchModel.HasImportError &&
+                       searchModel.DocumentPreview.Contains("Лис Микита", StringComparison.Ordinal) &&
+                       !searchModel.DocumentPreview.Contains("Рџ", StringComparison.Ordinal),
+                    "A correctly decoded Ukrainian TXT must be readable before indexing.");
+                Assert(smartSearch.FindName("DocumentPreviewText") is TextBlock preview &&
+                       preview.Text.Contains("Лис Микита", StringComparison.Ordinal),
+                    "WPF must show a readable decoded sample so the user can verify it.");
+                Assert(smartSearch.FindName("DeepSearchToggle") is CheckBox deepToggle &&
+                       deepToggle.IsChecked == false,
+                    "Fast one-call document answering must be the default.");
+                Console.WriteLine("PASS UTF-8 vs Windows-1251 detection and readable preview in WPF");
                 Console.WriteLine("PASS saved file selection and restore after restarting the ViewModel");
                 Console.WriteLine("PASS failed TXT import diagnostics and Windows-1251 retry in WPF");
             }

@@ -47,6 +47,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _answerText = "No answer yet. First build the AI index, then click Ask document.";
     private string _answerStatus = "For cited answers, install a separate local model: ollama pull qwen3:4b-instruct";
     private string _retrievalDetails = "Ask document to inspect the actual source excerpts it sends to the local model.";
+    private string _documentPreview = "No text imported. A preview will appear here before indexing.";
+    private bool _useExpandedSearch;
     private double _indexProgress;
     private double _importProgress;
     private string _importLabel = "Select text files (up to 16 MiB each).";
@@ -195,6 +197,18 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     {
         get => _retrievalDetails;
         private set => SetProperty(ref _retrievalDetails, value);
+    }
+
+    public string DocumentPreview
+    {
+        get => _documentPreview;
+        private set => SetProperty(ref _documentPreview, value);
+    }
+
+    public bool UseExpandedSearch
+    {
+        get => _useExpandedSearch;
+        set => SetProperty(ref _useExpandedSearch, value);
     }
 
     private void ResetAnswer()
@@ -375,6 +389,11 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasDocuments));
         OnPropertyChanged(nameof(HasIndex));
         DocumentsLabel = $"{_documents.Count} document(s) · {_chunks.Count:N0} text chunks";
+        string preview = documents.FirstOrDefault()?.Content ?? "";
+        preview = preview.Length > 260 ? preview[..260] : preview;
+        DocumentPreview = string.IsNullOrWhiteSpace(preview)
+            ? "The selected documents contain no visible text."
+            : preview.Replace('\r', ' ').Replace('\n', ' ').Trim();
         IndexLabel = _chunks.Count == 0 ? "No text to index" :
             $"Ready: {_chunks.Count:N0} chunks (~{(_chunks.Count + SemanticSearch.BatchSize - 1) / SemanticSearch.BatchSize:N0} batches). " +
             "Build AI index will reuse matching batches saved on disk.";
@@ -526,16 +545,19 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         }
 
         string question = Query.Trim();
+        bool expandQueries = UseExpandedSearch;
         AnswerSources.Clear();
         RetrievedPassages.Clear();
         RetrievalDetails = "Searching the selected files for source passages...";
         AnswerText = "Searching relevant passages and preparing an answer...";
-        AnswerStatus = "Using the local answer model and verifying verbatim citations. This may take a moment.";
+        AnswerStatus = expandQueries
+            ? "Deep search: rewriting the query first, then generating a sourced answer (two Qwen calls)."
+            : "Fast search: retrieving source text and generating an answer (one Qwen call).";
         string previousSearchStatus = StatusText;
         OperationOutcome outcome = await RunOperationAsync(async token =>
         {
             GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
-                index, _embeddings, _answerModel, question, token);
+                index, _embeddings, _answerModel, question, token, expandQueries);
 
             await DispatchAsync(() =>
             {

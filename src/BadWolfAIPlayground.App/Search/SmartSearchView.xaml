@@ -96,6 +96,18 @@
                                      BorderThickness="0" Margin="0,0,0,10" />
                         <TextBlock Text="{Binding DocumentsLabel}" Foreground="#83DCCB"
                                    FontSize="12" FontWeight="SemiBold" Margin="0,0,0,7" />
+                        <Border Background="#0B192A" BorderBrush="#335A73"
+                                BorderThickness="1" CornerRadius="7" Padding="10"
+                                Margin="0,9,0,4">
+                            <StackPanel>
+                                <TextBlock Text="DECODED TEXT PREVIEW — verify before indexing"
+                                           Foreground="#8EDAD4" FontWeight="SemiBold"
+                                           FontSize="10" Margin="0,0,0,6" />
+                                <TextBlock x:Name="DocumentPreviewText" Text="{Binding DocumentPreview}"
+                                           Foreground="#DCECF9" FontSize="11"
+                                           TextWrapping="Wrap" MaxHeight="85" />
+                            </StackPanel>
+                        </Border>
                         <ItemsControl ItemsSource="{Binding DocumentNames}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -187,6 +199,11 @@
                         <TextBlock Text="ollama pull qwen3:4b-instruct"
                                    FontFamily="Consolas" FontSize="12" Foreground="#C7E6FF" />
                     </Border>
+                    <CheckBox x:Name="DeepSearchToggle"
+                              Content="Deep query expansion (slower; an extra Qwen call)"
+                              IsChecked="{Binding UseExpandedSearch, Mode=TwoWay}"
+                              Foreground="#BDDAF1" FontSize="11" Margin="0,0,0,12"
+                              ToolTip="Off by default: answer questions with one Qwen call. Turn on only when the ordinary search fails to retrieve the relevant passage." />
                     <WrapPanel Margin="0,0,0,10">
                         <Button x:Name="AskDocumentButton" Content="Ask document"
                                 Command="{Binding AskDocumentCommand}"

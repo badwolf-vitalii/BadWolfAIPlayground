@@ -54,15 +54,20 @@ public static class GroundedQuestionAnswering
         IEmbeddingProvider embeddings,
         ILocalAnswerGenerator generator,
         string question,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool expandQueries = false)
     {
         ArgumentNullException.ThrowIfNull(index);
         ArgumentNullException.ThrowIfNull(embeddings);
         ArgumentNullException.ThrowIfNull(generator);
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
 
-        IReadOnlyList<string> rewrites = await generator.ExpandSearchAsync(question, cancellationToken)
-            .ConfigureAwait(false);
+        // Fast mode uses one local generation call. Query expansion makes a
+        // second, sequential LLM request and is opt-in for hard questions.
+        IReadOnlyList<string> rewrites = expandQueries
+            ? await generator.ExpandSearchAsync(question, cancellationToken)
+                .ConfigureAwait(false)
+            : [];
         string[] queries = new[] { question }
             .Concat(rewrites ?? [])
             .Where(query => !string.IsNullOrWhiteSpace(query))

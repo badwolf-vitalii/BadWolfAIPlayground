@@ -149,3 +149,22 @@ smoke tests verify result statuses, evidence provenance, candidate
 limits, and exact-anchor retention with intentionally noisy
 semantic vectors. Real model relevance remains unverified without
 an end-to-end test against a supplied source corpus.
+
+
+### File-decoding corruption guard and Q&A latency
+
+StreamReader's single-byte codepage decoders may successfully decode UTF-8
+as Windows-1251 while producing mojibake. A sampled strict UTF-8 validation
+now rejects legacy decoding if the file is convincingly UTF-8, and a
+post-decode high-frequency marker heuristic rejects texts that were
+already incorrectly decoded/saved. Imports remain atomic: a rejected
+file does not replace the last valid document set. WPF displays a
+260-character original-text preview before the user builds an embedding
+index, helping to spot errors without running either model.
+
+Default local Q&A skips the initial, sequential Qwen query rewriting call.
+The original question is ranked with keyword + embeddings and sent to
+a single local Qwen answer request. An opt-in WPF checkbox re-enables
+the expensive query expansion for deeper searches when needed. This
+lowers expected latency but real GPU/offloading performance and relevance
+need user-side validation on actual source text.

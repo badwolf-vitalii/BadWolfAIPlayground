@@ -61,6 +61,15 @@ public static class LocalTextLoader
         {
             cancellationToken.ThrowIfCancellationRequested();
             FileInfo info = files[fileIndex];
+            // Legacy ANSI decoding never fails on most UTF-8 bytes and can silently
+            // turn a correct Ukrainian book into a stream of "РџРµС..." garbage.
+            // Refuse a demonstrably valid UTF-8 file when a legacy codepage was chosen.
+            if (fileEncoding is TextFileEncoding.Windows1251 or TextFileEncoding.Windows1252)
+            {
+                await RejectUtf8AsLegacyAsync(info, fileEncoding, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             progress?.Report(new FileImportProgress(bytesCompleted, totalBytes, fileIndex, files.Count, info.Name));
 
             await using var stream = new FileStream(info.FullName, FileMode.Open, FileAccess.Read,
@@ -120,6 +129,14 @@ public static class LocalTextLoader
             }
 
             string content = builder.ToString();
+            if (LooksLikeMojibake(content))
+            {
+                throw new InvalidDataException(
+                    $"{info.Name} contains strongly garbled text (e.g. repeated Р/С or Ð/Ñ characters). " +
+                    "The file may have been decoded or saved using the wrong character encoding. " +
+                    "Try File encoding: Auto (UTF-8), then reselect the original file. " +
+                    "Never build an AI index from unreadable text.");
+            }
             if (!string.IsNullOrWhiteSpace(content))
             {
                 documents.Add(new SearchDocument(info.Name, content, info.FullName));
@@ -134,6 +151,95 @@ public static class LocalTextLoader
         }
 
         return documents;
+    }
+
+    private static async Task RejectUtf8AsLegacyAsync(
+        FileInfo file, TextFileEncoding forcedEncoding, CancellationToken token)
+    {
+        const int SampleBytes = 16 * 1024;
+        byte[] sample = new byte[(int)Math.Min(file.Length, SampleBytes)];
+        if (sample.Length == 0)
+        {
+            return;
+        }
+
+        await using var stream = new FileStream(file.FullName, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        int read = 0;
+        while (read < sample.Length)
+        {
+            int received = await stream.ReadAsync(sample.AsMemory(read), token)
+                .ConfigureAwait(false);
+            if (received == 0)
+            {
+                break;
+            }
+            read += received;
+        }
+
+        // ASCII is valid in both encodings, so don't warn unless the sample
+        // contains substantial non-ASCII letters decoded as strict UTF-8.
+        if (!sample.AsSpan(0, read).ContainsAnyExceptInRange((byte)0, (byte)127))
+        {
+            return;
+        }
+
+        var strictUtf8 = new UTF8Encoding(false, true);
+        for (int trim = 0; trim <= 3 && trim < read; trim++)
+        {
+            try
+            {
+                // A 16-KiB sample may end in the middle of a UTF-8 sequence.
+                // Discard only that partial tail, never invalid bytes inside.
+                string decoded = strictUtf8.GetString(sample, 0, read - trim);
+                int nonAsciiLetters = decoded.Count(character =>
+                    character > 127 && char.IsLetter(character));
+                if (nonAsciiLetters >= 3 || decoded.StartsWith("\uFEFF", StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"{file.Name} appears to be valid UTF-8, but {EncodingName(forcedEncoding)} " +
+                        "was selected. Change File encoding to Auto (UTF-8 / Unicode BOM) " +
+                        "and select the file again. The current encoding would corrupt the AI index.");
+                }
+                return;
+            }
+            catch (DecoderFallbackException)
+            {
+                // This may be genuine Windows-1251/1252 text: accept the explicit
+                // selection and let the normal decoder read it.
+            }
+        }
+    }
+
+    private static bool LooksLikeMojibake(string content)
+    {
+        int characters = Math.Min(content.Length, 12_000);
+        if (characters < 100)
+        {
+            return false;
+        }
+
+        int letters = 0;
+        int indicative = 0;
+        for (int index = 0; index < characters; index++)
+        {
+            char letter = content[index];
+            if (!char.IsLetter(letter))
+            {
+                continue;
+            }
+
+            letters++;
+            if (letter is 'Р' or 'С' or 'Ð' or 'Ñ')
+            {
+                indicative++;
+            }
+        }
+
+        // UTF-8 misread as a single-byte codepage generates one Р/С (or Ð/Ñ)
+        // prefix for almost every Cyrillic character. Normal Ukrainian prose
+        // contains far fewer of these uppercase letters.
+        return letters >= 80 && indicative >= 30 && indicative * 100 > letters * 27;
     }
 
     private static Encoding ResolveEncoding(TextFileEncoding fileEncoding)
