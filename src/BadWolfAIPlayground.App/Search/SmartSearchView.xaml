@@ -189,7 +189,7 @@
             <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,17">
                 <StackPanel>
                     <TextBlock Text="4  Ask the document" FontSize="17" FontWeight="SemiBold" />
-                    <TextBlock Text="Generate a local answer to the question above, using retrieved passages as evidence. The answer must include checkable quotes from the selected files."
+                    <TextBlock Text="First send 3 short source excerpts to the local model; expand to more only when no verifiable answer is found. Quotes must match the selected files."
                                Style="{StaticResource MutedText}" FontSize="11" TextWrapping="Wrap"
                                Margin="0,6,0,11" />
                     <TextBlock Text="LOCAL ANSWER MODEL (separate from the EmbeddingGemma search model)"
@@ -243,6 +243,12 @@
                             <TextBlock Text="REQUEST PERFORMANCE" Foreground="#91D8E9"
                                        FontSize="10" FontWeight="SemiBold" Margin="0,0,0,5" />
                             <TextBlock x:Name="AnswerMetricsTextBlock" Text="{Binding AnswerMetricsText}"
+                                       Foreground="#D1E7F9" FontSize="11" TextWrapping="Wrap" />
+                            <TextBlock Text="ADAPTIVE SOURCE CONTEXT"
+                                       Foreground="#91D8E9" FontWeight="SemiBold"
+                                       FontSize="10" Margin="0,10,0,4" />
+                            <TextBlock x:Name="AdaptiveContextTextBlock"
+                                       Text="{Binding AdaptiveContextSummary}"
                                        Foreground="#D1E7F9" FontSize="11" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>

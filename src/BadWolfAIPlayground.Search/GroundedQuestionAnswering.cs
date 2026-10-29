@@ -4,7 +4,12 @@ using System.Text.RegularExpressions;
 namespace BadWolfAIPlayground.Search;
 
 /// <summary>A verbatim excerpt the user can check against a selected source document.</summary>
-public sealed record EvidencePassage(int Id, SearchChunk Chunk, double SearchScore);
+public sealed record EvidencePassage(int Id, SearchChunk Chunk, double SearchScore)
+{
+    // The verifier and the evidence inspector must use the exact same excerpt
+    // length as the local chat request, including the compact first pass.
+    public int ExcerptCharacters { get; init; } = OllamaAnswerProvider.MaxExcerptCharacters;
+}
 
 /// <summary>A model-authored answer is not trusted until its quotes match source text.</summary>
 public sealed record ProposedEvidence(int Id, string Quote);
@@ -28,6 +33,11 @@ public sealed record GroundedAnswer(
     public IReadOnlyList<string> SearchQueries { get; init; } = [];
     public TimeSpan RetrievalDuration { get; init; }
     public TimeSpan GenerationDuration { get; init; }
+    public int AnswerAttempts { get; init; }
+    public int AvailablePassages { get; init; }
+    public int TotalPassagesSubmitted { get; init; }
+    public int ExcerptCharactersSubmitted { get; init; }
+    public int FullContextCharacters { get; init; }
 }
 
 /// <summary>Only generates text; never reads files or makes remote calls on its own.</summary>
@@ -48,6 +58,9 @@ public static class GroundedQuestionAnswering
 {
     public const int MaxPassages = 7;
     public const int MaxQueries = 3;
+    public const int InitialPassages = 3;
+    public const int InitialExcerptCharacters = 480;
+    public const int ExpandedExcerptCharacters = 700;
     private const string NotFound =
         "Не вдалося підтвердити відповідь у завантаженому тексті. " +
         "Перевір, чи потрібний розділ є у вибраному файлі, або уточни запит.";
@@ -123,27 +136,37 @@ public static class GroundedQuestionAnswering
         // the original question. Pure fusion can bury a rare exact term under
         // several weakly related rewrites, especially in long documents.
         var selected = new List<SearchChunk>(MaxPassages);
-        void AddDistinct(IEnumerable<SearchChunk> source, int max)
+        void AddDistinct(IEnumerable<SearchChunk> source, int maxNewItems)
         {
-            foreach (SearchChunk chunk in source.Take(max))
+            int added = 0;
+            foreach (SearchChunk chunk in source)
             {
-                if (selected.Count >= MaxPassages)
+                if (selected.Count >= MaxPassages || added >= maxNewItems)
                 {
                     return;
                 }
                 if (!selected.Contains(chunk))
                 {
                     selected.Add(chunk);
+                    added++;
                 }
             }
         }
 
-        AddDistinct(originalLexical.Select(hit => hit.Chunk), 2);
-        AddDistinct(originalSemantic.Select(hit => hit.Chunk), 2);
-        AddDistinct(fused
+        // The first three contain a lexical anchor, an original-query dense
+        // candidate and the best remaining fused candidate when available.
+        // This avoids blindly sending seven long pieces to a CPU-only model.
+        AddDistinct(originalLexical.Select(hit => hit.Chunk), 1);
+        AddDistinct(originalSemantic.Select(hit => hit.Chunk), 1);
+        IEnumerable<SearchChunk> blended = fused
             .OrderByDescending(pair => pair.Value.Rank)
             .ThenByDescending(pair => pair.Value.Similarity)
-            .Select(pair => pair.Key), MaxPassages);
+            .Select(pair => pair.Key)
+            .ToArray();
+        AddDistinct(blended, 1);
+        AddDistinct(originalLexical.Select(hit => hit.Chunk), 1);
+        AddDistinct(originalSemantic.Select(hit => hit.Chunk), 1);
+        AddDistinct(blended, MaxPassages);
 
         EvidencePassage[] passages = selected
             .Select((chunk, position) =>
@@ -161,68 +184,109 @@ public static class GroundedQuestionAnswering
             };
         }
 
-        ProposedAnswer proposed = await generator.GenerateAsync(
-            question, passages, cancellationToken).ConfigureAwait(false);
+        // Compute an exact character baseline (NOT a token or elapsed-time
+        // estimate) for what our former seven-passage request would contain.
+        int fullContextCharacters = passages.Sum(passage =>
+            OllamaAnswerProvider.SelectExcerpt(passage.Chunk.Content, question).Length);
+
+        EvidencePassage[] submitted = passages.Take(InitialPassages)
+            .Select(passage => passage with { ExcerptCharacters = InitialExcerptCharacters })
+            .ToArray();
+        int submittedCharacters = 0;
+        int submittedPassages = 0;
+        int attempts = 0;
+        ProposedAnswer proposed;
+        VerifiedCitation[] valid;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            attempts++;
+            submittedPassages += submitted.Length;
+            submittedCharacters += submitted.Sum(passage =>
+                OllamaAnswerProvider.SelectExcerpt(
+                    passage.Chunk.Content, question, passage.ExcerptCharacters).Length);
+
+            proposed = await generator.GenerateAsync(question, submitted, cancellationToken)
+                .ConfigureAwait(false);
+            valid = ValidateEvidence(proposed, submitted, question, cancellationToken);
+
+            // Stop immediately on a verbatim-cited result. Otherwise retry
+            // just once, with a wider but still bounded set of source excerpts.
+            if (valid.Length > 0 || submitted.Length == passages.Length || attempts == 2)
+            {
+                break;
+            }
+
+            submitted = passages
+                .Select(passage => passage with { ExcerptCharacters = ExpandedExcerptCharacters })
+                .ToArray();
+        }
+
         TimeSpan generationDuration = timer.Elapsed - retrievalDuration;
+        AnswerOutcome outcome = valid.Length > 0
+            ? AnswerOutcome.Verified
+            : !proposed.Supported || string.IsNullOrWhiteSpace(proposed.Answer)
+                ? AnswerOutcome.ModelDeclined
+                : AnswerOutcome.UnverifiableCitation;
+
+        return new GroundedAnswer(
+            outcome == AnswerOutcome.Verified ? proposed.Answer.Trim() : NotFound,
+            outcome == AnswerOutcome.Verified, valid, submitted.Length)
+        {
+            Outcome = outcome,
+            Candidates = submitted,
+            SearchQueries = queries,
+            RetrievalDuration = retrievalDuration,
+            GenerationDuration = generationDuration,
+            AnswerAttempts = attempts,
+            AvailablePassages = passages.Length,
+            TotalPassagesSubmitted = submittedPassages,
+            ExcerptCharactersSubmitted = submittedCharacters,
+            FullContextCharacters = fullContextCharacters
+        };
+    }
+
+    private static VerifiedCitation[] ValidateEvidence(
+        ProposedAnswer proposed,
+        IReadOnlyList<EvidencePassage> submitted,
+        string question,
+        CancellationToken cancellationToken)
+    {
         if (!proposed.Supported || string.IsNullOrWhiteSpace(proposed.Answer) ||
             proposed.Evidence is null)
         {
-            return new GroundedAnswer(NotFound, false, [], passages.Length)
-            {
-                Outcome = AnswerOutcome.ModelDeclined,
-                Candidates = passages,
-                SearchQueries = queries,
-                RetrievalDuration = retrievalDuration,
-                GenerationDuration = generationDuration
-            };
+            return [];
         }
 
-        var valid = new List<VerifiedCitation>();
+        var verified = new List<VerifiedCitation>();
         foreach (ProposedEvidence proof in proposed.Evidence.Take(MaxPassages))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            EvidencePassage? passage = passages.FirstOrDefault(item => item.Id == proof.Id);
+            EvidencePassage? passage = submitted.FirstOrDefault(item => item.Id == proof.Id);
             string quote = proof.Quote?.Trim() ?? "";
             if (passage is null || quote.Length is < 8 or > 400)
             {
                 continue;
             }
 
-            // Permit newline/spacing normalization, not paraphrases. The full
-            // source text is never replaced by a model-generated quote.
-            // Verify quotes against exactly the excerpt sent to Qwen,
-            // not hidden text elsewhere in a larger indexed chunk.
-            string source = NormalizeWhitespace(
-                OllamaAnswerProvider.SelectExcerpt(passage.Chunk.Content, question));
-            if (!source.Contains(NormalizeWhitespace(quote), StringComparison.OrdinalIgnoreCase))
+            // Check only content that was really supplied on this attempt.
+            // A fabricated quote is never validated against hidden chunk text.
+            string originalExcerpt = OllamaAnswerProvider.SelectExcerpt(
+                passage.Chunk.Content, question, passage.ExcerptCharacters);
+            if (!NormalizeWhitespace(originalExcerpt).Contains(
+                NormalizeWhitespace(quote), StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
 
-            if (valid.All(citation => citation.Id != proof.Id))
+            if (verified.All(citation => citation.Id != proof.Id))
             {
-                valid.Add(new VerifiedCitation(proof.Id, passage.Chunk, quote));
+                verified.Add(new VerifiedCitation(proof.Id, passage.Chunk, quote));
             }
         }
 
-        // A plausible answer with no checkable source is not an answer.
-        return valid.Count == 0
-            ? new GroundedAnswer(NotFound, false, [], passages.Length)
-              {
-                  Outcome = AnswerOutcome.UnverifiableCitation,
-                  Candidates = passages,
-                  SearchQueries = queries,
-                  RetrievalDuration = retrievalDuration,
-                  GenerationDuration = generationDuration
-              }
-            : new GroundedAnswer(proposed.Answer.Trim(), true, valid, passages.Length)
-              {
-                  Outcome = AnswerOutcome.Verified,
-                  Candidates = passages,
-                  SearchQueries = queries,
-                  RetrievalDuration = retrievalDuration,
-                  GenerationDuration = generationDuration
-              };
+        return verified.ToArray();
     }
 
     private static string NormalizeWhitespace(string input) =>

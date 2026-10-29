@@ -15,6 +15,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Large text file imports and safety limits", TestFileLoader),
     ("Explicit legacy encodings and readable import errors", TestTextEncodings),
     ("Fast document Q&A skips slow query-expansion call", TestFastAnswers),
+    ("Adaptive cited answers and fallback retrieval", TestAdaptiveAnswering),
     ("Incremental embedding batches and progress", TestLargeIndex),
     ("Oversized index protection", TestIndexLimit),
     ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
@@ -504,6 +505,75 @@ static async Task TestFastAnswers()
         "The slower multi-query expansion must remain explicitly opt-in.");
 }
 
+static async Task TestAdaptiveAnswering()
+{
+    SearchChunk[] chunks = Enumerable.Range(1, 9)
+        .Select(i => new SearchChunk("A-Fox.txt", null, i,
+            (i == 1 ? "Лис Микита полюбляв хитрувати. " :
+                      $"У лісі номер {i} відбувалася інша пригода. ") +
+            new string('а', 1100)))
+        .ToArray();
+    var embeddings = new FakeEmbeddings();
+    SemanticIndex index = await SemanticSearch.BuildAsync(chunks, embeddings);
+
+    var immediate = new AdaptiveAnswerGenerator();
+    GroundedAnswer fast = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, immediate, "Як звали лиса?");
+    Assert(fast.Supported && fast.AnswerAttempts == 1 &&
+           fast.Candidates.Count == GroundedQuestionAnswering.InitialPassages &&
+           fast.TotalPassagesSubmitted == GroundedQuestionAnswering.InitialPassages &&
+           fast.AvailablePassages == GroundedQuestionAnswering.MaxPassages &&
+           immediate.CallCount == 1 &&
+           immediate.MaxPassageLengths.SequenceEqual(
+               [GroundedQuestionAnswering.InitialExcerptCharacters]),
+        "An immediate cited result must use one 3-passage prompt and never retry.");
+    Assert(fast.ExcerptCharactersSubmitted < fast.FullContextCharacters &&
+           fast.Citations.Count == 1 &&
+           fast.Citations[0].Quote.Contains("Лис Микита", StringComparison.Ordinal),
+        "Adaptive quick answer must preserve exact citations and accurately count reduced context.");
+
+    var retry = new AdaptiveAnswerGenerator(refuseFirst: true);
+    GroundedAnswer recovered = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, retry, "Як звали лиса?");
+    Assert(recovered.Supported && recovered.AnswerAttempts == 2 &&
+           recovered.Candidates.Count == 7 && recovered.TotalPassagesSubmitted == 10 &&
+           retry.CallCount == 2 && retry.MaxPassageLengths.SequenceEqual(
+               [GroundedQuestionAnswering.InitialExcerptCharacters,
+                GroundedQuestionAnswering.ExpandedExcerptCharacters]),
+        "A declined first attempt must retry once with seven wider passages.");
+    Assert(recovered.Citations[0].Id >= 1 && recovered.Citations[0].Id <= 7 &&
+           recovered.ExcerptCharactersSubmitted > fast.ExcerptCharactersSubmitted,
+        "Fallback must retain stable evidence IDs and report both submitted contexts.");
+
+    var invented = new AdaptiveAnswerGenerator(inventQuote: true);
+    GroundedAnswer noEvidence = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, invented, "Як звали лиса?");
+    Assert(!noEvidence.Supported && noEvidence.AnswerAttempts == 2 &&
+           noEvidence.Outcome == AnswerOutcome.UnverifiableCitation &&
+           noEvidence.Citations.Count == 0 && invented.CallCount == 2,
+        "Never publish unsupported text; a fabricated quote must fail after one bounded retry.");
+
+    using var cancel = new CancellationTokenSource();
+    var stopAfterFirst = new AdaptiveAnswerGenerator(refuseFirst: true, cancelAfterFirst: cancel);
+    await AssertThrowsAsync<OperationCanceledException>(() =>
+        GroundedQuestionAnswering.AskAsync(
+            index, embeddings, stopAfterFirst, "Як звали лиса?", cancel.Token));
+    Assert(stopAfterFirst.CallCount == 1,
+        "Cancellation must stop before launching an expensive fallback request.");
+
+    OllamaChatMetrics first = new(4_000_000_000, 100_000_000, 900, 2_000_000_000,
+        25, 1_000_000_000);
+    OllamaChatMetrics second = new(6_000_000_000, 0, 1200, 3_000_000_000,
+        35, 2_000_000_000);
+    OllamaChatMetrics sum = OllamaChatMetrics.Sum([first, second])!;
+    Assert(sum.PromptTokens == 2100 && sum.OutputTokens == 60 &&
+           Math.Abs(sum.TokensPerSecond!.Value - 20) < 0.001,
+        "Fallback metrics must include both real Ollama replies and use aggregate generation duration.");
+    Assert(OllamaChatMetrics.Sum([]) is null &&
+           OllamaChatMetrics.Sum([first, first with { PromptTokens = null }])!.PromptTokens is null,
+        "Missing metrics must not silently become zero or invented token savings.");
+}
+
 static async Task TestRuntimeCatalogAndMetrics()
 {
     var handler = new StubHandler((request, _) =>
@@ -724,6 +794,46 @@ sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int
 
         return Task.FromResult<IReadOnlyList<float[]>>(
             inputs.Select(_ => new[] { 1f, 0f, 0f }).ToArray());
+    }
+}
+
+sealed class AdaptiveAnswerGenerator(
+    bool refuseFirst = false, bool inventQuote = false,
+    CancellationTokenSource? cancelAfterFirst = null) : ILocalAnswerGenerator
+{
+    public string ModelName => "adaptive-test";
+    public int CallCount { get; private set; }
+    public List<int> MaxPassageLengths { get; } = [];
+
+    public Task<IReadOnlyList<string>> ExpandSearchAsync(string question, CancellationToken token = default) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task<ProposedAnswer> GenerateAsync(
+        string question, IReadOnlyList<EvidencePassage> passages, CancellationToken token = default)
+    {
+        CallCount++;
+        MaxPassageLengths.Add(passages[0].ExcerptCharacters);
+        if (CallCount == 1 && refuseFirst)
+        {
+            cancelAfterFirst?.Cancel();
+            return Task.FromResult(new ProposedAnswer(false, "", []));
+        }
+
+        EvidencePassage? fox = passages.FirstOrDefault(p =>
+            OllamaAnswerProvider.SelectExcerpt(
+                p.Chunk.Content, question, p.ExcerptCharacters)
+                .Contains("Лис Микита", StringComparison.Ordinal));
+        if (fox is null)
+        {
+            return Task.FromResult(new ProposedAnswer(false, "", []));
+        }
+
+        return Task.FromResult(new ProposedAnswer(true, "Його звали Лис Микита.",
+        [
+            new ProposedEvidence(fox.Id,
+                inventQuote ? "Вигадана цитата без слів із джерела" :
+                              "Лис Микита полюбляв хитрувати.")
+        ]));
     }
 }
 

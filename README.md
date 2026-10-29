@@ -213,3 +213,35 @@ end-to-end seconds; missing metrics are shown as *n/a*, not invented.
 Both `/api/tags` and `/api/ps` are local. No API key or cloud access is
 required. Low-memory models may give poorer answers; verify their
 quotations instead of assuming that faster means better.
+
+
+### Adaptive document answers on slower CPUs
+
+**Ask document** now starts with **up to three source excerpts (480 characters each)**
+rather than always sending all seven candidates (900 characters each) to Qwen.
+The initial selection includes exact keyword and original-question semantic
+candidates plus one blended candidate where available. If Qwen declines
+to answer or its source quotations cannot be verified, the app **retries
+once** with up to seven wider excerpts (700 characters each), keeping
+stable source IDs and the same verified-quote requirement. If only three
+candidates exist, no redundant retry is sent. The user can cancel at
+any time. Optional *Deep query expansion* still performs additional
+query-rewriting work before answering.
+
+**Request performance** now shows the number of answer attempts and
+aggregates Ollama's actual prompt and output token counts, including
+both attempts (and any optional query rewrite). The token rate uses the
+total output tokens divided by total measured generation duration.
+The **Adaptive source context** line shows exactly how many excerpt
+characters were sent and how many would have been sent using the old
+full seven-passage context. It **does not claim to measure token or
+wall-time savings**: only a repeatable on-device comparison can establish
+those. A fallback may be slower than the old one-shot approach,
+particularly for small CPU models. The evidence inspector shows the
+exact excerpts used in the **final** answer attempt. An answer with
+a fabricated source quote is still rejected, regardless of speed.
+
+The previous on-device baseline for a Qwen2.5 1.5B question about
+*Farbovanyi Lys* was about 35 seconds and 3,651 prompt tokens; this
+is an observation from one run, not a guaranteed benchmark. Repeat
+the same question with the same model to measure your real improvement.

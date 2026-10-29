@@ -21,12 +21,22 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
     private readonly bool _ownsClient;
     public string ModelName { get; private set; }
     public OllamaChatMetrics? LastResponseMetrics { get; private set; }
+    private readonly List<OllamaChatMetrics> _requestMetrics = [];
+    public IReadOnlyList<OllamaChatMetrics> RequestMetrics => _requestMetrics;
+
+    // Clear only at the beginning of a new user question, not on each chat
+    // call. Deep query expansion and fallback can involve multiple calls.
+    public void BeginQuestion()
+    {
+        _requestMetrics.Clear();
+        LastResponseMetrics = null;
+    }
 
     public void SelectModel(string modelName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
         ModelName = modelName;
-        LastResponseMetrics = null;
+        BeginQuestion();
     }
 
     public OllamaAnswerProvider(string modelName = DefaultModel, HttpClient? client = null)
@@ -104,7 +114,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
             prompt.AppendLine($"[SOURCE {passage.Id}] {passage.Chunk.DocumentName} / chunk {passage.Chunk.Number}");
             // Only submit a short, verifiable excerpt, not the entire 1,800-character
             // chunk. Every quotation is still validated against the full source.
-            prompt.AppendLine(SelectExcerpt(passage.Chunk.Content, question));
+            prompt.AppendLine(SelectExcerpt(passage.Chunk.Content, question, passage.ExcerptCharacters));
             prompt.AppendLine($"[END SOURCE {passage.Id}]");
         }
         using JsonDocument json = await ChatAsync(system, prompt.ToString(), 640, token)
@@ -143,9 +153,13 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
     }
 
     /// <summary>Returns the exact bounded source text shown to the local answer model.</summary>
-    public static string SelectExcerpt(string content, string question)
+    public static string SelectExcerpt(
+        string content, string question, int maxCharacters = MaxExcerptCharacters)
     {
-        if (content.Length <= MaxExcerptCharacters)
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentNullException.ThrowIfNull(question);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxCharacters, 64);
+        if (content.Length <= maxCharacters)
         {
             return content;
         }
@@ -164,9 +178,9 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
         }
 
         int start = firstHit < 0 ? 0 :
-            Math.Clamp(firstHit - MaxExcerptCharacters / 3, 0,
-                content.Length - MaxExcerptCharacters);
-        return content.Substring(start, MaxExcerptCharacters);
+            Math.Clamp(firstHit - maxCharacters / 3, 0,
+                content.Length - maxCharacters);
+        return content.Substring(start, maxCharacters);
     }
 
     private async Task<JsonDocument> ChatAsync(
@@ -227,6 +241,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
             }
 
             LastResponseMetrics = OllamaChatMetrics.FromResponse(responseJson.RootElement);
+            _requestMetrics.Add(LastResponseMetrics);
             string text = content.GetString() ?? "";
             return JsonDocument.Parse(text);
         }

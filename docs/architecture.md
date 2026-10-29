@@ -199,3 +199,41 @@ installed model discovery, processor reporting (CPU/GPU/unloaded),
 model selection forwarded into `/api/chat`, and output token math.
 The Windows WPF smoke test checks the picker and performance panel.
 Real CPU throughput and answer quality remain manual user-side checks.
+
+
+### Two-stage adaptive retrieval and accounting
+
+`GroundedQuestionAnswering.AskAsync` retrieves and ranks up to seven
+source candidates **once**. The ordered candidate set reserves slots for
+the best original-question whole-word and dense matches before filling
+from the fused ranking. It sends the first three candidates with a
+480-character budget each to the local generator; only if this result
+is absent or has no verbatim citation does it try the complete
+candidate set once, bounded to 700 characters each. The same stable
+source IDs and source-document identity are maintained between
+attempts. Both the generator and the verifier use each
+`EvidencePassage.ExcerptCharacters` value, preventing citation checks
+against text not actually submitted to the model. The evidence
+inspector displays only the final submitted set. No third attempt is
+permitted. Cancellation is checked before every model call.
+
+`GroundedAnswer` carries answer-attempt count, candidate count,
+cumulative submitted passage count, cumulative excerpt characters
+and the full-context character baseline. These are deterministic
+*character* measurements, not estimated token or speed savings.
+`OllamaAnswerProvider.BeginQuestion` clears the metric series and
+records all subsequent successful `/api/chat` replies; Qwen query
+rewrites and fallback generations are accumulated by
+`OllamaChatMetrics.Sum`. If any measurement field is missing in one
+reply, its aggregate remains unknown rather than being set to zero.
+The WPF metrics panel shows the actual prompt/output tokens,
+generation wall time, model load and rate across replies. First-pass
+success avoids a second text-generation request; failure may cost
+two requests and should be interpreted as a speed/recall tradeoff,
+not a guaranteed optimization.
+
+Deterministic tests cover initial success, a declined answer retried
+with wider evidence, rejection of fabricated quotations after retry,
+cancellation between attempts, accurate character counts and real
+multi-response metric aggregation. Live CPU timings and correctness
+on source books are manual acceptance tests.

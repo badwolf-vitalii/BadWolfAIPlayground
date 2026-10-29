@@ -57,6 +57,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _answerModelCatalogStatus = "Click Refresh installed models to list Ollama models on this PC.";
     private string _processorStatus = "CPU/GPU status: not checked (only available for loaded models).";
     private string _answerMetricsText = "Request statistics will appear after Ask document.";
+    private string _adaptiveContextSummary =
+        "Adaptive context: first try 3 short passages; expand only if the answer cannot be verified.";
     private double _indexProgress;
     private double _importProgress;
     private string _importLabel = "Select text files (up to 16 MiB each).";
@@ -162,6 +164,12 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     {
         get => _answerMetricsText;
         private set => SetProperty(ref _answerMetricsText, value);
+    }
+
+    public string AdaptiveContextSummary
+    {
+        get => _adaptiveContextSummary;
+        private set => SetProperty(ref _adaptiveContextSummary, value);
     }
 
     public string ModelName => _embeddings.ModelName;
@@ -669,14 +677,16 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         string question = Query.Trim();
         bool expandQueries = UseExpandedSearch;
         var elapsed = Stopwatch.StartNew();
+        _answerModel.BeginQuestion();
         AnswerMetricsText = $"Running {_answerModel.ModelName} — collecting local timings...";
+        AdaptiveContextSummary = "Checking up to 3 short source passages first; retrying with more evidence only if needed.";
         AnswerSources.Clear();
         RetrievedPassages.Clear();
         RetrievalDetails = "Searching the selected files for source passages...";
         AnswerText = "Searching relevant passages and preparing an answer...";
         AnswerStatus = expandQueries
-            ? "Deep search: rewriting the query first, then generating a sourced answer (two Qwen calls)."
-            : "Fast search: retrieving source text and generating an answer (one Qwen call).";
+            ? "Deep query expansion is enabled; the answer may require one or two additional Qwen calls."
+            : "Adaptive search: one Qwen answer attempt, with a second only if verification fails.";
         string previousSearchStatus = StatusText;
         OperationOutcome outcome = await RunOperationAsync(async token =>
         {
@@ -697,7 +707,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 // The answer remains valid; the processor indicator is unknown.
             }
 
-            OllamaChatMetrics? raw = _answerModel.LastResponseMetrics;
+            OllamaChatMetrics? raw = OllamaChatMetrics.Sum(_answerModel.RequestMetrics);
             await DispatchAsync(() =>
             {
                 AnswerText = answer.Text;
@@ -705,16 +715,19 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     "CPU/GPU status unavailable; Ollama /api/ps could not be read.";
                 AnswerMetricsText = FormatAnswerMetrics(answer, raw, _answerModel.ModelName,
                     elapsed.Elapsed);
+                AdaptiveContextSummary = FormatAdaptiveSummary(answer);
                 foreach (EvidencePassage candidate in answer.Candidates)
                 {
                     RetrievedPassages.Add(new RetrievedPassageRow(
                         $"[S{candidate.Id}] {candidate.Chunk.DocumentName} · chunk {candidate.Chunk.Number}",
-                        OllamaAnswerProvider.SelectExcerpt(candidate.Chunk.Content, question),
+                        OllamaAnswerProvider.SelectExcerpt(
+                            candidate.Chunk.Content, question, candidate.ExcerptCharacters),
                         candidate.Chunk.FullPath ?? "Built-in demonstration document"));
                 }
-                RetrievalDetails = $"{answer.Candidates.Count} excerpt(s) sent to Qwen. " +
-                    $"Search phrases: {string.Join(" | ", answer.SearchQueries)}. " +
-                    "The excerpts below are the actual original document text, not generated answers.";
+                RetrievalDetails = $"{answer.Candidates.Count} excerpt(s) in the final Qwen attempt " +
+                    $"({answer.AnswerAttempts} answer attempt(s), {answer.TotalPassagesSubmitted} " +
+                    $"total passages submitted). Search phrases: {string.Join(" | ", answer.SearchQueries)}. " +
+                    "The excerpts below show the exact original text used in the final attempt.";
 
                 foreach (VerifiedCitation citation in answer.Citations)
                 {
@@ -751,14 +764,45 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 AnswerStatus = outcome.Cancelled
                     ? "You can ask the document again."
                     : $"Could not generate a local answer: {outcome.ErrorMessage}";
+                OllamaChatMetrics? partial = OllamaChatMetrics.Sum(_answerModel.RequestMetrics);
                 AnswerMetricsText = $"Elapsed {elapsed.Elapsed.TotalSeconds:0.00}s. " +
-                    "Detailed token statistics unavailable because the request did not finish.";
+                    (partial is null
+                        ? "No completed Ollama telemetry yet."
+                        : $"Completed chat calls: {_answerModel.RequestMetrics.Count}; " +
+                          $"input tokens: {partial.PromptTokens?.ToString() ?? "n/a"}; " +
+                          $"output tokens: {partial.OutputTokens?.ToString() ?? "n/a"}. " +
+                          "The interrupted request has no complete timing data.");
+                AdaptiveContextSummary = "Answer interrupted; no unverified text was published.";
             });
         }
 
         // An Ask document failure belongs to the answer panel, not to the
         // unrelated Compare results status shown higher on the page.
         await DispatchAsync(() => StatusText = previousSearchStatus);
+    }
+
+    private static string FormatAdaptiveSummary(GroundedAnswer answer)
+    {
+        if (answer.AvailablePassages == 0)
+        {
+            return "No source passages were retrieved; no answer request was sent.";
+        }
+
+        if (answer.AnswerAttempts > 1)
+        {
+            return $"Adaptive retry: first tried up to {GroundedQuestionAnswering.InitialPassages} " +
+                   $"short passages, then retried with {answer.Candidates.Count} broader passages. " +
+                   $"Sent {answer.ExcerptCharactersSubmitted:N0} source characters across both " +
+                   "attempts. Retrying trades more CPU time for a chance to recover missing evidence.";
+        }
+
+        int smaller = Math.Max(0,
+            answer.FullContextCharacters - answer.ExcerptCharactersSubmitted);
+        return $"Fast pass: {answer.Candidates.Count} of {answer.AvailablePassages} candidates; " +
+               $"{answer.ExcerptCharactersSubmitted:N0} source characters sent instead of " +
+               $"{answer.FullContextCharacters:N0} for the previous full-context approach " +
+               $"({smaller:N0} fewer characters). This is a context-size comparison, " +
+               "NOT measured token or time savings. Actual Ollama tokens/timing appear above.";
     }
 
     private static string FormatAnswerMetrics(GroundedAnswer answer, OllamaChatMetrics? metrics,
@@ -770,7 +814,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             ? $"{rate:0.0} tokens/s" : "n/a";
         string load = metrics?.LoadSeconds is double seconds
             ? $"{seconds:0.00}s" : "n/a";
-        return $"Model: {model} | Search: {answer.RetrievalDuration.TotalSeconds:0.00}s " +
+        return $"Model: {model} | Chat calls: {answer.AnswerAttempts} answer attempt(s) " +
+               $"| Search: {answer.RetrievalDuration.TotalSeconds:0.00}s " +
                $"| Generate: {answer.GenerationDuration.TotalSeconds:0.00}s " +
                $"| Total: {elapsed.TotalSeconds:0.00}s | Input: {inputTokens} tokens " +
                $"| Output: {outputTokens} tokens | Speed: {speed} | Model load: {load}. " +

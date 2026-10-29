@@ -172,6 +172,9 @@ internal static class Program
                 "The UI must allow refreshing the locally installed Ollama models.");
             Assert(smartSearch.FindName("AnswerMetricsTextBlock") is TextBlock,
                 "The UI must provide a visible generation-performance panel.");
+            Assert(smartSearch.FindName("AdaptiveContextTextBlock") is TextBlock &&
+                   searchModel.AdaptiveContextSummary.Contains("3 short passages", StringComparison.Ordinal),
+                "The user must see an accurate adaptive-context summary near timing metrics.");
             Assert(searchModel.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
                 "CPU/GPU status must be unknown before Ollama provides runtime facts.");
             Console.WriteLine("PASS local model picker and performance panel with no fake CPU/GPU detection");
