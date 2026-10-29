@@ -278,3 +278,39 @@ a correct paraphrase when the supporting quote uses different vocabulary,
 and it cannot detect every misleading quote containing the right name.
 The tests reproduce the actual fox/name failure and verify that an
 irrelevant citation never passes just because it is verbatim.
+
+
+### Fast source-citation repair after a CPU regression
+
+A real user test showed that the previous name-citation change caused a
+**47.05-second** unsuccessful result on a CPU-only PC (4,166 input
+tokens, two Qwen calls). The model answered with a name but copied a
+genuine sentence that did not contain the name. Repeating Qwen with
+seven excerpts did not help.
+
+The default behavior now **avoids a second Qwen generation for a
+verbatim but irrelevant citation**. Instead, it performs bounded,
+deterministic search over the already loaded TXT: the originally
+submitted source chunks plus up to 24 keyword-ranked local chunks
+matching the answer-specific words. It extracts a short authentic
+sentence containing the answer's distinctive words and at least one
+topical word related to the question. It still applies name, year
+and word-level corroboration. Such citations are explicitly labeled
+**Located in original document** because they are sourced by the
+application rather than chosen by Qwen.
+
+This local repair is permitted only after Qwen has supplied at least
+one genuinely copied quotation. Fabricated quotes are never rescued
+into verified answers. If a model suggests an answer absent from the
+selected source text, the application rejects it immediately without
+another costly answer generation. The bounded second-generation pass
+remains for true model refusals or missing/unverifiable quotations.
+All work happens offline using the imported text; no second embedding
+inference is needed.
+
+This is *lexical* corroboration, NOT full semantic fact-checking or
+proof that a matching proper name belongs to the right individual.
+The tests reproduce the unrelated fox citation, name recovery in the
+same and later chunks, an unsupported answer and an unrelated
+same-name mention. Measure any real CPU improvement on the same
+local book/model; correctness and throughput are not guaranteed by CI.

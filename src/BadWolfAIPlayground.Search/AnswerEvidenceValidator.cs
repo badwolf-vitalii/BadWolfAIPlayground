@@ -101,6 +101,142 @@ public static partial class AnswerEvidenceValidator
         return new Assessment(relevant, []);
     }
 
+    /// <summary>
+    /// Finds an answer-bearing sentence in original indexed text when the
+    /// model copied a genuine but unrelated quote. This is lexical source
+    /// matching, NOT an entailment check or a second LLM inference.
+    /// </summary>
+    public static VerifiedCitation? LocateSupportingQuote(
+        string question, string answer,
+        IReadOnlyList<EvidencePassage> submitted,
+        IReadOnlyList<SearchChunk> indexedChunks,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(question);
+        ArgumentException.ThrowIfNullOrWhiteSpace(answer);
+        ArgumentNullException.ThrowIfNull(submitted);
+        ArgumentNullException.ThrowIfNull(indexedChunks);
+
+        Word[] answerTerms = GetDistinctiveTerms(question, answer);
+        Word[] questionTerms = Split(question)
+            .Where(word => word.Normalized.Length >= 3 &&
+                           !StopWords.Contains(word.Normalized))
+            .ToArray();
+        if (answerTerms.Length == 0 || questionTerms.Length == 0)
+        {
+            return null;
+        }
+
+        var candidates = new List<(SearchChunk Chunk, int Id, int Priority)>();
+        var seen = new HashSet<SearchChunk>();
+        foreach (EvidencePassage passage in submitted)
+        {
+            if (seen.Add(passage.Chunk))
+            {
+                candidates.Add((passage.Chunk, passage.Id, 2));
+            }
+        }
+
+        // Read local imported text: no new embeddings, no network call,
+        // and no request to Qwen. Scan at most 24 additional chunks.
+        string lookup = string.Join(" ", answerTerms.Select(term => term.Original));
+        IReadOnlyList<SearchHit> matches = KeywordSearch.Find(
+            indexedChunks, lookup, limit: 24, cancellationToken: cancellationToken);
+        foreach (SearchHit hit in matches)
+        {
+            if (seen.Add(hit.Chunk))
+            {
+                candidates.Add((hit.Chunk, 0, 0));
+            }
+        }
+
+        VerifiedCitation? best = null;
+        int bestScore = -1;
+        foreach ((SearchChunk chunk, int id, int priority) in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (Match match in Sentences().Matches(chunk.Content))
+            {
+                string sentence = match.Value.Trim();
+                if (sentence.Length < 8)
+                {
+                    continue;
+                }
+
+                if (sentence.Length > 400)
+                {
+                    Match? anchor = Words().Matches(sentence).FirstOrDefault(word =>
+                        answerTerms.Any(term =>
+                            Equivalent(word.Value.ToLowerInvariant(), term.Normalized)));
+                    if (anchor is null)
+                    {
+                        continue;
+                    }
+
+                    int start = Math.Clamp(anchor.Index - 90, 0, sentence.Length - 400);
+                    sentence = sentence.Substring(start, 400);
+                }
+
+                var citation = new VerifiedCitation(id, chunk, sentence)
+                {
+                    LocatedInSource = true
+                };
+                if (Check(question, answer, [citation]).Citations.Count == 0)
+                {
+                    continue;
+                }
+
+                string[] quoteWords = Split(sentence)
+                    .Select(word => word.Normalized).ToArray();
+                int questionOverlap = questionTerms.Count(term => quoteWords.Any(word =>
+                    RelatedToQuestion(word, term.Normalized)));
+                if (questionOverlap == 0)
+                {
+                    // A random appearance of the name elsewhere in the book
+                    // is not enough to substantiate a question about the fox.
+                    continue;
+                }
+
+                int answerOverlap = answerTerms.Count(term => quoteWords.Any(word =>
+                    Equivalent(word, term.Normalized)));
+                int score = questionOverlap * 10 + answerOverlap * 5 + priority;
+                if (score > bestScore)
+                {
+                    best = citation;
+                    bestScore = score;
+                }
+            }
+        }
+
+        return best;
+    }
+
+    private static Word[] GetDistinctiveTerms(string question, string answer)
+    {
+        string[] questionTerms = Split(question).Select(word => word.Normalized).ToArray();
+        return Split(answer)
+            .Where(word => word.Normalized.Length >= 3 &&
+                           !StopWords.Contains(word.Normalized))
+            .Where(word => !questionTerms.Any(query =>
+                Equivalent(query, word.Normalized)))
+            .DistinctBy(word => word.Normalized).ToArray();
+    }
+
+    // Prefix matching is allowed ONLY to locate the question's subject.
+    // It never verifies named entities or numbers in the answer.
+    private static bool RelatedToQuestion(string sourceTerm, string questionTerm)
+    {
+        if (Equivalent(sourceTerm, questionTerm))
+        {
+            return true;
+        }
+
+        int min = Math.Min(sourceTerm.Length, questionTerm.Length);
+        int length = min >= 5 ? 4 : 3;
+        return min >= 3 && sourceTerm.AsSpan(0, length)
+            .SequenceEqual(questionTerm.AsSpan(0, length));
+    }
+
     private static IReadOnlyList<Word> Split(string text)
     {
         string normalized = text.Normalize(NormalizationForm.FormC);
@@ -158,4 +294,7 @@ public static partial class AnswerEvidenceValidator
 
     [GeneratedRegex(@"[\p{L}\p{N}]+", RegexOptions.CultureInvariant)]
     private static partial Regex Words();
+
+    [GeneratedRegex(@"[^\r\n.!?;]+[.!?;]?", RegexOptions.CultureInvariant)]
+    private static partial Regex Sentences();
 }

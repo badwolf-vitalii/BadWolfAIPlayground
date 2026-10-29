@@ -273,3 +273,34 @@ Search tests reproduce the user's *Farbovanyi Lys* mismatch with an
 exact but irrelevant quote, verify positive and negative citations,
 Ukrainian name inflections, missing years, one adaptive fallback
 after weak evidence, and an unsupported outcome if retries remain weak.
+
+
+### Avoiding slow repeated generation for irrelevant citations
+
+A real Qwen2.5 1.5B CPU test regressed from a prior 13.77-second
+successful answer to 47.05 seconds and no answer (two LLM calls).
+The model's exact quote was unrelated to the generated proper name;
+the previous validator always triggered another generation.
+
+`AnswerEvidenceValidator.LocateSupportingQuote` now attempts bounded,
+deterministic sentence extraction from the user's imported TXT after
+at least one genuine model quote has passed exact-source validation.
+It searches the submitted original chunks and up to 24 keyword
+matches for the answer-specific words, selecting a quote that both
+passes lexical fact checks and shares a topic word with the question.
+No additional Ollama generation or embedding request is made. A
+locally extracted quote is marked `VerifiedCitation.LocatedInSource`
+and labeled distinctly in WPF, since Qwen did not cite it. Such a
+quote may lie beyond the snippets actually sent to Qwen but must
+come from an indexed user-selected source document.
+
+An irrelevant but genuine model quote no longer triggers automatic
+retry, even if local evidence is missing; the answer is marked
+`UnsubstantiatedAnswer`. Refused answers and wholly invalid source
+quotations still use the bounded second attempt when appropriate.
+This prevents obvious wasted CPU work without weakening fabricated
+citation rejection. It cannot fully prove semantic entailment.
+
+Regression tests reproduce the user's false negative, local
+one-call recovery, an answer absent from the book, an unrelated
+same-name match, and a fact located after the clipped prompt excerpt.

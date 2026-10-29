@@ -597,6 +597,12 @@ static async Task TestCitationRelevance()
     Assert(supported.Citations.Count == 1 && supported.Citations[0].Id == 2,
         "Reject an unrelated exact quote, retain only the quotation naming the fox.");
 
+    VerifiedCitation? located = AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer, [new EvidencePassage(1, source, 0.3)], [source]);
+    Assert(located is { LocatedInSource: true } &&
+           located.Quote.Contains("Микита", StringComparison.Ordinal),
+        "Recover a relevant original-text sentence without making another LLM request.");
+
     AnswerEvidenceValidator.Assessment inflected = AnswerEvidenceValidator.Check(
         question, "Микита", [
             new VerifiedCitation(1, source, "Лиса звали Микитою.")
@@ -619,6 +625,12 @@ static async Task TestCitationRelevance()
     Assert(numberPresent.Citations.Count == 1,
         "The same short answer with an actual matching year should be accepted.");
 
+    SearchChunk unrelatedName = new("other.txt", null, 10,
+        "Микита побачив зорі над містом. Сад був тихий.");
+    Assert(AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer, [], [unrelatedName]) is null,
+        "An unrelated occurrence of the right name must not prove the fox's identity.");
+
     SearchChunk[] chunks =
     [
         new("fox.txt", null, 1, related + " " + unrelated),
@@ -633,20 +645,38 @@ static async Task TestCitationRelevance()
 
     GroundedAnswer result = await GroundedQuestionAnswering.AskAsync(
         index, embeddings, model, question);
-    Assert(result.Supported && result.AnswerAttempts == 2 &&
-           result.AvailablePassages > GroundedQuestionAnswering.InitialPassages &&
-           model.Calls == 2 && result.Citations.Count == 1 &&
+    Assert(result.Supported && result.AnswerAttempts == 1 &&
+           model.Calls == 1 && result.Citations.Count == 1 &&
+           result.Citations[0].LocatedInSource &&
            result.Citations[0].Quote.Contains("Микита", StringComparison.Ordinal),
-        "A non-supporting but verbatim first quote must trigger the existing fallback; " +
-        "the corrected evidence must support the answer.");
+        "An unrelated but real model quote must be repaired using local source " +
+        "evidence and MUST NOT trigger another costly CPU generation.");
 
-    var neverRelevant = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
+    var stillWrongQuote = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
+    GroundedAnswer repaired = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, stillWrongQuote, question);
+    Assert(repaired.Supported && repaired.AnswerAttempts == 1 &&
+           repaired.Citations.Single().LocatedInSource,
+        "Even an always-irrelevant model quote can be replaced by a genuine " +
+        "answer-bearing source sentence without another model call.");
+
+    SearchChunk[] noNameChunks =
+    [
+        new("fox.txt", null, 1, unrelated),
+        new("forest.txt", null, 2, "Лис пішов до лісу, але ніхто не знав його імені."),
+        new("forest.txt", null, 3, "Лис зустрів ворона у полі."),
+        new("forest.txt", null, 4, "Лис розмовляв з іншими тваринами.")
+    ];
+    SemanticIndex noNameIndex = await SemanticSearch.BuildAsync(noNameChunks, embeddings);
+    var unsupportedModel = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
     GroundedAnswer rejected = await GroundedQuestionAnswering.AskAsync(
-        index, embeddings, neverRelevant, question);
+        noNameIndex, embeddings, unsupportedModel, question);
     Assert(!rejected.Supported && rejected.Outcome == AnswerOutcome.UnsubstantiatedAnswer &&
-           rejected.Citations.Count == 0 && rejected.AnswerAttempts == 2 &&
+           rejected.Citations.Count == 0 && rejected.AnswerAttempts == 1 &&
+           unsupportedModel.Calls == 1 &&
            rejected.UnsupportedAnswerTerms.Contains("Микита", StringComparer.OrdinalIgnoreCase),
-        "Never display a fabricated 'verified' badge for unrelated exact quotations.");
+        "Do not verify a name absent from the original document and don't " +
+        "pay for a second model call after a known irrelevant quote.");
 
     // No additional text and no more candidate passages: don't waste a
     // second CPU-bound generation call just to repeat the same prompt.
@@ -655,10 +685,10 @@ static async Task TestCitationRelevance()
     var shortGenerator = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
     GroundedAnswer shortResult = await GroundedQuestionAnswering.AskAsync(
         shortIndex, embeddings, shortGenerator, question);
-    Assert(!shortResult.Supported && shortResult.AnswerAttempts == 1 &&
-           shortGenerator.Calls == 1 &&
-           shortResult.Outcome == AnswerOutcome.UnsubstantiatedAnswer,
-        "With only short already-submitted evidence, don't pay for an identical retry.");
+    Assert(shortResult.Supported && shortResult.AnswerAttempts == 1 &&
+           shortGenerator.Calls == 1 && shortResult.Citations.Single().LocatedInSource,
+        "If short original text contains the right answer name, recover locally " +
+        "instead of repeating the CPU generation.");
 
     // The same single candidate may still contain additional evidence past
     // the first 480 characters. Retry only because the longer excerpt adds text.
@@ -668,10 +698,10 @@ static async Task TestCitationRelevance()
     var longGenerator = new MisleadingFoxAnswerGenerator();
     GroundedAnswer expandedLong = await GroundedQuestionAnswering.AskAsync(
         longIndex, embeddings, longGenerator, question);
-    Assert(expandedLong.Supported && expandedLong.AnswerAttempts == 2 &&
-           longGenerator.Calls == 2 &&
-           expandedLong.Citations.Count == 1,
-        "A longer excerpt can rescue an answer even when no additional chunks exist.");
+    Assert(expandedLong.Supported && expandedLong.AnswerAttempts == 1 &&
+           longGenerator.Calls == 1 && expandedLong.Citations.Single().LocatedInSource,
+        "Source-local lookup can recover evidence deeper into one long chunk " +
+        "without making a larger Qwen prompt.");
 }
 
 static async Task TestRuntimeCatalogAndMetrics()
@@ -913,7 +943,7 @@ sealed class MisleadingFoxAnswerGenerator(bool alwaysIrrelevant = false) : ILoca
         token.ThrowIfCancellationRequested();
         Calls++;
         EvidencePassage passage = passages.First(p =>
-            p.Chunk.Content.Contains("Лис Микита", StringComparison.Ordinal));
+            p.Chunk.Content.Contains("Лиса мало хто", StringComparison.Ordinal));
         bool wrong = alwaysIrrelevant || Calls == 1;
         string quote = wrong
             ? "Лиса мало хто й запримітив, і нікому до нього не було діла."

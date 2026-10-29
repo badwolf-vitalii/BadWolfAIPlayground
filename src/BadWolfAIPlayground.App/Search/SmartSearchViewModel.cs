@@ -731,13 +731,21 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
                 foreach (VerifiedCitation citation in answer.Citations)
                 {
+                    string sourceLabel = citation.LocatedInSource
+                        ? "[Located in original document]"
+                        : $"[S{citation.Id}]";
                     AnswerSources.Add(new AnswerSourceRow(
-                        $"[S{citation.Id}] {citation.Chunk.DocumentName} · chunk {citation.Chunk.Number}",
+                        $"{sourceLabel} {citation.Chunk.DocumentName} · chunk {citation.Chunk.Number}",
                         citation.Quote));
                 }
 
                 AnswerStatus = answer.Outcome switch
                 {
+                    AnswerOutcome.Verified when answer.Citations.Any(c => c.LocatedInSource) =>
+                        "The app found a more relevant original-text quote after Qwen copied " +
+                        "an unrelated sentence. The displayed quote was LOCATED in the imported " +
+                        "document, not authored or selected by Qwen. This is lexical " +
+                        "corroboration, not a guarantee of the model's interpretation.",
                     AnswerOutcome.Verified =>
                         $"Qwen returned an answer with {answer.Citations.Count} source quote(s) " +
                         "containing the answer's key words/names. This is lexical corroboration, " +

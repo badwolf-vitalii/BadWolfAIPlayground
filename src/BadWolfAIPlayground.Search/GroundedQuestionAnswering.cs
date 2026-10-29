@@ -15,7 +15,12 @@ public sealed record EvidencePassage(int Id, SearchChunk Chunk, double SearchSco
 public sealed record ProposedEvidence(int Id, string Quote);
 public sealed record ProposedAnswer(bool Supported, string Answer, IReadOnlyList<ProposedEvidence> Evidence);
 
-public sealed record VerifiedCitation(int Id, SearchChunk Chunk, string Quote);
+public sealed record VerifiedCitation(int Id, SearchChunk Chunk, string Quote)
+{
+    // This supporting quote was found in the original document by local
+    // code, not selected by the text-generation model.
+    public bool LocatedInSource { get; init; }
+}
 public enum AnswerOutcome
 {
     Verified,
@@ -219,6 +224,23 @@ public static class GroundedQuestionAnswering
                 question, proposed.Answer, exactQuotes);
             valid = corroboration.Citations.ToArray();
 
+            // Qwen's copied quotation may exist but not support its answer.
+            // Look for the distinctive answer fact in the user's ORIGINAL
+            // indexed text. This is bounded local text search (no second
+            // LLM call and no extra embedding query), and only runs after a
+            // genuinely copied model quotation has passed provenance checks.
+            if (valid.Length == 0 && exactQuotes.Length > 0 &&
+                proposed.Supported && !string.IsNullOrWhiteSpace(proposed.Answer))
+            {
+                VerifiedCitation? located = AnswerEvidenceValidator.LocateSupportingQuote(
+                    question, proposed.Answer, submitted, index.Chunks, cancellationToken);
+                if (located is not null)
+                {
+                    valid = [located];
+                    corroboration = new AnswerEvidenceValidator.Assessment(valid, []);
+                }
+            }
+
             // Retry only when the larger request can supply more passages
             // OR additional actual source characters. With two long chunks,
             // expanding 480 -> 700 chars may still uncover the missing fact;
@@ -229,7 +251,11 @@ public static class GroundedQuestionAnswering
                         passage.Chunk.Content, question, ExpandedExcerptCharacters).Length >
                     OllamaAnswerProvider.SelectExcerpt(
                         passage.Chunk.Content, question, passage.ExcerptCharacters).Length);
-            if (valid.Length > 0 || attempts == 2 || !hasMoreEvidence)
+            // A genuine but irrelevant model citation is not a reason to
+            // run Qwen again. Local source lookup already checked for the
+            // proposed answer; further generation would waste CPU time.
+            if (valid.Length > 0 || exactQuotes.Length > 0 ||
+                attempts == 2 || !hasMoreEvidence)
             {
                 break;
             }
