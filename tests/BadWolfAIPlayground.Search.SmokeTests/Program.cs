@@ -13,7 +13,9 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Large text file imports and safety limits", TestFileLoader),
     ("Explicit legacy encodings and readable import errors", TestTextEncodings),
     ("Incremental embedding batches and progress", TestLargeIndex),
-    ("Oversized index protection", TestIndexLimit)
+    ("Oversized index protection", TestIndexLimit),
+    ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
+    ("Ollama model digest validation", TestOllamaFingerprint),
 };
 int passed = 0;
 foreach ((string name, Func<Task> check) in tests)
@@ -272,6 +274,106 @@ static async Task AssertThrowsAsync<T>(Func<Task> action) where T : Exception
         return;
     }
     throw new InvalidOperationException($"Expected {typeof(T).Name}.");
+}
+
+static async Task TestResumableIndex()
+{
+    string root = Path.Combine(Path.GetTempPath(), "badwolf-checkpoints-" + Guid.NewGuid().ToString("N"));
+    try
+    {
+        var store = new SearchIndexCheckpointStore(root);
+        SearchChunk[] chunks = Enumerable.Range(0, 25)
+            .Select(i => new SearchChunk("large.txt", @"C:\data\large.txt", i + 1,
+                "Data fragment " + i)).ToArray();
+
+        var interrupted = new CheckpointEmbeddings("model-digest-A", stopAfterBatches: 2);
+        await AssertThrowsAsync<OperationCanceledException>(() =>
+            SemanticSearch.BuildAsync(chunks, interrupted, checkpoints: store));
+        Assert(interrupted.Calls == 3, "Test must interrupt after exactly two persisted batches.");
+
+        var restarted = new CheckpointEmbeddings("model-digest-A");
+        var updates = new List<IndexProgress>();
+        SemanticIndex result = await SemanticSearch.BuildAsync(chunks, restarted,
+            new InlineProgress<IndexProgress>(update => updates.Add(update)),
+            checkpoints: store);
+        Assert(result.Chunks.Count == 25 && result.ReusedChunks == 16 &&
+               restarted.Calls == 2,
+            "Restart must reuse the first two batches and only embed the remaining nine chunks.");
+        Assert(updates.Count == 4 && updates[^1].Reused == 16,
+            "Progress must include both restored and newly embedded chunks.");
+
+        var completed = new CheckpointEmbeddings("model-digest-A");
+        SemanticIndex restored = await SemanticSearch.BuildAsync(chunks, completed, checkpoints: store);
+        Assert(completed.Calls == 0 && restored.ReusedChunks == chunks.Length,
+            "A completed index must load from disk without embedding any documents.");
+
+        var changedModel = new CheckpointEmbeddings("model-digest-B");
+        await SemanticSearch.BuildAsync(chunks, changedModel, checkpoints: store);
+        Assert(changedModel.Calls == 4,
+            "A changed model digest must invalidate every cached vector.");
+
+        SearchChunk[] changedDocument = chunks.ToArray();
+        changedDocument[0] = changedDocument[0] with { Content = "modified content" };
+        var modified = new CheckpointEmbeddings("model-digest-A");
+        await SemanticSearch.BuildAsync(changedDocument, modified, checkpoints: store);
+        Assert(modified.Calls == 4,
+            "A changed document must invalidate the old cache key.");
+
+        // Damaged or truncated batch files are treated as misses, never trusted.
+        string[] files = Directory.GetFiles(root, "batch-*.bin", SearchOption.AllDirectories);
+        string original = Directory.GetDirectories(root).Single(path =>
+            Directory.GetFiles(path, "batch-*.bin").Length == 4 &&
+            new FileInfo(Path.Combine(path, "batch-000000.bin")).Exists);
+        await File.WriteAllBytesAsync(Path.Combine(original, "batch-000000.bin"), [1, 2, 3, 4]);
+        var afterCorruption = new CheckpointEmbeddings("model-digest-A");
+        await SemanticSearch.BuildAsync(chunks, afterCorruption, checkpoints: store);
+        Assert(afterCorruption.Calls == 1,
+            "A corrupt batch must be re-embedded; valid batches must still be reused.");
+    }
+    finally
+    {
+        if (Directory.Exists(root))
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
+
+static async Task TestOllamaFingerprint()
+{
+    var handler = new StubHandler((request, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(
+            "{\"models\":[{\"name\":\"embeddinggemma:latest\",\"digest\":\"sha256-content-v1\"}]}",
+            Encoding.UTF8, "application/json")
+    }));
+    using var client = new HttpClient(handler) { BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint) };
+    using var ollama = new OllamaEmbeddingProvider(client: client);
+    Assert(await ollama.GetModelFingerprintAsync() == "embeddinggemma@sha256-content-v1",
+        "Cache keys must incorporate Ollama model content digests, not mutable tag names.");
+}
+
+sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int.MaxValue) : IEmbeddingProvider
+{
+    public string ModelName => "checkpoint-test";
+    public int Calls { get; private set; }
+
+    public Task<string> GetModelFingerprintAsync(CancellationToken token = default) =>
+        Task.FromResult(fingerprint);
+
+    public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        Calls++;
+        if (Calls > stopAfterBatches)
+        {
+            throw new OperationCanceledException();
+        }
+
+        return Task.FromResult<IReadOnlyList<float[]>>(
+            inputs.Select(_ => new[] { 1f, 0f, 0f }).ToArray());
+    }
 }
 
 sealed class FakeEmbeddings : IEmbeddingProvider

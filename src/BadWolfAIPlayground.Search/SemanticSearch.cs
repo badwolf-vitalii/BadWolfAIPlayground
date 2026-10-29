@@ -10,7 +10,8 @@ public static class SemanticSearch
         IReadOnlyList<SearchChunk> chunks,
         IEmbeddingProvider provider,
         IProgress<IndexProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        SearchIndexCheckpointStore? checkpoints = null)
     {
         ArgumentNullException.ThrowIfNull(chunks);
         ArgumentNullException.ThrowIfNull(provider);
@@ -19,8 +20,18 @@ public static class SemanticSearch
             throw new ArgumentException($"Select between 1 and {MaxChunks} text chunks.", nameof(chunks));
         }
 
+        SearchIndexCheckpointStore.Session? session = null;
+        if (checkpoints is not null)
+        {
+            string fingerprint = await provider.GetModelFingerprintAsync(cancellationToken)
+                .ConfigureAwait(false);
+            session = await checkpoints.OpenAsync(chunks, fingerprint, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var vectors = new List<float[]>(chunks.Count);
         int? expectedDimension = null;
+        int reused = 0;
         for (int start = 0; start < chunks.Count; start += BatchSize)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -31,31 +42,60 @@ public static class SemanticSearch
                 SearchChunk chunk = chunks[start + offset];
                 texts[offset] = $"title: {chunk.DocumentName} | text: {chunk.Content}";
             }
-            IReadOnlyList<float[]> output = await provider.EmbedAsync(texts, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (output.Count != batchCount)
+            float[][]? cached = session is null ? null :
+                await session.TryReadBatchAsync(start, batchCount, cancellationToken)
+                    .ConfigureAwait(false);
+            if (cached is not null && expectedDimension is not null &&
+                cached[0].Length != expectedDimension.Value)
             {
-                throw new InvalidDataException("Embedding service returned an incorrect number of vectors.");
+                cached = null;
             }
 
-            foreach (float[] embedding in output)
+            float[][] normalized;
+            if (cached is not null)
             {
-                if (embedding is null || embedding.Length == 0 ||
-                    (expectedDimension is not null && embedding.Length != expectedDimension.Value))
+                normalized = cached;
+                reused += batchCount;
+            }
+            else
+            {
+                IReadOnlyList<float[]> output = await provider.EmbedAsync(texts, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (output.Count != batchCount)
                 {
-                    throw new InvalidDataException("Embedding dimensions are missing or inconsistent.");
+                    throw new InvalidDataException("Embedding service returned an incorrect number of vectors.");
                 }
 
-                expectedDimension = embedding.Length;
-                vectors.Add(Normalize(embedding));
+                normalized = new float[batchCount][];
+                for (int index = 0; index < batchCount; index++)
+                {
+                    float[] embedding = output[index];
+                    if (embedding is null || embedding.Length is <= 0 or > 4096 ||
+                        (expectedDimension is not null && embedding.Length != expectedDimension.Value))
+                    {
+                        throw new InvalidDataException("Embedding dimensions are missing or inconsistent.");
+                    }
+                    normalized[index] = Normalize(embedding);
+                    expectedDimension = embedding.Length;
+                }
+
+                // Persist the entire validated batch BEFORE reporting progress.
+                // Incomplete writes never replace earlier completed checkpoints.
+                if (session is not null)
+                {
+                    await session.SaveBatchAsync(start, normalized, cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
 
-            progress?.Report(new IndexProgress(vectors.Count, chunks.Count));
+            expectedDimension ??= normalized[0].Length;
+            vectors.AddRange(normalized);
+            progress?.Report(new IndexProgress(vectors.Count, chunks.Count, reused));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return new SemanticIndex(chunks.ToArray(), vectors, provider.ModelName);
+        return new SemanticIndex(chunks.ToArray(), vectors, provider.ModelName, reused);
     }
 
     public static async Task<IReadOnlyList<SearchHit>> FindAsync(

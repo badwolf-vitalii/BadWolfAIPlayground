@@ -62,6 +62,53 @@ public sealed class OllamaEmbeddingProvider : IEmbeddingProvider, IDisposable
         }
     }
 
+    /// <summary>Use Ollama's content digest to invalidate checkpoints after model updates.</summary>
+    public async Task<string> GetModelFingerprintAsync(CancellationToken token = default)
+    {
+        try
+        {
+            using HttpResponseMessage response = await _client.GetAsync("api/tags", token)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            using JsonDocument json = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync(token).ConfigureAwait(false));
+
+            if (!json.RootElement.TryGetProperty("models", out JsonElement models) ||
+                models.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidDataException("Ollama returned no models list.");
+            }
+
+            foreach (JsonElement item in models.EnumerateArray())
+            {
+                if (!item.TryGetProperty("name", out JsonElement name) ||
+                    (!string.Equals(name.GetString(), ModelName, StringComparison.OrdinalIgnoreCase) &&
+                     !string.Equals(name.GetString(), ModelName + ":latest", StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                if (!item.TryGetProperty("digest", out JsonElement digest) ||
+                    string.IsNullOrWhiteSpace(digest.GetString()))
+                {
+                    throw new InvalidDataException(
+                        "Ollama did not report a model digest; cannot safely resume a saved index.");
+                }
+
+                return ModelName + "@" + digest.GetString();
+            }
+
+            throw new InvalidOperationException(
+                $"Embedding model '{ModelName}' is not installed. Run: ollama pull {ModelName}");
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new InvalidOperationException(
+                "Cannot reach local Ollama to validate the cached index (http://127.0.0.1:11434).",
+                exception);
+        }
+    }
+
     public async Task<IReadOnlyList<float[]>> EmbedAsync(
         IReadOnlyList<string> inputs, CancellationToken token = default)
     {
