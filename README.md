@@ -12,7 +12,7 @@ The first experiment is a fully connected neural network written from scratch in
 - **Control:** start, stop, reset, and continue training an existing model.
 - **Offline persistence:** save and load the network's architecture, weights, and biases as JSON.
 - **Reusable engine:** the UI-independent `BadWolfAIPlayground.Core` library supports arbitrary fully connected topologies.
-- **Validation:** self-contained smoke tests, built in Windows CI without third-party test packages.
+- **Validation:** self-contained core and WPF startup smoke tests, run in Windows CI without third-party test packages.
 
 Smart Search and Anomaly Detection are **planned** experiments, not implemented features yet.
 
@@ -61,7 +61,14 @@ Read [architecture notes](docs/architecture.md) for the math, module boundaries,
 dotnet run --project tests/BadWolfAIPlayground.Core.SmokeTests/BadWolfAIPlayground.Core.SmokeTests.csproj --configuration Release
 ```
 
-The checks cover XOR convergence, seeded initialization, serialization, independent snapshots, multi-layer topologies, and input validation. CI also compiles the WPF application on Windows.
+The core checks cover XOR convergence, seeded initialization, serialization, independent snapshots, multi-layer topologies, and input validation. CI also builds and starts the WPF window, verifies the four prediction cards, and checks that progress bars use OneWay bindings for read-only ViewModel properties.
+
+On Windows you can run the WPF startup check locally:
+
+```powershell
+dotnet run --project tests/BadWolfAIPlayground.App.SmokeTests/BadWolfAIPlayground.App.SmokeTests.csproj --configuration Release
+```
+
 
 ## Roadmap
 

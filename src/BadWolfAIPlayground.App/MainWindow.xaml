@@ -260,7 +260,7 @@
                                 <TextBlock Grid.Column="1" Text="{Binding EpochText}" FontSize="11"
                                            HorizontalAlignment="Right" />
                             </Grid>
-                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Completion}"
+                            <ProgressBar Minimum="0" Maximum="100" Value="{Binding Completion, Mode=OneWay}"
                                          Height="7" Foreground="#3E9BFF" Background="#192A43"
                                          BorderThickness="0" />
                             <TextBlock Text="{Binding StatusText}" Foreground="#A5BDD7"
@@ -310,7 +310,7 @@
                                                            Foreground="#67C6FF" FontWeight="Bold" FontSize="14" />
                                             </Grid>
                                             <ProgressBar Minimum="0" Maximum="100"
-                                                         Value="{Binding Percentage}" Height="7"
+                                                         Value="{Binding Percentage, Mode=OneWay}" Height="7"
                                                          Background="#1B2C45" Foreground="#31B7DA"
                                                          BorderThickness="0" />
                                             <Grid Margin="0,10,0,0">
