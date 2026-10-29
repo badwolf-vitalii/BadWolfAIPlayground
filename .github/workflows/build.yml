@@ -31,3 +31,5 @@ jobs:
         run: dotnet run --project tests/BadWolfAIPlayground.App.SmokeTests/BadWolfAIPlayground.App.SmokeTests.csproj --configuration Release --no-build
       - name: Run semantic search smoke tests
         run: dotnet run --project tests/BadWolfAIPlayground.Search.SmokeTests/BadWolfAIPlayground.Search.SmokeTests.csproj --configuration Release --no-build
+      - name: Run anomaly detection smoke tests
+        run: dotnet run --project tests/BadWolfAIPlayground.Anomaly.SmokeTests/BadWolfAIPlayground.Anomaly.SmokeTests.csproj --configuration Release --no-build
