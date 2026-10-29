@@ -397,3 +397,36 @@ unknown business rules or generate an unsupported diagnosis.
 This generic scanner contains **no company source, logging strings,
 secrets or production logs**. Always keep private source in a private
 checkout, and never commit your source data to this public repo.
+
+
+### Analyze a complete Logs folder (v0.3.0)
+
+Select **Logs folder** inside Anomaly Detection Lab to import all
+`.log` and `.txt` files from that folder and any subfolders,
+including `old/` and dated component archives, without selecting
+files one by one. The app merges events by timestamp, displays
+a single anomaly timeline, and includes a collapsible per-file /
+component breakdown with per-file event and problem counts.
+
+Each finding identifies its **original relative filename and
+physical source line**. When NLog emits the exact same
+timestamp/severity/message to two different targets (e.g. a general
+App log and a component log), the aggregate removes the duplicate
+while preserving both filenames as provenance. Distinct repeated
+messages in the same file are kept. Raw per-file counts include
+copies; aggregate counts exclude these exact cross-file copies.
+
+Folder import is **offline, cancellable and non-persistent**:
+active log files can be opened with shared read access; nothing is
+uploaded, embedded or committed, and absolute folder paths are not
+saved. Import is all-or-nothing: errors and cancellation preserve
+the last valid result.
+
+Safety bounds are **512 files**, **16 MiB per file**, **256 MiB
+combined**, and **500,000 distinct events**. Oversized sets yield
+a clear error rather than silently truncated findings. UTF-8 and
+BOM-marked UTF-16 are supported; use single-file import or
+convert a copy for legacy code pages. Binary data, ZIP archives
+and unsupported file types are not processed. The detector's
+existing 366-day analysis span limit still applies to a combined
+folder. The demo and automated tests use only synthetic log data.

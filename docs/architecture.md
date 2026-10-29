@@ -381,3 +381,39 @@ and exercise exact, interpolated and irrelevant messages as well as
 the WPF source-selection flow. The ability to understand business
 rules still requires human-authored documentation or explicit
 source-level investigation, not just a message-template match.
+
+
+### Importing a whole multi-component Logs directory
+
+`LogFolderImporter.Import` reads a user-selected folder
+recursively, including `old` archives, with cancellation and
+explicit count/byte/event caps. It accepts only plain `.log`/
+`.txt`, opens active files with shared read permissions,
+and rejects unreadable/binary/oversized files rather than
+inventing or silently losing events.
+
+Every `LogEvent` now stores `SourceFile` (relative to the
+chosen folder) and its physical `LineNumber`. Detection
+findings preserve this provenance and the optional list of
+`AlsoInFiles` aliases. Exact cross-file duplicate copies
+(timestamp, explicit severity, message) are deduplicated;
+repeated same-file events remain distinct. The component
+is inferred conservatively from the NLog filename, not
+from undocumented application semantics. This avoids
+false spikes from mirrored general App and component targets.
+
+The WPF view offers **Select Logs folder** alongside single-file
+selection and the demo. A collapsible per-file/component
+breakdown explains the difference between raw source-file
+counts and deduplicated aggregate totals. Findings display
+`relativePath:line`; code-caller DEBUG hints are restricted
+to **the same source file** to avoid accidentally correlating
+unrelated entries with matching physical line numbers.
+
+The import is transactional at the view-model boundary: a
+failed or canceled selection does not replace the previous
+successful report. No absolute paths, file bodies, or
+business-specific log templates are persisted, uploaded,
+or added to this public repository. Tests build an entirely
+synthetic multi-target Logs folder with nested archives,
+identical mirrored NLog entries, provenance and failure cases.

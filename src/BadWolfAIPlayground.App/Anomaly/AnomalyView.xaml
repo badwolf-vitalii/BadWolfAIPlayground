@@ -36,12 +36,20 @@
                 </Grid.ColumnDefinitions>
                 <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
                     <StackPanel>
-                        <TextBlock Text="1  Choose your log" FontSize="16" FontWeight="SemiBold"
-                                   Margin="0,0,0,11"/>
+                        <TextBlock Text="1  Choose a file or the entire Logs folder"
+                                   FontSize="16" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                        <TextBlock Text="For multi-component applications, select the Logs folder to include archived old/ files in the same timeline."
+                                   Foreground="#9AC6E1" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,11"/>
                         <WrapPanel Margin="0,0,0,10">
                             <Button x:Name="UseAnomalyDemoButton" Content="Use demo log"
                                     Style="{StaticResource PrimaryButton}"
                                     Command="{Binding UseDemoCommand}" Margin="0,0,8,7"/>
+                            <Button x:Name="SelectAnomalyFolderButton"
+                                    Content="Select Logs folder"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding ChooseFolderCommand}"
+                                    Margin="0,0,8,7"/>
                             <Button x:Name="SelectAnomalyLogButton" Content="Select local LOG / TXT"
                                     Style="{StaticResource SecondaryButton}"
                                     Command="{Binding ChooseFileCommand}" Margin="0,0,8,7"/>
@@ -113,6 +121,64 @@
                     </UniformGrid>
                     <TextBlock Text="{Binding Summary}" Foreground="#BED5EA"
                                FontSize="11" TextWrapping="Wrap"/>
+                    <Expander Margin="0,15,0,0" Foreground="#D2E7F6"
+                              Background="#0B1D30">
+                        <Expander.Header>
+                            <TextBlock Text="FILES &amp; COMPONENTS"
+                                       FontWeight="SemiBold"
+                                       Foreground="#6BC5F6" FontSize="11"/>
+                        </Expander.Header>
+                        <StackPanel Margin="0,10,0,4">
+                            <TextBlock Text="{Binding SourceFilesSummary}"
+                                       Foreground="#B2CEDF" TextWrapping="Wrap"
+                                       FontSize="11" Margin="0,0,0,9"/>
+                            <ScrollViewer MaxHeight="195" VerticalScrollBarVisibility="Auto">
+                                <ItemsControl x:Name="AnomalySourceFiles"
+                                              ItemsSource="{Binding SourceFiles}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="#29445D"
+                                                    BorderThickness="0,0,0,1" Padding="4,7">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="4*"/>
+                                                        <ColumnDefinition Width="1.5*"/>
+                                                        <ColumnDefinition Width="1*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel Grid.Column="0">
+                                                        <TextBlock Text="{Binding RelativePath}"
+                                                                   FontFamily="Consolas" FontSize="10"
+                                                                   Foreground="#C9E3F7"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="{Binding Component}"
+                                                                   Foreground="#83AFCE" FontSize="10"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="1" Margin="5,0,3,0">
+                                                        <TextBlock Text="DATED / WARN+"
+                                                                   Foreground="#8EACC7" FontSize="9"/>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding DatedEvents}"
+                                                                       FontSize="11" Foreground="#D9E9F7"/>
+                                                            <TextBlock Text=" / " FontSize="11"
+                                                                       Foreground="#7D9DBA"/>
+                                                            <TextBlock Text="{Binding ProblemEvents}"
+                                                                       FontSize="11" Foreground="#EBA88E"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2">
+                                                        <TextBlock Text="SKIPPED"
+                                                                   Foreground="#8EACC7" FontSize="9"/>
+                                                        <TextBlock Text="{Binding SkippedLines}"
+                                                                   FontSize="11" Foreground="#C3DCEF"/>
+                                                    </StackPanel>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Expander>
                 </StackPanel>
             </Border>
 
@@ -120,7 +186,7 @@
                 <StackPanel>
                     <TextBlock Text="4  Warnings and errors over time" FontSize="16"
                                FontWeight="SemiBold" Margin="0,0,0,5"/>
-                    <TextBlock Text="Orange bars show unusual spikes. Hover to inspect counts."
+                    <TextBlock Text="Orange bars show spikes across the imported logs. Hover to inspect counts."
                                Foreground="#92B8D3" FontSize="11" Margin="0,0,0,14"/>
                     <ScrollViewer Height="130" HorizontalScrollBarVisibility="Auto"
                                   VerticalScrollBarVisibility="Disabled">

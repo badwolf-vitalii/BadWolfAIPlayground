@@ -383,6 +383,8 @@ internal static class Program
                    anomalyView.FindName("ChooseAnomalySourceButton") is Button &&
                    anomalyView.FindName("UseAnomalyDemoButton") is Button &&
                    anomalyView.FindName("SelectAnomalyLogButton") is Button &&
+                   anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
+                   anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
                    anomalyView.FindName("AnomalySensitivitySlider") is Slider &&
                    anomalyView.FindName("ReanalyzeLogButton") is Button,
                 "Anomaly lab must be visible and allow local log selection and sensitivity.");
@@ -429,10 +431,81 @@ internal static class Program
                    analyzer.Sensitivity > before &&
                    analyzer.StatusText.Contains("locally", StringComparison.OrdinalIgnoreCase),
                 "Reanalysis must update UI locally without model inference.");
+
+            // Test importing a whole application Logs folder, including old/
+            // and duplicate NLog App/component targets. No work data in CI.
+            string logFolder = Path.Combine(Path.GetTempPath(),
+                "BadWolfAIPlayground-MultiLogs-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(logFolder);
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(logFolder, "old"));
+                var appLog = new StringBuilder();
+                var salesLog = new StringBuilder();
+                var deviceLog = new StringBuilder();
+                for (int minute = 0; minute < 36; minute++)
+                {
+                    string prefix = $"2026-10-29 09:{minute:00}:";
+                    appLog.AppendLine(prefix + "00.0000 INFO App alive");
+                    salesLog.AppendLine(prefix + "01.0000 ERROR Connection timeout");
+                    deviceLog.AppendLine(prefix + "02.0000 INFO Reader available");
+                    if (minute == 24)
+                    {
+                        for (int k = 0; k < 12; k++)
+                        {
+                            string eventText =
+                                prefix + $"{20 + k:00}.0000 ERROR Sale request failed";
+                            appLog.AppendLine(eventText);
+                            salesLog.AppendLine(eventText);
+                        }
+                    }
+                }
+                File.WriteAllText(Path.Combine(logFolder, "App_2026-10-29.log"),
+                    appLog.ToString());
+                File.WriteAllText(Path.Combine(logFolder, "SaleController_2026-10-29.log"),
+                    salesLog.ToString());
+                File.WriteAllText(Path.Combine(logFolder, "old", "QRReader_2026-10-29.log"),
+                    deviceLog.ToString());
+                Task folderTask = analyzer.ImportFolderAsync(logFolder);
+                PumpUntil(() => folderTask.IsCompleted, TimeSpan.FromSeconds(20));
+                folderTask.GetAwaiter().GetResult();
+                Assert(analyzer.SourceFiles.Count == 3 &&
+                       analyzer.DuplicateCopies == 12 &&
+                       analyzer.EventCount == 120 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.Findings.Any(f =>
+                           f.Kind == "BURST" &&
+                           f.Evidence.Contains("SaleController_2026-10-29.log:",
+                               StringComparison.Ordinal)),
+                    "Multi-file analysis must keep original source lines and " +
+                    "not count duplicated App NLog targets twice.");
+                Assert(analyzer.SourceFiles.Any(f =>
+                           f.RelativePath.StartsWith(
+                               "old" + Path.DirectorySeparatorChar,
+                               StringComparison.OrdinalIgnoreCase) &&
+                           f.Component == "QRReader"),
+                    "WPF per-file list must include archive subfolders.");
+
+                int validCount = analyzer.EventCount;
+                Task badFolder = analyzer.ImportFolderAsync(
+                    Path.Combine(logFolder, "missing"));
+                PumpUntil(() => badFolder.IsCompleted, TimeSpan.FromSeconds(20));
+                badFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == validCount &&
+                       analyzer.SourceFiles.Count == 3 &&
+                       analyzer.StatusText.Contains("failed",
+                           StringComparison.OrdinalIgnoreCase),
+                    "Failed folder import must preserve last valid result.");
+            }
+            finally
+            {
+                Directory.Delete(logFolder, recursive: true);
+            }
+
             window.NavigateToNeuralLab();
             Assert(anomalyView.Visibility == Visibility.Collapsed,
                 "Anomaly navigation must return to the neural lab.");
-            Console.WriteLine("PASS Anomaly Detection WPF navigation, demo, findings and reanalysis");
+            Console.WriteLine("PASS Anomaly Detection WPF demo, full Logs folder, provenance, errors and reanalysis");
             return 0;
         }
         catch (Exception exception)
