@@ -159,7 +159,7 @@ public sealed class MainViewModel : ObservableObject
         NeuralNetwork trainingNetwork = _network;
         int reportInterval = Math.Max(1, epochs / 120);
 
-        var progress = new Progress<TrainingUpdate>(update =>
+        IProgress<TrainingUpdate> progress = new Progress<TrainingUpdate>(update =>
         {
             CurrentSnapshot = update.Snapshot;
             _losses.Add(update.Loss);
