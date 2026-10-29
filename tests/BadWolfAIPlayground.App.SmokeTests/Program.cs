@@ -500,7 +500,7 @@ internal static class Program
                         row.Component == "SaleController");
                 Assert(salesCheck is not null && salesCheck.IsChecked == true,
                     "The source file's Include checkbox must be visible and checked.");
-                salesCheck.IsChecked = false;
+                salesCheck!.IsChecked = false;
                 PumpUntil(() => !analyzer.Busy && analyzer.EventCount == 84,
                     TimeSpan.FromSeconds(20));
                 Assert(analyzer.EventCount == 84 &&
