@@ -33,7 +33,7 @@ All current experiments use sigmoid activations, mean squared error, and stochas
 
 The model is trained on a worker thread. Periodic progress updates carry **deep-copied snapshots** onto the WPF dispatcher. The UI never directly reads parameters as they are being mutated by the training thread. `CancellationToken` is checked before each epoch. Training configuration and model file operations are disabled as commands while training runs, but text inputs can still be edited; their new values apply at the next run. The beginner-friendly **Watch training live** option paces progress reports on the worker thread so visualization updates are visible; it can be turned off for full-speed training.
 
-`Progress<T>` callbacks are queued by WPF, so a finished run explicitly applies the final network snapshot and discards stale late callbacks. This prevents an old progress update overwriting the final comparison after `Stop` or `Reset`.
+Progress callbacks are explicitly dispatched to the captured WPF `Dispatcher`, even when the caller has no `SynchronizationContext` (such as the standalone STA smoke test). Final state is applied with `Dispatcher.InvokeAsync` and stale callbacks are rejected by run ID and training state. This prevents cross-thread CollectionView failures and an old update overwriting the final comparison after `Stop` or `Reset`.
 
 ## Guided lesson and baseline
 

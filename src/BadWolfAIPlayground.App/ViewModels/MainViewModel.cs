@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.Windows.Input;
+using System.Windows.Threading;
 using BadWolfAIPlayground.App.Services;
 using BadWolfAIPlayground.Core;
 
@@ -9,6 +10,7 @@ namespace BadWolfAIPlayground.App.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private readonly IModelFileService _files;
+    private readonly Dispatcher _dispatcher;
     private readonly IReadOnlyList<TrainingSample> _samples = XorDataset.CreateSamples();
     private readonly List<double> _losses = [];
     private readonly RelayCommand _trainCommand;
@@ -23,6 +25,7 @@ public sealed class MainViewModel : ObservableObject
     private NeuralNetwork _network = new([2, 4, 1], seed: 42);
     private CancellationTokenSource? _cancellation;
     private int _modelSeed = 42;
+    private int _trainingRunId;
     private double[] _beforeOutputs = [];
     private double _beforeLoss;
     private double _currentLoss;
@@ -51,6 +54,7 @@ public sealed class MainViewModel : ObservableObject
     public MainViewModel(IModelFileService files)
     {
         _files = files ?? throw new ArgumentNullException(nameof(files));
+        _dispatcher = Dispatcher.CurrentDispatcher;
         _currentSnapshot = _network.CaptureSnapshot();
 
         _trainCommand = new RelayCommand(async () => await TrainAsync(), () => !IsTraining);
@@ -357,6 +361,7 @@ public sealed class MainViewModel : ObservableObject
         LessonStep = 3;
         _cancellation = new CancellationTokenSource();
         CancellationToken token = _cancellation.Token;
+        int runId = ++_trainingRunId;
         IsTraining = true;
         StatusText = "Training in progress";
         Completion = 0;
@@ -365,22 +370,7 @@ public sealed class MainViewModel : ObservableObject
         int reportInterval = Math.Max(1, epochs / 120);
         bool watchTraining = WatchTraining;
         int completedEpochs = 0;
-
-        IProgress<TrainingUpdate> progress = new Progress<TrainingUpdate>(update =>
-        {
-            // Progress<T> posts asynchronously. Do not let stale queued updates replace
-            // the final snapshot after a run has finished or the user has reset the model.
-            if (!IsTraining)
-            {
-                return;
-            }
-
-            UpdateCurrentState(update.Snapshot, update.Loss);
-            _losses.Add(update.Loss);
-            LossHistory = _losses.ToArray();
-            EpochText = $"{update.Epoch:N0} / {epochs:N0}";
-            Completion = update.Epoch * 100.0 / epochs;
-        });
+        string finalStatus;
 
         try
         {
@@ -389,7 +379,6 @@ public sealed class MainViewModel : ObservableObject
                 for (int epoch = 1; epoch <= epochs; epoch++)
                 {
                     token.ThrowIfCancellationRequested();
-
                     foreach (TrainingSample sample in _samples)
                     {
                         trainingNetwork.TrainSample(sample.Inputs, sample.Targets, rate);
@@ -399,10 +388,30 @@ public sealed class MainViewModel : ObservableObject
                     if (epoch == 1 || epoch % reportInterval == 0 || epoch == epochs)
                     {
                         double loss = trainingNetwork.MeanSquaredError(_samples);
-                        progress.Report(new TrainingUpdate(
-                            epoch, loss, trainingNetwork.CaptureSnapshot()));
-                        // Deliberately pace only the teaching visualization, on the worker.
-                        // Turn off WatchTraining to train at full speed.
+                        var update = new TrainingUpdate(
+                            epoch, loss, trainingNetwork.CaptureSnapshot());
+
+                        // Do not rely on SynchronizationContext.Current: it can be null
+                        // even on an STA thread (e.g. in a standalone WPF smoke test).
+                        // Only the dispatcher may update WPF-bound collections.
+                        if (!_dispatcher.HasShutdownStarted)
+                        {
+                            _dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                if (!IsTraining || runId != _trainingRunId)
+                                {
+                                    return;
+                                }
+
+                                UpdateCurrentState(update.Snapshot, update.Loss);
+                                _losses.Add(update.Loss);
+                                LossHistory = _losses.ToArray();
+                                EpochText = $"{update.Epoch:N0} / {epochs:N0}";
+                                Completion = update.Epoch * 100.0 / epochs;
+                            }), DispatcherPriority.Background);
+                        }
+
+                        // Slow down only the educational visualization, never the UI.
                         if (watchTraining)
                         {
                             Thread.Sleep(25);
@@ -411,19 +420,32 @@ public sealed class MainViewModel : ObservableObject
                 }
             }, token);
 
-            StatusText = "Training completed";
+            finalStatus = "Training completed";
         }
         catch (OperationCanceledException)
         {
-            StatusText = "Training stopped; learned weights are preserved";
+            finalStatus = "Training stopped; learned weights are preserved";
         }
         catch (Exception exception)
         {
-            StatusText = $"Training failed: {exception.Message}";
+            finalStatus = $"Training failed: {exception.Message}";
         }
-        finally
+
+        if (_dispatcher.HasShutdownStarted)
         {
-            // Apply the exact final state, even when progress notifications are still queued.
+            return;
+        }
+
+        // `await Task.Run` is not guaranteed to resume on the WPF thread if the
+        // caller had no SynchronizationContext. Apply the final state explicitly.
+        await _dispatcher.InvokeAsync(() =>
+        {
+            if (runId != _trainingRunId)
+            {
+                return;
+            }
+
+            StatusText = finalStatus;
             NetworkSnapshot finalSnapshot = trainingNetwork.CaptureSnapshot();
             double finalLoss = trainingNetwork.MeanSquaredError(_samples);
             UpdateCurrentState(finalSnapshot, finalLoss);
@@ -442,7 +464,7 @@ public sealed class MainViewModel : ObservableObject
             _cancellation = null;
             OnPropertyChanged(nameof(LessonOutcome));
             OnPropertyChanged(nameof(LessonHint));
-        }
+        }, DispatcherPriority.Normal);
     }
 
     private bool TryReadSettings(out int hidden, out int epochs, out double rate, out int seed)

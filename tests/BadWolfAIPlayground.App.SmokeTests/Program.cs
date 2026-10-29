@@ -36,6 +36,23 @@ internal static class Program
 
             Assert(viewModel.Predictions.Count == 4, "The four XOR predictions were not initialized.");
 
+            int wrongThreadNotifications = 0;
+            Dispatcher uiDispatcher = window.Dispatcher;
+            viewModel.PropertyChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref wrongThreadNotifications);
+                }
+            };
+            viewModel.Predictions.CollectionChanged += (_, _) =>
+            {
+                if (!uiDispatcher.CheckAccess())
+                {
+                    Interlocked.Increment(ref wrongThreadNotifications);
+                }
+            };
+
             var bindings = FindDescendants<ProgressBar>(window)
                 .Select(bar => BindingOperations.GetBinding(bar, RangeBase.ValueProperty))
                 .ToArray();
@@ -81,6 +98,8 @@ internal static class Program
 
             Assert(!viewModel.IsTraining, "Training did not finish within 25 seconds.");
             Assert(viewModel.HasTrainingResults, "The completed training run should unlock results.");
+            Assert(wrongThreadNotifications == 0,
+                "WPF-bound properties and predictions must only change on the UI dispatcher.");
             Assert(viewModel.LossHistory.Count > 0, "Training should produce loss data.");
             Assert(viewModel.NextLessonCommand.CanExecute(null),
                 "The results step should unlock after training.");
