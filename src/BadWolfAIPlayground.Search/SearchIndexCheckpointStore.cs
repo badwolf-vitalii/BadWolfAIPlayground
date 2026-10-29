@@ -79,6 +79,11 @@ public sealed class SearchIndexCheckpointStore
             byte[] bytes;
             try
             {
+                // Corrupted or malicious files must never cause unbounded disk reads.
+                if (new FileInfo(path).Length > 20L + 8 * MaxDimensions * sizeof(float) + Sha256Bytes)
+                {
+                    return null;
+                }
                 bytes = await File.ReadAllBytesAsync(path, token).ConfigureAwait(false);
             }
             catch (FileNotFoundException)

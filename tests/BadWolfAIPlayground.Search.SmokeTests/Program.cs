@@ -320,11 +320,10 @@ static async Task TestResumableIndex()
             "A changed document must invalidate the old cache key.");
 
         // Damaged or truncated batch files are treated as misses, never trusted.
-        string[] files = Directory.GetFiles(root, "batch-*.bin", SearchOption.AllDirectories);
-        string original = Directory.GetDirectories(root).Single(path =>
-            Directory.GetFiles(path, "batch-*.bin").Length == 4 &&
-            new FileInfo(Path.Combine(path, "batch-000000.bin")).Exists);
-        await File.WriteAllBytesAsync(Path.Combine(original, "batch-000000.bin"), [1, 2, 3, 4]);
+        foreach (string path in Directory.GetFiles(root, "batch-000000.bin", SearchOption.AllDirectories))
+        {
+            await File.WriteAllBytesAsync(path, [1, 2, 3, 4]);
+        }
         var afterCorruption = new CheckpointEmbeddings("model-digest-A");
         await SemanticSearch.BuildAsync(chunks, afterCorruption, checkpoints: store);
         Assert(afterCorruption.Calls == 1,

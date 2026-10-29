@@ -13,11 +13,15 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 {
     private readonly OllamaEmbeddingProvider _embeddings;
     private readonly Dispatcher _dispatcher;
+    private readonly SearchIndexCheckpointStore _checkpoints;
+    private readonly RecentSearchFilesStore _recentFiles;
+    private RecentSearchSelection? _lastSelection;
     private readonly List<SearchDocument> _documents = [];
     // Reused by keyword and AI search. Never re-split multi-megabyte files on the UI thread.
     private IReadOnlyList<SearchChunk> _chunks = [];
     private readonly RelayCommand _loadDemoCommand;
     private readonly RelayCommand _loadFilesCommand;
+    private readonly RelayCommand _restoreFilesCommand;
     private readonly RelayCommand _clearCommand;
     private readonly RelayCommand _checkModelCommand;
     private readonly RelayCommand _buildIndexCommand;
@@ -51,12 +55,18 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         new("UTF-16 BE (no BOM)", TextFileEncoding.Utf16BigEndian)
     ];
 
-    public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null)
+    public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null,
+        SearchIndexCheckpointStore? checkpoints = null, RecentSearchFilesStore? recentFiles = null)
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _embeddings = embeddings ?? new OllamaEmbeddingProvider();
+        _checkpoints = checkpoints ?? new SearchIndexCheckpointStore();
+        _recentFiles = recentFiles ?? new RecentSearchFilesStore();
+        _lastSelection = _recentFiles.Load();
         _loadDemoCommand = new RelayCommand(LoadDemo, () => !IsBusy);
         _loadFilesCommand = new RelayCommand(async () => await LoadFilesAsync(), () => !IsBusy);
+        _restoreFilesCommand = new RelayCommand(async () => await RestorePreviousFilesAsync(),
+            () => !IsBusy && HasPreviousFiles);
         _clearCommand = new RelayCommand(Clear, () => !IsBusy && HasDocuments);
         _checkModelCommand = new RelayCommand(async () => await CheckModelAsync(), () => !IsBusy);
         _buildIndexCommand = new RelayCommand(async () => await BuildIndexAsync(), () => !IsBusy && HasDocuments);
@@ -68,6 +78,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
     public ICommand LoadDemoCommand => _loadDemoCommand;
     public ICommand LoadFilesCommand => _loadFilesCommand;
+    public ICommand RestoreFilesCommand => _restoreFilesCommand;
     public ICommand ClearCommand => _clearCommand;
     public ICommand CheckModelCommand => _checkModelCommand;
     public ICommand BuildIndexCommand => _buildIndexCommand;
@@ -82,6 +93,10 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     public string ModelName => _embeddings.ModelName;
     public bool HasDocuments => _documents.Count > 0;
     public bool HasIndex => _index is not null;
+    public bool HasPreviousFiles => _lastSelection is not null;
+    public string PreviousFilesLabel => _lastSelection is null
+        ? "After your first import, you can restore the same files after restarting."
+        : $"Last selection: {_lastSelection.Paths.Length} file(s). Restore them, then click Build AI index to resume saved batches.";
 
     public string Query
     {
@@ -104,6 +119,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             {
                 _loadDemoCommand.NotifyCanExecuteChanged();
                 _loadFilesCommand.NotifyCanExecuteChanged();
+                _restoreFilesCommand.NotifyCanExecuteChanged();
                 _clearCommand.NotifyCanExecuteChanged();
                 _checkModelCommand.NotifyCanExecuteChanged();
                 _buildIndexCommand.NotifyCanExecuteChanged();
@@ -197,6 +213,20 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         await ImportFilesAsync(dialog.FileNames);
     }
 
+    /// <summary>Restore the last explicitly selected local paths after restarting the app.</summary>
+    public async Task RestorePreviousFilesAsync()
+    {
+        RecentSearchSelection? previous = _lastSelection;
+        if (previous is null || IsBusy || _disposed)
+        {
+            return;
+        }
+
+        SelectedFileEncoding = FileEncodingChoices.First(
+            choice => choice.Encoding == previous.Encoding);
+        await ImportFilesAsync(previous.Paths);
+    }
+
     /// <summary>Atomic, cancellable import. The current documents/index survive a failed load.</summary>
     public async Task ImportFilesAsync(IReadOnlyList<string> paths)
     {
@@ -257,6 +287,23 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     ? "Import cancelled. Previously loaded documents are unchanged."
                     : $"Import failed: {outcome.ErrorMessage ?? "Unknown error"}. " +
                       "Previously loaded documents are unchanged.";
+
+            if (completed)
+            {
+                try
+                {
+                    _recentFiles.Save(paths, encoding);
+                    _lastSelection = new RecentSearchSelection(paths.ToArray(), encoding);
+                    OnPropertyChanged(nameof(HasPreviousFiles));
+                    OnPropertyChanged(nameof(PreviousFilesLabel));
+                    _restoreFilesCommand.NotifyCanExecuteChanged();
+                }
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                    StatusText = "Files imported successfully, but the last selection " +
+                                 "could not be remembered: " + error.Message;
+                }
+            }
         });
     }
 
@@ -281,7 +328,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasIndex));
         DocumentsLabel = $"{_documents.Count} document(s) · {_chunks.Count:N0} text chunks";
         IndexLabel = _chunks.Count == 0 ? "No text to index" :
-            $"Ready to index {_chunks.Count:N0} chunks (~{(_chunks.Count + SemanticSearch.BatchSize - 1) / SemanticSearch.BatchSize:N0} local batches).";
+            $"Ready: {_chunks.Count:N0} chunks (~{(_chunks.Count + SemanticSearch.BatchSize - 1) / SemanticSearch.BatchSize:N0} batches). " +
+            "Build AI index will reuse matching batches saved on disk.";
         IndexProgress = 0;
         StatusText = "Step 2: Build AI index, or compare ordinary word matching first.";
         SearchHint = "The keyword side works immediately. The semantic side requires a local model and an index.";
@@ -332,8 +380,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasIndex));
         SemanticResults.Clear();
         IndexProgress = 0;
-        IndexLabel = $"Embedding {chunks.Count} text chunks...";
-        await RunOperationAsync(async token =>
+        IndexLabel = $"Checking saved batches for {chunks.Count:N0} chunks...";
+        OperationOutcome outcome = await RunOperationAsync(async token =>
         {
             var progress = new Progress<IndexProgress>(step =>
             {
@@ -345,21 +393,31 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     }
                     IndexProgress = step.Completed * 100.0 / step.Total;
                     IndexLabel = $"Indexing {step.Completed:N0}/{step.Total:N0} chunks " +
-                                 $"({IndexProgress:0.0}%). Cancel is safe; no partial index is saved.";
+                                 $"({IndexProgress:0.0}%) · {step.Reused:N0} restored from disk. " +
+                                 "Completed batches remain saved if you cancel or restart.";
                 }));
             });
-            SemanticIndex built = await SemanticSearch.BuildAsync(chunks, _embeddings, progress, token);
+            SemanticIndex built = await SemanticSearch.BuildAsync(
+                chunks, _embeddings, progress, token, _checkpoints);
             await DispatchAsync(() =>
             {
                 _index = built;
                 OnPropertyChanged(nameof(HasIndex));
                 IndexProgress = 100;
-                IndexLabel = $"Ready: {built.Chunks.Count} chunks · {built.ModelName}";
+                IndexLabel = $"Ready: {built.Chunks.Count:N0} chunks · {built.ModelName} · " +
+                             $"{built.ReusedChunks:N0} restored from disk.";
                 StatusText = "Step 3: Type a question and compare both search methods.";
                 SearchHint = "Cosine score measures vector similarity; it is not a probability of correctness.";
                 ModelStatus = $"Ready: {built.ModelName} on 127.0.0.1 (local Ollama).";
             });
         });
+
+        if (!outcome.Succeeded)
+        {
+            await DispatchAsync(() => IndexLabel = outcome.Cancelled
+                ? "Indexing paused. Completed batches are saved locally. Click Build AI index to resume."
+                : "Index incomplete. Completed batches are preserved; fix the error and click Build AI index.");
+        }
     }
 
     private async Task CompareAsync()
