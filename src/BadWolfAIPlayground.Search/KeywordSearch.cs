@@ -2,9 +2,22 @@ using System.Text.RegularExpressions;
 
 namespace BadWolfAIPlayground.Search;
 
-/// <summary>A simple lexical baseline: counts occurrences of query terms, without AI.</summary>
+/// <summary>
+/// Whole-word lexical baseline. Common question filler words are ignored when
+/// more meaningful terms are available; occurrences and distinct-term coverage
+/// are tracked separately to avoid ranking by substring noise.
+/// </summary>
 public static partial class KeywordSearch
 {
+    private static readonly HashSet<string> CommonWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "де", "як", "що", "хто", "коли", "чи", "це", "той", "та", "і", "й", "або",
+        "але", "до", "від", "над", "під", "в", "у", "з", "із", "на", "за", "по",
+        "the", "a", "an", "of", "and", "or", "is", "in", "at", "for", "to",
+        "where", "what", "who", "how", "did", "does", "from",
+        "dove", "come", "cosa", "che", "il", "la", "di", "da", "del", "per", "con"
+    };
+
     public static IReadOnlyList<SearchHit> Find(
         IReadOnlyList<SearchChunk> chunks, string query, int limit = 5,
         CancellationToken cancellationToken = default)
@@ -16,46 +29,49 @@ public static partial class KeywordSearch
             throw new ArgumentOutOfRangeException(nameof(limit));
         }
 
-        string[] terms = Words().Matches(query)
+        string[] allTerms = Words().Matches(query)
             .Select(match => match.Value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (terms.Length == 0)
+        if (allTerms.Length == 0)
         {
             return [];
         }
 
-        // Search text on a worker thread when invoked by the UI; support cancellation
-        // between chunks so a large log cannot lock the search screen.
-        var matches = new List<SearchHit>();
+        string[] meaningful = allTerms.Where(term => !CommonWords.Contains(term)).ToArray();
+        var wanted = new HashSet<string>(
+            meaningful.Length == 0 ? allTerms : meaningful,
+            StringComparer.OrdinalIgnoreCase);
+
+        var matches = new List<(SearchHit Hit, int CoveredTerms)>();
         foreach (SearchChunk chunk in chunks)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            int score = Score(chunk.Content, terms);
-            if (score > 0)
+            int occurrences = 0;
+            var covered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match word in Words().Matches(chunk.Content))
             {
-                matches.Add(new SearchHit(chunk, score));
+                if (wanted.Contains(word.Value))
+                {
+                    occurrences++;
+                    covered.Add(word.Value);
+                }
+            }
+
+            if (occurrences > 0)
+            {
+                matches.Add((new SearchHit(chunk, occurrences), covered.Count));
             }
         }
 
-        return matches.OrderByDescending(hit => hit.Score)
-            .ThenBy(hit => hit.Chunk.DocumentName, StringComparer.Ordinal)
-            .Take(limit).ToArray();
-    }
-
-    private static int Score(string text, IReadOnlyList<string> terms)
-    {
-        int matches = 0;
-        foreach (string term in terms)
-        {
-            int offset = 0;
-            while ((offset = text.IndexOf(term, offset, StringComparison.OrdinalIgnoreCase)) >= 0)
-            {
-                matches++;
-                offset += term.Length;
-            }
-        }
-        return matches;
+        return matches
+            .OrderByDescending(item => item.CoveredTerms)
+            .ThenByDescending(item => item.Hit.Score)
+            .ThenBy(item => item.Hit.Chunk.DocumentName, StringComparer.Ordinal)
+            .ThenBy(item => item.Hit.Chunk.Number)
+            .Take(limit)
+            .Select(item => item.Hit)
+            .ToArray();
     }
 
     [GeneratedRegex(@"[\p{L}\p{N}]+")]

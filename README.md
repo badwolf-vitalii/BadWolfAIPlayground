@@ -20,7 +20,7 @@ A fully connected neural network implemented from scratch in C#, with **no exter
 **Real local semantic search:** import plain-text documents, compute their embeddings using the locally running EmbeddingGemma model, then compare exact-word search with ranked semantic results side-by-side.
 
 - **Use 4 demo notes** to experiment immediately, or select local TXT, MD, LOG, JSON, CSV, XML, C#, XAML, YAML, or config files. The importer supports UTF-8, Unicode files with a BOM, and explicitly chosen legacy Windows encodings.
-- Keyword matching works **without any model**. When Ollama is available, **Build AI index** computes document embeddings and **Compare searches** embeds the question and ranks documents using cosine similarity.
+- Keyword matching works **without any model**. The baseline uses whole-word matches, ignores common Ukrainian/English/Italian filler words when possible, and prioritizes coverage of distinct question terms rather than matches inside unrelated words. When Ollama is available, **Build AI index** computes document embeddings and **Compare searches** embeds the question and ranks documents using cosine similarity.
 - Try the built-in **Ukrainian question against English documents** to see how multilingual meaning-based retrieval differs from literal word matching.
 - Shows sources, relevant text excerpts, separate lexical and semantic rankings, and the actual cosine score. It does not invent AI results if Ollama is unavailable.
 - **Resumable local indexing:** each completed batch is checksummed and saved atomically on disk. The exact document contents and Ollama model digest must match before cached vectors are reused. Imports remain bounded and cancellable.

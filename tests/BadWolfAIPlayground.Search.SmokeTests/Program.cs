@@ -7,6 +7,7 @@ var tests = new (string Name, Func<Task> Check)[]
 {
     ("Chunk boundaries and overlap", TestChunking),
     ("Keyword search", TestKeyword),
+    ("Whole-word search avoids Ukrainian question filler", TestWholeWordKeyword),
     ("Multilingual semantic ranking", TestSemantic),
     ("Embedding validation", TestValidation),
     ("Cancellation", TestCancellation),
@@ -57,6 +58,29 @@ static Task TestKeyword()
     IReadOnlyList<SearchHit> hits = KeywordSearch.Find(chunks, "SQLite locked");
     Assert(hits.Count > 0 && hits[0].Chunk.DocumentName == "database_errors.txt", "Keyword ranking mismatch.");
     Assert(KeywordSearch.Find(chunks, "несумісний_запит").Count == 0, "Keyword search should not translate.");
+    return Task.CompletedTask;
+}
+
+static Task TestWholeWordKeyword()
+{
+    SearchChunk[] text =
+    [
+        new("Genesis.txt", null, 1, "І побачила жінка, що дерево добре на їжу, і взяла з його плоду."),
+        new("Other.txt", null, 2, "Де де де, серед дерева, де відбувається історія."),
+        new("Other.txt", null, 3, "Залишається навколо дерева, серед людей і дещо інше.")
+    ];
+
+    IReadOnlyList<SearchHit> matches = KeywordSearch.Find(text, "Де жінка взяла яблуко?");
+    Assert(matches.Count > 0 && matches[0].Chunk.DocumentName == "Genesis.txt" &&
+           matches[0].Score == 2,
+        "Content words (жінка, взяла) must outweigh repeated filler 'де'.");
+    Assert(matches.All(x => x.Chunk.DocumentName != "Other.txt"),
+        "Filler words should not dominate a meaningful multi-word question.");
+
+    IReadOnlyList<SearchHit> shortQuery = KeywordSearch.Find(
+        [new SearchChunk("false.txt", null, 1, "Дерево має плоди.")], "де");
+    Assert(shortQuery.Count == 0,
+        "Whole-word search must never count 'де' embedded within 'дерево'.");
     return Task.CompletedTask;
 }
 
