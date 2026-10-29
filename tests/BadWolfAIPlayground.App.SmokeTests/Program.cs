@@ -7,6 +7,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
+using BadWolfAIPlayground.App.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
 
@@ -120,6 +121,27 @@ internal static class Program
                 "Reset should create a fresh baseline.");
 
             Console.WriteLine("PASS guided lessons, before/after comparison, training and reset");
+
+            // Navigation and the keyword-only path must work without Ollama installed.
+            window.NavigateToSmartSearch();
+            var smartSearch = FindDescendants<SmartSearchView>(window).Single();
+            Assert(smartSearch.Visibility == Visibility.Visible, "Smart Search navigation failed.");
+            SmartSearchViewModel searchModel = smartSearch.SearchModel;
+            searchModel.LoadDemoCommand.Execute(null);
+            Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 4,
+                "The local demonstration corpus did not load.");
+            Assert(!searchModel.HasIndex, "A demo must not pretend to have generated AI embeddings.");
+            searchModel.Query = "SQLite locked";
+            searchModel.CompareCommand.Execute(null);
+            Assert(searchModel.KeywordResults.Count > 0 &&
+                   searchModel.KeywordResults[0].Title.Contains("database_errors", StringComparison.Ordinal),
+                "Keyword ranking did not find the database troubleshooting note.");
+            Assert(searchModel.SemanticResults.Count == 0,
+                "AI matches must not be faked when the model is unavailable.");
+            window.NavigateToNeuralLab();
+            Assert(smartSearch.Visibility == Visibility.Collapsed,
+                "Neural Network Lab navigation failed.");
+            Console.WriteLine("PASS Smart Search navigation, demo and offline keyword comparison");
             return 0;
         }
         catch (Exception exception)

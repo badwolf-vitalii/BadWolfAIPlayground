@@ -1,0 +1,203 @@
+<UserControl x:Class="BadWolfAIPlayground.App.Search.SmartSearchView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource PageBrush}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <Grid Margin="32,28,32,34" MaxWidth="1500">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Margin="0,0,0,22">
+                <TextBlock Text="SMART SEARCH LAB" Foreground="#59B5FF"
+                           FontWeight="Bold" FontSize="11" />
+                <TextBlock Text="Search by meaning, not just words." FontSize="28"
+                           FontWeight="Bold" Margin="0,7,0,5" />
+                <TextBlock Text="Compare ordinary keyword matching with locally generated AI embeddings."
+                           Foreground="#A3BAD3" FontSize="13" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <Border Grid.Row="1" Background="#10243B" BorderBrush="#2A6189"
+                    BorderThickness="1" CornerRadius="14" Padding="21" Margin="0,0,0,18">
+                <StackPanel>
+                    <TextBlock Text="HOW THIS EXPERIMENT WORKS" Foreground="#69C1FF"
+                               FontSize="11" FontWeight="Bold" Margin="0,0,0,12" />
+                    <TextBlock Text="1   Load example text or your own files."
+                               Foreground="#D6E8FB" FontSize="13" Margin="0,0,0,7" />
+                    <TextBlock Text="2   Install the local embedding model once, then build an AI index."
+                               Foreground="#D6E8FB" FontSize="13" Margin="0,0,0,7" />
+                    <TextBlock Text="3   Ask a question and compare both rankings side by side."
+                               Foreground="#D6E8FB" FontSize="13" />
+                    <Border Background="#14334E" CornerRadius="7" Padding="12,9" Margin="0,14,0,0">
+                        <TextBlock Text="Tip: The demo notes are in English. The sample question is in Ukrainian. Keyword search may return nothing, while a multilingual embedding model can still find relevant text."
+                                   TextWrapping="Wrap" Foreground="#9ECDFF" FontSize="12" />
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="2" Margin="0,0,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="1*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,9,0">
+                    <StackPanel>
+                        <TextBlock Text="1  Choose documents" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="Nothing is uploaded. Only files you select are read into memory."
+                                   Style="{StaticResource MutedText}" FontSize="11" Margin="0,6,0,17"
+                                   TextWrapping="Wrap" />
+                        <WrapPanel Margin="0,0,0,12">
+                            <Button Content="Use 4 demo notes" Command="{Binding LoadDemoCommand}"
+                                    Style="{StaticResource PrimaryButton}" Margin="0,0,7,7" />
+                            <Button Content="Select text files" Command="{Binding LoadFilesCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,7,7" />
+                            <Button Content="Clear" Command="{Binding ClearCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding DocumentsLabel}" Foreground="#83DCCB"
+                                   FontSize="12" FontWeight="SemiBold" Margin="0,0,0,7" />
+                        <ItemsControl ItemsSource="{Binding DocumentNames}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding}" Foreground="#9EB9D3" FontSize="11"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis"
+                                               ToolTip="Selected document" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="Supported: TXT, MD, LOG, JSON, CSV, XML, C#, XAML, YAML (UTF-8). 40 files max, 1 MiB each, 200k characters total. New selection replaces the old set."
+                                   Style="{StaticResource MutedText}" FontSize="10"
+                                   TextWrapping="Wrap" Margin="0,13,0,0" />
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="2  Start local AI" FontSize="17" FontWeight="SemiBold" />
+                        <TextBlock Text="Ollama serves EmbeddingGemma on your own PC (no API key)."
+                                   Style="{StaticResource MutedText}" FontSize="11" Margin="0,6,0,14"
+                                   TextWrapping="Wrap" />
+                        <TextBlock Text="ONE-TIME SETUP" Foreground="#8ABCE5"
+                                   FontSize="10" FontWeight="SemiBold" Margin="0,0,0,5" />
+                        <Border Background="#0B1526" BorderBrush="#34516D" BorderThickness="1"
+                                CornerRadius="7" Padding="12,9" Margin="0,0,0,10">
+                            <TextBlock Text="ollama pull embeddinggemma" FontFamily="Consolas"
+                                       FontSize="12" Foreground="#C7E6FF" />
+                        </Border>
+                        <WrapPanel Margin="0,0,0,12">
+                            <Button Content="Copy command" Command="{Binding CopyInstallCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,7,7" />
+                            <Button Content="Check local model" Command="{Binding CheckModelCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
+                        </WrapPanel>
+                        <TextBlock Text="{Binding ModelStatus}" Foreground="#A5C7DF"
+                                   TextWrapping="Wrap" FontSize="11" Margin="0,0,0,12" />
+                        <WrapPanel>
+                            <Button Content="Build AI index" Command="{Binding BuildIndexCommand}"
+                                    Style="{StaticResource PrimaryButton}" Margin="0,0,8,7" />
+                            <Button Content="Cancel" Command="{Binding CancelCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
+                        </WrapPanel>
+                        <ProgressBar Value="{Binding IndexProgress, Mode=OneWay}" Minimum="0"
+                                     Maximum="100" Height="6" Background="#1E3048"
+                                     Foreground="#3EA2EA" BorderThickness="0" Margin="0,8,0,7" />
+                        <TextBlock Text="{Binding IndexLabel}" Foreground="#8FDBCB"
+                                   FontSize="11" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="3  Compare results" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="Ask a question. Exact word matching and AI vector similarity are computed independently."
+                               Style="{StaticResource MutedText}" FontSize="11" TextWrapping="Wrap"
+                               Margin="0,6,0,14" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBox Grid.Column="0" Text="{Binding Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 FontSize="14" Padding="12,11" Margin="0,0,12,0"
+                                 ToolTip="Enter a question in any language supported by the embedding model" />
+                        <Button Grid.Column="1" Content="Compare searches" Command="{Binding CompareCommand}"
+                                Style="{StaticResource PrimaryButton}" />
+                    </Grid>
+                    <TextBlock Text="{Binding StatusText}" Foreground="#8BD8C6"
+                               FontSize="12" TextWrapping="Wrap" Margin="0,14,0,0" />
+                    <TextBlock Text="{Binding SearchHint}" Foreground="#9CB1CA"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,6,0,0" />
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="4" Margin="0,0,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1*" />
+                    <ColumnDefinition Width="1*" />
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,9,0">
+                    <StackPanel>
+                        <TextBlock Text="KEYWORD SEARCH" FontSize="11" FontWeight="Bold"
+                                   Foreground="#84A9D4" />
+                        <TextBlock Text="Finds the words you typed, without understanding meaning."
+                                   Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                                   FontSize="11" Margin="0,7,0,15" />
+                        <ItemsControl ItemsSource="{Binding KeywordResults}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#0A172A" BorderBrush="#29415E"
+                                            BorderThickness="1" CornerRadius="10" Padding="13" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" Foreground="#C8E1FD"
+                                                       FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding SourcePath}" />
+                                            <TextBlock Text="{Binding ScoreText}" Foreground="#91AACC"
+                                                       FontSize="10" Margin="0,6,0,0" />
+                                            <TextBlock Text="{Binding Snippet}" TextWrapping="Wrap"
+                                                       Foreground="#BDCEE2" FontSize="11" Margin="0,8,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource Card}" Margin="9,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="AI SEMANTIC SEARCH" FontSize="11" FontWeight="Bold"
+                                   Foreground="#63DCC1" />
+                        <TextBlock Text="Compares vector representations of meaning, even across languages."
+                                   Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                                   FontSize="11" Margin="0,7,0,15" />
+                        <ItemsControl ItemsSource="{Binding SemanticResults}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#0A172A" BorderBrush="#245C59"
+                                            BorderThickness="1" CornerRadius="10" Padding="13" Margin="0,0,0,10">
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" Foreground="#B7F0E4"
+                                                       FontWeight="SemiBold" FontSize="12" TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding SourcePath}" />
+                                            <TextBlock Text="{Binding ScoreText}" Foreground="#86CCBB"
+                                                       FontSize="10" Margin="0,6,0,0" />
+                                            <TextBlock Text="{Binding Snippet}" TextWrapping="Wrap"
+                                                       Foreground="#BDCEE2" FontSize="11" Margin="0,8,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </Grid>
+            <TextBlock Grid.Row="5" Text="Experiment: cosine similarity is not a confidence percentage. Results must be checked against the original text. The model and documents stay local."
+                       Foreground="#7893AE" FontSize="11" TextWrapping="Wrap"
+                       HorizontalAlignment="Center" Margin="0,4,0,0" />
+        </Grid>
+    </ScrollViewer>
+</UserControl>

@@ -1,26 +1,54 @@
 # BadWolf AI Playground
 
-**A local-first C#/.NET WPF playground for understanding AI through real experiments.**
+**A local-first C#/.NET WPF playground for understanding how AI can be useful in normal software.**
 
-The first experiment is a fully connected neural network written from scratch in C#. It learns XOR using sigmoid activations, backpropagation, and stochastic gradient descent — with no external machine-learning libraries and no API keys. **A four-step interactive tutorial explains what the network is doing before you have to understand any of the controls.**
+BadWolfAIPlayground contains small, interactive experiments you can understand, inspect, and reuse in your own applications. Both existing labs run on the local Windows computer; no cloud API key is required.
 
-## What works in v0.1.0
+## Experiments
 
-- **Neural Network Lab:** four-step beginner guide with an XOR truth table, starting guesses, an in-guide Train button, and explanations of the outcome.
-- **Interactive architecture:** network visualization (2 inputs → configurable hidden layer → 1 output).
-- **Real training:** adjustable epochs, hidden units, learning rate, and random seed.
-- **Live feedback:** training loss chart, progress, and four XOR prediction cards with **before vs. now** values and expected answers.
-- **Control:** start, stop, reset, and continue training an existing model.
-- **Offline persistence:** save and load the network's architecture, weights, and biases as JSON.
-- **Reusable engine:** the UI-independent `BadWolfAIPlayground.Core` library supports arbitrary fully connected topologies.
-- **Validation:** self-contained core and WPF startup/tutorial smoke tests, run on Windows CI without third-party test packages.
+### Neural Network Lab (v0.1.0)
 
-Smart Search and Anomaly Detection are **planned** experiments, not implemented features yet.
+A fully connected neural network implemented from scratch in C#, with **no external machine-learning library**. Learn XOR using sigmoid, backpropagation, and stochastic gradient descent.
+
+- Four-step beginner guide with the XOR truth table, untrained predictions, training, and **Before / Now** results.
+- Interactive visualization of weights, loss history, four predictions, progress, and accuracy.
+- Adjustable hidden neurons, epochs, learning rate, and random seed; optional paced animation.
+- Start, stop, reset, continue training; save/load models with versioned JSON.
+
+### Smart Search Lab (v0.2.0)
+
+**Real local semantic search:** import plain-text documents, compute their embeddings using the locally running EmbeddingGemma model, then compare exact-word search with ranked semantic results side-by-side.
+
+- **Use 4 demo notes** to experiment immediately, or select local UTF-8 TXT, MD, LOG, JSON, CSV, XML, C#, XAML, YAML, or config files.
+- Keyword matching works **without any model**. When Ollama is available, **Build AI index** computes document embeddings and **Compare searches** embeds the question and ranks documents using cosine similarity.
+- Try the built-in **Ukrainian question against English documents** to see how multilingual meaning-based retrieval differs from literal word matching.
+- Shows sources, relevant text excerpts, separate lexical and semantic rankings, and the actual cosine score. It does not invent AI results if Ollama is unavailable.
+- In-memory search index, cancellation, indexing progress, input size limits, and helpful setup/status messages.
+- Reusable `BadWolfAIPlayground.Search` library independent of WPF; no external NuGet packages.
+
+#### Local model setup (one-time)
+
+1. Install [Ollama](https://ollama.com/download) on Windows and start it.
+2. Open PowerShell and download the multilingual [EmbeddingGemma](https://ollama.com/library/embeddinggemma) model:
+
+   ```powershell
+   ollama pull embeddinggemma
+   ```
+
+3. Launch the app, select **Smart Search Lab** on the left, and click **Check local model**.
+4. Click **Use 4 demo notes**, then **Build AI index**, then **Compare searches**. Try other queries, including Italian and Ukrainian.
+
+The model download is roughly **622 MB**. The first download requires internet access, but after installation the embeddings are computed by **your own Ollama service at `http://127.0.0.1:11434`**; no document content is sent to a third-party API. The app does not download models automatically. Ollama 0.11.10 or later is required for this model.
+
+**Why Ollama, not ONNX Runtime yet?** This first integration isolates model inference behind `IEmbeddingProvider` and uses Ollama's local `/api/embed` endpoint, so the WPF app needs no tokenizer, ONNX model conversion, or extra NuGet dependencies. A self-hosted ONNX provider can be added later without changing the indexing/search logic. The result is actual ML-based retrieval, not a simulated AI response.
+
+**Search limits:** select at most 40 files, 1 MiB each, 200,000 characters total, or 260 text chunks of up to 900 characters each. A new selection replaces the current set; no index or document is persisted between app runs. Unsupported or invalid UTF-8 files display an error. Results are relevance rankings, not guaranteed answers: cosine scores are not calibrated correctness probabilities.
 
 ## Requirements
 
 - Windows 10/11
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) (or Visual Studio 2022 with the .NET desktop development workload)
+- Visual Studio 2022 with **.NET desktop development** workload, or the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- For **semantic** search only: locally running [Ollama](https://ollama.com/download) and `embeddinggemma` (no Ollama requirement for Neural Network Lab or plain keyword matching)
 
 ## Run
 
@@ -33,53 +61,49 @@ dotnet restore BadWolfAIPlayground.sln
 dotnet run --project src/BadWolfAIPlayground.App/BadWolfAIPlayground.App.csproj
 ```
 
-### First experiment: follow the built-in lesson
+### First experiment: Neural Network Lab tutorial
 
-Open the **START HERE / GUIDED XOR EXPERIMENT** panel at the top of the app:
+1. Open **START HERE / GUIDED XOR EXPERIMENT**.
+2. Read the XOR truth table and baseline predictions.
+3. Leave **4 hidden neurons, 10,000 epochs, learning rate 0.7, seed 42**, and click **Train now**. Use **Watch training live** if you want to see progress, or disable it for full-speed training.
+4. Compare **Before / Now**, model loss, accuracy, and predictions. **Restart guide** does not delete trained weights; **Reset** does.
 
-1. **Understand the four examples.** `0 XOR 0 = 0`, `0 XOR 1 = 1`, `1 XOR 0 = 1`, `1 XOR 1 = 0`. No coding or knowledge of AI is needed.
-2. **Look at the starting guesses.** The panel records the untrained network's accuracy and loss. The four cards below also show the exact **Before** prediction for each example.
-3. **Train.** Leave the initial settings at **4 hidden neurons, 10,000 epochs, learning rate 0.7, seed 42**, then click **Train now** inside the guide. Watch the weights, loss, and predictions change. **Watch training live** is enabled by default to make the animation visible; disable it for full-speed training. Stop keeps the trained weights.
-4. **Compare before and after.** The app shows real starting and current accuracy and the percentage change in training error. It does not invent results or claim that XOR training makes an intelligent assistant.
+Learning rate uses a dot as decimal separator. Training runs on a worker thread, and the WPF view is only updated via its Dispatcher. Saving a model stores the architecture/weights/biases, not the dataset or training history.
 
-**Next step** unlocks the results page only after at least one epoch has trained. **Restart guide** revisits the explanations without deleting what the network learned; **Reset** creates fresh random weights and a new baseline. **Save model / Load model** store and restore the model as JSON; loading starts a new comparison baseline based on the loaded model.
-
-For each setting the UI shows a short explanation. The learning rate uses a dot as a decimal separator. Training runs on a background thread; the **Stop** button cancels it between epochs. Changing the hidden-neuron count or seed creates a new network and clears the comparison when training starts; otherwise training continues from the existing weights.
-
-## Project layout
+## Project structure
 
 ```text
 BadWolfAIPlayground.sln
 src/
-  BadWolfAIPlayground.Core/          # Neural network, samples, JSON model format
-  BadWolfAIPlayground.App/           # WPF UI, graphs, MVVM, file dialogs
+  BadWolfAIPlayground.Core/           # From-scratch neural network engine
+  BadWolfAIPlayground.Search/         # Text chunking, retrieval, Ollama embedding adapter
+  BadWolfAIPlayground.App/            # WPF tutorials, visualization, navigation, model dialogs
 tests/
-  BadWolfAIPlayground.Core.SmokeTests/ # Package-free core checks
-  BadWolfAIPlayground.App.SmokeTests/  # Real WPF startup and tutorial checks
-.github/workflows/build.yml          # Windows build + smoke tests
+  BadWolfAIPlayground.Core.SmokeTests/   # XOR, persistence, topology, validation
+  BadWolfAIPlayground.Search.SmokeTests/ # Chunking, rankings, HTTP protocol, file safety
+  BadWolfAIPlayground.App.SmokeTests/    # Real WPF window, navigation, threading, lesson
+.github/workflows/build.yml              # Windows build + all smoke tests
 ```
 
-Read [architecture notes](docs/architecture.md) for the math, module boundaries, limitations, and next steps.
+Read [architecture and technical notes](docs/architecture.md) for implementation details and limitations.
 
-## Verify the engine
+## Verification
 
 ```powershell
+dotnet build BadWolfAIPlayground.sln --configuration Release
 dotnet run --project tests/BadWolfAIPlayground.Core.SmokeTests/BadWolfAIPlayground.Core.SmokeTests.csproj --configuration Release
-```
-
-The core tests cover XOR convergence, seeded initialization, serialization, independent snapshots, multi-layer topologies, and input validation. CI also builds and **launches the real WPF window**, checks read-only progress bindings, walks the guided steps, executes a short training run, and verifies baseline/reset behavior.
-
-On Windows, run the UI check locally:
-
-```powershell
+dotnet run --project tests/BadWolfAIPlayground.Search.SmokeTests/BadWolfAIPlayground.Search.SmokeTests.csproj --configuration Release
 dotnet run --project tests/BadWolfAIPlayground.App.SmokeTests/BadWolfAIPlayground.App.SmokeTests.csproj --configuration Release
 ```
 
+CI tests both search algorithms using deterministic fake embeddings and the Ollama wire protocol using a stub HTTP handler. CI **does not require Ollama**, and does **not** prove real-model ranking quality; that last step is a manual local integration test on a computer with the model installed.
+
 ## Roadmap
 
-- **v0.1:** Neural Network Lab, XOR, loss visualization, JSON persistence.
-- **Later:** import custom datasets, compare experiments, additional activation functions and optimizers.
-- **Later:** semantic search using local embeddings, anomaly detection for logs and time-series data.
+- **v0.1:** Neural Network Lab with XOR, interactive lesson, visual loss and weight diagrams.
+- **v0.2:** Local semantic vs keyword search using a replaceable embedding provider.
+- **Later:** saving/loading search indexes, ONNX embedding backend, additional file importers, custom datasets, experiment comparisons.
+- **Later:** log and telemetry anomaly detection with baseline comparisons.
 
 ## License
 

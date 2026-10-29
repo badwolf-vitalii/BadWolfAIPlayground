@@ -10,6 +10,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Core.Sm
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.App.SmokeTests", "tests\BadWolfAIPlayground.App.SmokeTests\BadWolfAIPlayground.App.SmokeTests.csproj", "{2A535394-70C9-40B5-B246-F5324299E6E1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Search", "src\BadWolfAIPlayground.Search\BadWolfAIPlayground.Search.csproj", "{315F09C4-D1EA-49DB-B0CB-41F0F20F4231}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Search.SmokeTests", "tests\BadWolfAIPlayground.Search.SmokeTests\BadWolfAIPlayground.Search.SmokeTests.csproj", "{A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}"
+EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
         Debug|Any CPU = Debug|Any CPU
@@ -32,6 +36,14 @@ Global
         {2A535394-70C9-40B5-B246-F5324299E6E1}.Debug|Any CPU.Build.0 = Debug|Any CPU
         {2A535394-70C9-40B5-B246-F5324299E6E1}.Release|Any CPU.ActiveCfg = Release|Any CPU
         {2A535394-70C9-40B5-B246-F5324299E6E1}.Release|Any CPU.Build.0 = Release|Any CPU
+        {315F09C4-D1EA-49DB-B0CB-41F0F20F4231}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {315F09C4-D1EA-49DB-B0CB-41F0F20F4231}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {315F09C4-D1EA-49DB-B0CB-41F0F20F4231}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {315F09C4-D1EA-49DB-B0CB-41F0F20F4231}.Release|Any CPU.Build.0 = Release|Any CPU
+        {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Release|Any CPU.Build.0 = Release|Any CPU
     EndGlobalSection
     GlobalSection(SolutionProperties) = preSolution
         HideSolutionNode = FALSE
