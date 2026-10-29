@@ -62,7 +62,7 @@
                         <StackPanel Margin="0,0,0,12">
                             <TextBlock Text="File encoding" Foreground="#B9D6F5"
                                        FontSize="11" FontWeight="SemiBold" Margin="0,0,0,5" />
-                            <ComboBox ItemsSource="{Binding FileEncodingChoices}"
+                            <ComboBox x:Name="FileEncodingSelector" ItemsSource="{Binding FileEncodingChoices}"
                                       SelectedItem="{Binding SelectedFileEncoding, Mode=TwoWay}"
                                       DisplayMemberPath="Label"
                                       Background="#12263E" Foreground="#E3EFFC"

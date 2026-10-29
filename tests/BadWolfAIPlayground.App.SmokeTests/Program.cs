@@ -129,7 +129,8 @@ internal static class Program
             var smartSearch = FindDescendants<SmartSearchView>(window).Single();
             Assert(smartSearch.Visibility == Visibility.Visible, "Smart Search navigation failed.");
             SmartSearchViewModel searchModel = smartSearch.SearchModel;
-            ComboBox encodingSelector = FindDescendants<ComboBox>(smartSearch).Single();
+            ComboBox encodingSelector = smartSearch.FindName("FileEncodingSelector") as ComboBox
+                ?? throw new InvalidOperationException("Smart Search file encoding selector is missing.");
             Assert(encodingSelector.SelectedItem is FileEncodingChoice initialChoice &&
                    initialChoice.Encoding == TextFileEncoding.Auto,
                 "The file encoding selector must be visible and default to strict UTF-8 / BOM detection.");
