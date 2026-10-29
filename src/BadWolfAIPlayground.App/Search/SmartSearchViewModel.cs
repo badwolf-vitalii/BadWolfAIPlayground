@@ -519,6 +519,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         AnswerSources.Clear();
         AnswerText = "Searching relevant passages and preparing an answer...";
         AnswerStatus = "Using the local answer model and verifying verbatim citations. This may take a moment.";
+        string previousSearchStatus = StatusText;
         OperationOutcome outcome = await RunOperationAsync(async token =>
         {
             GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
@@ -551,10 +552,13 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     "No verified answer was generated.";
                 AnswerStatus = outcome.Cancelled
                     ? "You can ask the document again."
-                    : $"Could not generate a local answer: {outcome.ErrorMessage}. " +
-                      "Install the answer model with: ollama pull qwen3:4b-instruct";
+                    : $"Could not generate a local answer: {outcome.ErrorMessage}";
             });
         }
+
+        // An Ask document failure belongs to the answer panel, not to the
+        // unrelated Compare results status shown higher on the page.
+        await DispatchAsync(() => StatusText = previousSearchStatus);
     }
 
     private async Task<OperationOutcome> RunOperationAsync(Func<CancellationToken, Task> operation)

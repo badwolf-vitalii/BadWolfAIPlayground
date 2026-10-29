@@ -11,6 +11,12 @@ namespace BadWolfAIPlayground.Search;
 public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
 {
     public const string DefaultModel = "qwen3:4b-instruct";
+
+    // Ollama may default to a 4k context on consumer GPUs.
+    // Keep the local Q&A request bounded even when the indexed document is huge.
+    public const int AnswerContextTokens = 8192;
+    public const int MaxExcerptCharacters = 900;
+
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
     public string ModelName { get; }
@@ -88,7 +94,9 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
         foreach (EvidencePassage passage in passages)
         {
             prompt.AppendLine($"[SOURCE {passage.Id}] {passage.Chunk.DocumentName} / chunk {passage.Chunk.Number}");
-            prompt.AppendLine(passage.Chunk.Content);
+            // Only submit a short, verifiable excerpt, not the entire 1,800-character
+            // chunk. Every quotation is still validated against the full source.
+            prompt.AppendLine(SelectExcerpt(passage.Chunk.Content, question));
             prompt.AppendLine($"[END SOURCE {passage.Id}]");
         }
         using JsonDocument json = await ChatAsync(system, prompt.ToString(), 640, token)
@@ -126,6 +134,32 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
         return new ProposedAnswer(true, value, quotes);
     }
 
+    private static string SelectExcerpt(string content, string question)
+    {
+        if (content.Length <= MaxExcerptCharacters)
+        {
+            return content;
+        }
+
+        // Prefer surrounding an actual question term; otherwise keep the
+        // beginning of the candidate passage. No fabricated text is inserted.
+        int firstHit = -1;
+        foreach (System.Text.RegularExpressions.Match word in
+                 System.Text.RegularExpressions.Regex.Matches(question, @"[\p{L}\p{N}]{4,}"))
+        {
+            int hit = content.IndexOf(word.Value, StringComparison.OrdinalIgnoreCase);
+            if (hit >= 0 && (firstHit < 0 || hit < firstHit))
+            {
+                firstHit = hit;
+            }
+        }
+
+        int start = firstHit < 0 ? 0 :
+            Math.Clamp(firstHit - MaxExcerptCharacters / 3, 0,
+                content.Length - MaxExcerptCharacters);
+        return content.Substring(start, MaxExcerptCharacters);
+    }
+
     private async Task<JsonDocument> ChatAsync(
         string system, string prompt, int maxTokens, CancellationToken token)
     {
@@ -139,7 +173,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
                 new { role = "system", content = system },
                 new { role = "user", content = prompt }
             },
-            options = new { temperature = 0.0, num_predict = maxTokens }
+            options = new { temperature = 0.0, num_predict = maxTokens, num_ctx = AnswerContextTokens }
         };
 
         try
@@ -156,6 +190,16 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
 
                 string detail = await response.Content.ReadAsStringAsync(token)
                     .ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.BadRequest &&
+                    (detail.Contains("context size", StringComparison.OrdinalIgnoreCase) ||
+                     detail.Contains("context length", StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new InvalidOperationException(
+                        "The local answer model rejected a request that exceeded its context window. " +
+                        "The app now limits source excerpts and requests 8192 tokens; " +
+                        "check the model's context-length setting in Ollama if this persists.");
+                }
+
                 throw new InvalidOperationException(
                     $"Local Ollama answer request failed ({(int)response.StatusCode}): " +
                     detail[..Math.Min(detail.Length, 240)]);

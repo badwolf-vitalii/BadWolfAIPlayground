@@ -20,6 +20,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Ollama model digest validation", TestOllamaFingerprint),
     ("Grounded answers and verbatim citations", TestGroundedAnswers),
     ("Local Ollama Q&A protocol", TestOllamaAnswerProtocol),
+    ("Bounded Q&A context and actionable context errors", TestOllamaAnswerContext),
 };
 int passed = 0;
 foreach ((string name, Func<Task> check) in tests)
@@ -423,8 +424,10 @@ static async Task TestOllamaAnswerProtocol()
         using JsonDocument requestJson = JsonDocument.Parse(body);
         Assert(requestJson.RootElement.GetProperty("model").GetString() == "qwen3:4b-instruct" &&
                requestJson.RootElement.GetProperty("stream").GetBoolean() == false &&
-               requestJson.RootElement.GetProperty("format").GetString() == "json",
-            "The answer model and structured local response settings are missing.");
+               requestJson.RootElement.GetProperty("format").GetString() == "json" &&
+               requestJson.RootElement.GetProperty("options").GetProperty("num_ctx").GetInt32() ==
+                   OllamaAnswerProvider.AnswerContextTokens,
+            "The answer model, structured response, or explicit context window is missing.");
 
         string response = requests++ == 0
             ? "{\"queries\":[\"дерево плід Едем\"]}"
@@ -452,6 +455,74 @@ static async Task TestOllamaAnswerProtocol()
     Assert(generated.Supported && generated.Evidence.Count == 1 &&
            generated.Evidence[0].Quote == "взяла з його плоду" && requests == 2,
         "The structured answer and source quote must be parsed correctly.");
+}
+
+static async Task TestOllamaAnswerContext()
+{
+    int calls = 0;
+    var handler = new StubHandler(async (request, token) =>
+    {
+        calls++;
+        Assert(request.RequestUri?.AbsolutePath == "/api/chat",
+            "Q&A must use local Ollama chat.");
+        string body = await request.Content!.ReadAsStringAsync(token);
+        using JsonDocument json = JsonDocument.Parse(body);
+        JsonElement root = json.RootElement;
+        Assert(root.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192,
+            "The local model must receive an explicit 8192-token context option.");
+        string prompt = root.GetProperty("messages")[1].GetProperty("content").GetString() ?? "";
+        Assert(prompt.Length < 8500 && prompt.Contains("[SOURCE 7]", StringComparison.Ordinal),
+            "All seven source citations must remain present without overflowing the context.");
+        Assert(prompt.Contains("взяла", StringComparison.Ordinal),
+            "A question term located deep in the source must be preserved in the excerpt.");
+        Assert(!prompt.Contains(new string('а', 1250), StringComparison.Ordinal),
+            "Long source files must never be sent unbounded to the chat model.");
+
+        string payload = JsonSerializer.Serialize(new
+        {
+            message = new
+            {
+                role = "assistant",
+                content = "{\"supported\":false,\"answer\":\"\",\"evidence\":[]}"
+            }
+        });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json")
+        };
+    });
+
+    using var client = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+    };
+    using var local = new OllamaAnswerProvider(client: client);
+    const string source = "жінка взяла плід із дерева.";
+    var excerpts = Enumerable.Range(1, 7)
+        .Select(i => new EvidencePassage(i, new SearchChunk(
+            "Genesis.txt", null, i, new string('а', 1300) + source + new string('б', 1200)), 0.4))
+        .ToArray();
+
+    ProposedAnswer output = await local.GenerateAsync("Де Єва взяла яблуко?", excerpts);
+    Assert(!output.Supported && calls == 1,
+        "A bounded context must allow the model to report insufficient evidence.");
+
+    var contextErrorHandler = new StubHandler((_, _) => Task.FromResult(
+        new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(
+                "{\"error\":\"request (7068 tokens) exceeds the available context size (4096 tokens)\"}")
+        }));
+    using var errorClient = new HttpClient(contextErrorHandler)
+    {
+        BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+    };
+    using var errorModel = new OllamaAnswerProvider(client: errorClient);
+    InvalidOperationException problem = await CaptureAsync<InvalidOperationException>(
+        () => errorModel.GenerateAsync("Де Єва взяла яблуко?", excerpts));
+    Assert(problem.Message.Contains("context window", StringComparison.OrdinalIgnoreCase) &&
+           !problem.Message.Contains("pull qwen", StringComparison.OrdinalIgnoreCase),
+        "A context-size error must not claim the already-running model is missing.");
 }
 
 sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int.MaxValue) : IEmbeddingProvider

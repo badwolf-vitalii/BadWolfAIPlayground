@@ -109,3 +109,20 @@ Search-library smoke tests use fake answer/embedding models and mocked
 Ollama `/api/chat`, verify query expansion, source/citation validation,
 unsupported-answer handling, and local JSON response parsing. They do
 not measure the quality of the real Qwen3 model.
+
+
+### Bounded local answer context
+
+Ollama's local default may be 4,096 tokens depending on available VRAM.
+The optional Ollama answer provider explicitly requests `num_ctx=8192`
+through `/api/chat`, while bounding each retrieved source excerpt to
+900 original characters and preserving up to seven labeled evidence IDs.
+It favors a window around significant exact query terms when possible.
+The source quotation check still uses the complete underlying chunk.
+The semantic index and on-disk embedding checkpoints are unaffected by
+this answer-only change. Invalid context size responses are explained
+as a context setting issue rather than misleading the user into
+reinstalling an already working model. Ask-document failures are shown
+only in the answer panel instead of overwriting Compare-searches status.
+The HTTP smoke test checks explicit context length, bounded input
+and friendly recovery from an Ollama 400 context-window error.
