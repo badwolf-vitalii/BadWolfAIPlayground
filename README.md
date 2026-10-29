@@ -430,3 +430,12 @@ convert a copy for legacy code pages. Binary data, ZIP archives
 and unsupported file types are not processed. The detector's
 existing 366-day analysis span limit still applies to a combined
 folder. The demo and automated tests use only synthetic log data.
+
+
+**Deduplication safeguard:** two unrelated components are *not*
+assumed to be copies simply because they emitted identical text at
+the same timestamp. Automatic merging is restricted to the known
+generic App/component mirroring pattern and duplicate copies of
+the same named file from different directories. Other
+identical events remain visible separately. This is tested with
+two synthetic independent device logs.

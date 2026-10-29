@@ -417,3 +417,12 @@ business-specific log templates are persisted, uploaded,
 or added to this public repository. Tests build an entirely
 synthetic multi-target Logs folder with nested archives,
 identical mirrored NLog entries, provenance and failure cases.
+
+
+**Conservative event identity:** exact equality alone is not enough
+to merge two independent components. Cross-file deduplication is
+restricted to a general `App` log paired with a dedicated
+component target, or duplicate copies of the *same filename*
+in different folders. Other components retain independent
+events even at identical timestamps. A regression test guards
+against accidental undercounting of simultaneous device events.

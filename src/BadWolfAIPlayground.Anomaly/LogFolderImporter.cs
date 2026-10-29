@@ -124,6 +124,7 @@ public static partial class LogFolderImporter
                     LogEvent previous = combined[candidateIndex];
                     if (!string.Equals(previous.SourceFile, relative,
                             StringComparison.OrdinalIgnoreCase) &&
+                        IsKnownMirroredTargetPair(previous.SourceFile, relative) &&
                         !previous.AlsoInFiles.Contains(
                             relative, StringComparer.OrdinalIgnoreCase))
                     {
@@ -217,6 +218,18 @@ public static partial class LogFolderImporter
 
     private static bool IsGeneralAppLog(string path) =>
         ComponentName(path).Equals("App", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsKnownMirroredTargetPair(string first, string second)
+    {
+        // Do not silently conflate two independent components that happen
+        // to log the same text at the same time. Only known App/component
+        // mirrors and copied versions of the same named file are deduplicated.
+        bool firstIsGeneral = IsGeneralAppLog(first);
+        bool secondIsGeneral = IsGeneralAppLog(second);
+        return firstIsGeneral != secondIsGeneral ||
+            string.Equals(Path.GetFileName(first), Path.GetFileName(second),
+                StringComparison.OrdinalIgnoreCase);
+    }
 
     [GeneratedRegex(@"[_-]\d{4}-\d{2}-\d{2}$", RegexOptions.CultureInvariant)]
     private static partial Regex DateSuffix();

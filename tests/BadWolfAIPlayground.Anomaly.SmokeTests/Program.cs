@@ -252,6 +252,21 @@ static void FolderImport()
                        StringComparison.OrdinalIgnoreCase) &&
                    e.Severity == LogSeverity.Unknown),
             "A device log without explicit severity must remain Unknown.");
+
+        // Two independent component logs may legitimately record the same
+        // message at the same instant. Never conflate them unless one is
+        // the mirrored App target or a copy of the same named file.
+        string independent = "2026-10-29 09:05:00.0000 ERROR Device unavailable";
+        File.WriteAllText(Path.Combine(root, "QRReader_2026-10-29.log"),
+            independent + Environment.NewLine);
+        File.WriteAllText(Path.Combine(root, "CLReader_2026-10-29.log"),
+            independent + Environment.NewLine);
+        LogFolderImportResult independentSources = LogFolderImporter.Import(root);
+        Ensure(independentSources.DuplicateCopies == 12 &&
+               independentSources.Combined.Events.Count(e =>
+                   e.Message == "Device unavailable") == 2,
+            "Independent same-time/same-text device events must not be " +
+            "mistaken for NLog copies and dropped.");
     }
     finally
     {
