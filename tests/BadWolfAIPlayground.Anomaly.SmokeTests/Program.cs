@@ -289,7 +289,7 @@ static void FolderGuards()
         catch (InvalidDataException) { failed = true; }
         Ensure(failed, "Oversized file must reject the folder before partial analysis.");
 
-        File.WriteAllBytes(file, [0xFF, 0xFE, 0xFA]); // invalid UTF-16 or UTF-8.
+        File.WriteAllBytes(file, [0xC3, 0x28, 0xFF]); // invalid UTF-8 sequence.
         failed = false;
         try { LogFolderImporter.Import(root); }
         catch (InvalidDataException) { failed = true; }

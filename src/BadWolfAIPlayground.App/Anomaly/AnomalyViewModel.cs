@@ -14,7 +14,7 @@ namespace BadWolfAIPlayground.App.Anomaly;
 public sealed class AnomalyViewModel : ObservableObject, IDisposable
 {
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
-    private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource;
+    private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource, _chooseFolder;
     private CancellationTokenSource? _active;
     private LogParseResult? _loaded;
     private AnomalyReport? _lastReport;
@@ -22,6 +22,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private string _sourceContextStatus =
         "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
     private string _source = "No file selected";
+    private string _filesSummary = "Choose a Logs folder to inspect all components.";
+    private int _duplicateCopies;
     private string _status = "Load a generated example or select a local LOG/TXT file.";
     private string _summary = "No analysis yet.";
     private string _diagnostics = "No parser diagnostics.";
@@ -38,12 +40,15 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _run = new RelayCommand(async () => await AnalyzeAsync(), () => !Busy && _loaded is not null);
         _cancel = new RelayCommand(() => _active?.Cancel(), () => Busy);
         _chooseSource = new RelayCommand(async () => await ChooseSourceAsync(), () => !Busy);
+        _chooseFolder = new RelayCommand(async () => await ChooseFolderAsync(), () => !Busy);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
     public ObservableCollection<AnomalyFindingRow> Findings { get; } = [];
+    public ObservableCollection<AnomalySourceFileRow> SourceFiles { get; } = [];
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
+    public ICommand ChooseFolderCommand => _chooseFolder;
     public ICommand AnalyzeCommand => _run;
     public ICommand CancelCommand => _cancel;
     public ICommand ChooseSourceCommand => _chooseSource;
@@ -53,6 +58,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _sourceContextStatus, value);
     }
     public string SourceName { get => _source; private set => SetProperty(ref _source, value); }
+    public string SourceFilesSummary
+    {
+        get => _filesSummary;
+        private set => SetProperty(ref _filesSummary, value);
+    }
+    public int DuplicateCopies
+    {
+        get => _duplicateCopies;
+        private set => SetProperty(ref _duplicateCopies, value);
+    }
     public string StatusText { get => _status; private set => SetProperty(ref _status, value); }
     public string Summary { get => _summary; private set => SetProperty(ref _summary, value); }
     public string Diagnostics { get => _diagnostics; private set => SetProperty(ref _diagnostics, value); }
@@ -85,6 +100,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _run.NotifyCanExecuteChanged();
                 _cancel.NotifyCanExecuteChanged();
                 _chooseSource.NotifyCanExecuteChanged();
+                _chooseFolder.NotifyCanExecuteChanged();
             }
         }
     }
@@ -95,13 +111,14 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     public Task ImportTextAsync(string name, string text) => ExecuteAsync(async token =>
     {
-        LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token), token);
+        LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token, name), token);
         AnomalyReport analyzed = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
         token.ThrowIfCancellationRequested();
         await _dispatcher.InvokeAsync(() =>
         {
             _loaded = parsed;
+            ClearFileSummary();
             SourceName = name;
             string preview = string.Join(Environment.NewLine,
                 text.Split('\n').Take(5).Select(s => s.TrimEnd('\r')));
@@ -117,19 +134,97 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         // No imported log is persisted by this lab.
         var imported = await LocalTextLoader.LoadAsync([path], token);
         string text = imported[0].Content;
-        LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token), token);
+        LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token, Path.GetFileName(path)), token);
         AnomalyReport result = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
         token.ThrowIfCancellationRequested();
         await _dispatcher.InvokeAsync(() =>
         {
             _loaded = parsed;
+            ClearFileSummary();
             SourceName = Path.GetFileName(path);
             Preview = text[..Math.Min(text.Length, 650)];
             Apply(result);
             _run.NotifyCanExecuteChanged();
         });
     });
+
+    /// <summary>
+    /// Loads every supported NLog text file from one selected Logs folder,
+    /// including nested archives. All-or-nothing, cancellable, offline.
+    /// </summary>
+    public Task ImportFolderAsync(string folder) => ExecuteAsync(async token =>
+    {
+        StatusText = "Scanning local Logs folder...";
+        var progress = new Progress<LogFolderProgress>(item =>
+        {
+            if (Busy && _active?.IsCancellationRequested == false)
+            {
+                StatusText =
+                    $"Reading {item.CurrentFile}/{item.TotalFiles}: {item.RelativePath}";
+            }
+        });
+        LogFolderImportResult imported = await Task.Run(() =>
+            LogFolderImporter.Import(folder, token, progress), token);
+        AnomalyReport report = await Task.Run(() =>
+            AnomalyDetector.Analyze(imported.Combined,
+                new AnomalyOptions(Sensitivity), token), token);
+        token.ThrowIfCancellationRequested();
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _loaded = imported.Combined;
+            SourceName = $"{Path.GetFileName(Path.TrimEndingDirectorySeparator(folder))}" +
+                $" — {imported.Files.Count:N0} log files";
+            Preview =
+                "All supported .log and .txt files in the chosen folder, including old/, " +
+                "were analyzed locally. Every finding includes its original " +
+                "relative filename and physical line number.";
+            SourceFiles.Clear();
+            foreach (LogFolderFile file in imported.Files
+                .OrderByDescending(f => f.ProblemEvents)
+                .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
+            {
+                SourceFiles.Add(new AnomalySourceFileRow(
+                    file.RelativePath, file.Component, file.DatedEvents,
+                    file.ProblemEvents, file.SkippedLines, file.ContinuationLines));
+            }
+            DuplicateCopies = imported.DuplicateCopies;
+            int components = imported.Files.Select(f => f.Component)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            SourceFilesSummary =
+                $"{imported.Files.Count:N0} log files · {components:N0} components · " +
+                $"{imported.TotalBytes / 1048576.0:0.##} MiB. " +
+                $"Exact copies in multiple NLog targets: {imported.DuplicateCopies:N0}. " +
+                "The aggregate counts distinct events; file rows include original copies.";
+            Apply(report);
+            _run.NotifyCanExecuteChanged();
+        });
+    });
+
+    private async Task ChooseFolderAsync()
+    {
+        if (Busy || _disposed)
+        {
+            return;
+        }
+
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Select the folder containing all application logs",
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            await ImportFolderAsync(dialog.FolderName);
+        }
+    }
+
+    private void ClearFileSummary()
+    {
+        SourceFiles.Clear();
+        SourceFilesSummary = "Single log / built-in demo; no Logs folder selected.";
+        DuplicateCopies = 0;
+    }
 
     public Task AnalyzeAsync() => ExecuteAsync(async token =>
     {
@@ -265,11 +360,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             if (_loaded is not null)
             {
                 LogEvent? problem = _loaded.Events.FirstOrDefault(e =>
-                    e.LineNumber == item.SourceLine);
+                    e.LineNumber == item.SourceLine &&
+                    string.Equals(e.SourceFile, item.SourceFile,
+                        StringComparison.OrdinalIgnoreCase));
                 if (problem is not null)
                 {
                     LogEvent? caller = _loaded.Events
-                        .Where(e => e.LineNumber < item.SourceLine &&
+                        .Where(e =>
+                                    string.Equals(e.SourceFile, item.SourceFile,
+                                        StringComparison.OrdinalIgnoreCase) &&
+                                    e.LineNumber < item.SourceLine &&
                                     e.LineNumber >= item.SourceLine - 3 &&
                                     (problem.Timestamp - e.Timestamp).Duration() <=
                                         TimeSpan.FromSeconds(3))
@@ -286,12 +386,17 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 }
             }
 
+            string originalLocation = string.IsNullOrWhiteSpace(item.SourceFile)
+                ? $"Log line {item.SourceLine}"
+                : $"{item.SourceFile}:{item.SourceLine}";
+            string otherTargets = item.AlsoInFiles.Count == 0 ? "" :
+                $" (also in {string.Join(", ", item.AlsoInFiles)})";
             Findings.Add(new AnomalyFindingRow(
                 item.Kind == AnomalyKind.ErrorBurst ? "BURST" : "RARE ERROR",
                 item.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
                 item.Title,
                 item.Explanation,
-                $"Log line {item.SourceLine}: {item.Evidence}",
+                $"{originalLocation}{otherTargets}: {item.Evidence}",
                 sourceHint));
         }
 
@@ -329,3 +434,7 @@ public sealed record AnomalyBucketRow(
 public sealed record AnomalyFindingRow(
     string Kind, string Time, string Title, string Explanation,
     string Evidence, string SourceHint);
+
+public sealed record AnomalySourceFileRow(
+    string RelativePath, string Component, int DatedEvents,
+    int ProblemEvents, int SkippedLines, int ContinuationLines);
