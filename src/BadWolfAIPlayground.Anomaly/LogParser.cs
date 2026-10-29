@@ -11,7 +11,8 @@ public static partial class LogParser
 {
     public const int MaxEvents = 200_000;
 
-    public static LogParseResult Parse(string content, CancellationToken cancellationToken = default)
+    public static LogParseResult Parse(
+        string content, CancellationToken cancellationToken = default, string sourceFile = "")
     {
         ArgumentNullException.ThrowIfNull(content);
         var parsed = new List<LogEvent>();
@@ -68,7 +69,10 @@ public static partial class LogParser
                 throw new InvalidDataException(
                     $"Log exceeds {MaxEvents:N0} parsed events. Select a smaller time range.");
             }
-            parsed.Add(new LogEvent(timestamp, severity, message, total));
+            parsed.Add(new LogEvent(timestamp, severity, message, total)
+            {
+                SourceFile = sourceFile
+            });
         }
         cancellationToken.ThrowIfCancellationRequested();
         return new LogParseResult(parsed, total, skipped, continuations);

@@ -99,7 +99,11 @@ public static partial class AnomalyDetector
                     $"Observed {problems[i]} warning/error events in {minutes} minute(s), " +
                     $"versus a typical {typical:0.#}; robust threshold {threshold:0.#}. " +
                     "This detects a spike, not its root cause.",
-                    example.Message, example.LineNumber, problems[i], typical, threshold));
+                    example.Message, example.LineNumber, problems[i], typical, threshold)
+                {
+                    SourceFile = example.SourceFile,
+                    AlsoInFiles = example.AlsoInFiles
+                });
             }
         }
 
@@ -126,7 +130,11 @@ public static partial class AnomalyDetector
                     $"{errors.Length} errors. IDs/numbers are normalized. " +
                     "Rare does not necessarily mean dangerous.",
                     example.Message, example.LineNumber, count,
-                    errors.Length, maxRare));
+                    errors.Length, maxRare)
+                {
+                    SourceFile = example.SourceFile,
+                    AlsoInFiles = example.AlsoInFiles
+                });
             }
         }
 

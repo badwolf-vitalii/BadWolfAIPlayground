@@ -9,7 +9,9 @@ var checks = new (string Name, Action Execute)[]
     ("Insufficient history stays explicit", ShortLog),
     ("Cancellation and invalid options", FailSafely),
     ("Sensitivity controls actual threshold", Sensitivity),
-    ("Optional offline C# log-template source context", SourceContext)
+    ("Optional offline C# log-template source context", SourceContext),
+    ("Import entire Logs directory with component provenance", FolderImport),
+    ("Folder importer fails safely for invalid and oversized sets", FolderGuards)
 };
 
 int failed = 0;
@@ -164,6 +166,134 @@ static void SourceContext()
             "Use explicit DEBUG file:line caller metadata where present.");
         Ensure(LogSourceContextIndex.TryReadCallerLocation("Unrelated error") is null,
             "Never fabricate a source location from an unrelated message.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+
+static void FolderImport()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-Logs-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        Directory.CreateDirectory(Path.Combine(root, "old"));
+        string start = "2026-10-29 09:00:00.0000";
+        var app = new System.Text.StringBuilder();
+        var sale = new System.Text.StringBuilder();
+        var pos = new System.Text.StringBuilder();
+        for (int minute = 0; minute < 36; minute++)
+        {
+            string prefix = $"2026-10-29 09:{minute:00}:";
+            app.AppendLine(prefix + "00.0000 INFO Service heartbeat");
+            sale.AppendLine(prefix + "02.0000 ERROR Transaction timeout");
+            if (minute == 24)
+            {
+                for (int k = 0; k < 12; k++)
+                {
+                    string burst = prefix + $"{20 + k:00}.0000 ERROR Sale request failed";
+                    sale.AppendLine(burst);
+                    app.AppendLine(burst); // NLog mirrors this exact event.
+                }
+            }
+
+            pos.AppendLine(prefix + "03.0000 INFO POS reader active");
+        }
+        string appFile = Path.Combine(root, "App_2026-10-29.log");
+        string saleFile = Path.Combine(root, "SaleController_2026-10-29.log");
+        File.WriteAllText(appFile, app.ToString());
+        File.WriteAllText(saleFile, sale.ToString());
+        File.WriteAllText(Path.Combine(root, "old", "POSReader_2026-10-29.LOG"),
+            pos.ToString());
+        File.WriteAllText(Path.Combine(root, "ignore.json"),
+            "not a dated log");
+        File.WriteAllText(Path.Combine(root, "notes.md"),
+            "ignored");
+
+        LogFolderImportResult folder = LogFolderImporter.Import(root);
+        Ensure(folder.Files.Count == 3 &&
+               folder.Files.Any(f => f.RelativePath.StartsWith(
+                   "old" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) &&
+               folder.Files.Any(f => f.Component == "SaleController") &&
+               folder.Files.All(f => !Path.IsPathRooted(f.RelativePath)),
+            "Recursive folder import must retain relative file origins and components.");
+
+        Ensure(folder.DuplicateCopies == 12 &&
+               folder.Combined.Events.Count == 120 &&
+               folder.Combined.TotalLines == 132,
+            "Mirrored NLog target events must not double-count in the combined timeline.");
+        LogEvent? mirrored = folder.Combined.Events.FirstOrDefault(e =>
+            e.Message == "Sale request failed");
+        Ensure(mirrored is not null && mirrored.SourceFile.StartsWith(
+                   "SaleController_", StringComparison.Ordinal) &&
+               mirrored.AlsoInFiles.Any(f => f.StartsWith("App_", StringComparison.Ordinal)),
+            "Prefer component-specific provenance and keep the mirrored App filename.");
+
+        AnomalyReport report = AnomalyDetector.Analyze(folder.Combined);
+        Ensure(report.Findings.Any(f =>
+                   f.Kind == AnomalyKind.ErrorBurst &&
+                   f.SourceFile.StartsWith("SaleController_", StringComparison.Ordinal) &&
+                   f.SourceLine > 0) &&
+               report.Buckets.Count(b => b.IsBurst) == 1,
+            "Merged time series must detect a real cross-component burst " +
+            "with a source filename and physical line number.");
+
+        // Undated devices use another layout: preserve their dated events
+        // but NEVER invent an ERROR severity when none was recorded.
+        File.WriteAllText(Path.Combine(root, "old", "CardPrinterServer.log"),
+            "2026-10-29 09:00:00.0000 Device failure without severity");
+        LogFolderImportResult withUnknown = LogFolderImporter.Import(root);
+        Ensure(withUnknown.Combined.Events.Any(e =>
+                   e.SourceFile.EndsWith("CardPrinterServer.log",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   e.Severity == LogSeverity.Unknown),
+            "A device log without explicit severity must remain Unknown.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+static void FolderGuards()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-FolderGuards-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        bool failed = false;
+        try { LogFolderImporter.Import(root); }
+        catch (InvalidDataException) { failed = true; }
+        Ensure(failed, "Empty Logs folder needs a clear error, not a successful empty result.");
+
+        string file = Path.Combine(root, "App_2026-10-29.log");
+        File.WriteAllText(file, "2026-10-29 09:00:00.0000 ERROR Example");
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        failed = false;
+        try { LogFolderImporter.Import(root, canceled.Token); }
+        catch (OperationCanceledException) { failed = true; }
+        Ensure(failed, "Cancelled folder scan must stop immediately.");
+
+        using (var stream = new FileStream(file, FileMode.Open, FileAccess.Write))
+        {
+            stream.SetLength(LogFolderImporter.MaxFileBytes + 1);
+        }
+        failed = false;
+        try { LogFolderImporter.Import(root); }
+        catch (InvalidDataException) { failed = true; }
+        Ensure(failed, "Oversized file must reject the folder before partial analysis.");
+
+        File.WriteAllBytes(file, [0xFF, 0xFE, 0xFA]); // invalid UTF-16 or UTF-8.
+        failed = false;
+        try { LogFolderImporter.Import(root); }
+        catch (InvalidDataException) { failed = true; }
+        Ensure(failed, "Invalid encoding must not be silently replaced with mojibake.");
     }
     finally
     {

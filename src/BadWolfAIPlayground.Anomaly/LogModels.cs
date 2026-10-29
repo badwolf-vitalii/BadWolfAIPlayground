@@ -5,7 +5,13 @@ public enum LogSeverity { Unknown, Trace, Debug, Info, Warning, Error, Fatal }
 public enum AnomalyKind { ErrorBurst, RareErrorPattern }
 
 public sealed record LogEvent(
-    DateTimeOffset Timestamp, LogSeverity Severity, string Message, int LineNumber);
+    DateTimeOffset Timestamp, LogSeverity Severity, string Message, int LineNumber)
+{
+    // Relative to the explicitly selected Logs folder, never an absolute path.
+    public string SourceFile { get; init; } = "";
+    // Exact events copied to multiple NLog targets are counted only once.
+    public IReadOnlyList<string> AlsoInFiles { get; init; } = [];
+}
 
 public sealed record LogParseResult(
     IReadOnlyList<LogEvent> Events, int TotalLines, int SkippedLines, int ContinuationLines);
@@ -17,7 +23,11 @@ public sealed record LogTimeBucket(
 
 public sealed record AnomalyFinding(
     AnomalyKind Kind, DateTimeOffset Timestamp, string Title, string Explanation,
-    string Evidence, int SourceLine, int Observed, double Typical, double Threshold);
+    string Evidence, int SourceLine, int Observed, double Typical, double Threshold)
+{
+    public string SourceFile { get; init; } = "";
+    public IReadOnlyList<string> AlsoInFiles { get; init; } = [];
+}
 
 public sealed record AnomalyReport(
     LogParseResult Source, IReadOnlyList<LogTimeBucket> Buckets,
