@@ -326,3 +326,32 @@ irrelevant quote; it adds no additional Qwen or embedding call.
 More relevant later evidence remains preferred to weaker early
 mentions. Test coverage includes the user's exact fox-name
 introductory sentence and the later chunk-2 citation.
+
+
+## Anomaly Detection Lab (v0.3.0 development)
+
+`BadWolfAIPlayground.Anomaly` is a dependency-free .NET 8 module with
+records, a conservative timestamp/severity log parser, a robust
+median/MAD time-bucket outlier detector and a rare error-template
+heuristic. `AnomalyViewModel` invokes parsing and detection on worker
+threads, applies results through the captured WPF dispatcher, supports
+cancellation, and retains the last valid result after a failed import.
+
+The demo is 100% synthetic and deterministic. Production logs are
+accepted only through explicit local selection and the existing
+size-bounded file importer, and remain in memory. Nothing is
+uploaded, stored in embedding caches, or sent to Ollama. The UI
+exposes both timestamped results and counts of unrecognized lines.
+Eight or more buckets are required before producing burst alerts;
+the outlier threshold is median + sensitivity times a robust spread,
+with a minimum additional count of 3 and a minimum total burst of 5.
+Rarer error templates are labeled as investigation leads, not proven
+incidents, and only evaluated with at least 25 errors.
+
+Testing: a dedicated non-WPF anomaly smoke runner covers parser
+accuracy, synthetic error spikes, normal baseline, rare templates,
+sensitivity, insufficient history and cancellation. The Windows WPF
+smoke test additionally opens the third experiment, executes the
+demo, verifies actual finding cards and reanalyzes the same sample
+with a changed sensitivity. Without actual work log samples, the
+supported format and any root-cause interpretation remain provisional.

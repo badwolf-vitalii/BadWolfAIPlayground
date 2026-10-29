@@ -7,10 +7,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>BadWolfAIPlayground</AssemblyName>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\BadWolfAIPlayground.Core\BadWolfAIPlayground.Core.csproj" />
     <ProjectReference Include="..\BadWolfAIPlayground.Search\BadWolfAIPlayground.Search.csproj" />
+    <ProjectReference Include="..\BadWolfAIPlayground.Anomaly\BadWolfAIPlayground.Anomaly.csproj" />
   </ItemGroup>
 </Project>

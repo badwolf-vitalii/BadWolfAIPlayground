@@ -2,7 +2,7 @@
 
 **A local-first C#/.NET WPF playground for understanding how AI can be useful in normal software.**
 
-BadWolfAIPlayground contains small, interactive experiments you can understand, inspect, and reuse in your own applications. Both existing labs run on the local Windows computer; no cloud API key is required.
+BadWolfAIPlayground contains small, interactive experiments you can understand, inspect, and reuse in your own applications. All labs run on the local Windows computer; no cloud API key is required.
 
 ## Experiments
 
@@ -27,6 +27,41 @@ A fully connected neural network implemented from scratch in C#, with **no exter
 - **Restore previous files** reloads only the user-selected local paths and their chosen encoding after a restart; the files are never loaded automatically, and their text is not copied into the checkpoint cache.
 - The File encoding dropdown has a high-contrast dark selection box and dark dropdown entries.
 - Reusable `BadWolfAIPlayground.Search` library independent of WPF; no external NuGet packages.
+
+
+### Anomaly Detection Lab (v0.3.0 development)
+
+The third lab performs **local, explainable statistical analysis** of
+timestamped application logs without Ollama, codebase access, cloud
+services, or external ML dependencies.
+
+- Open a local \`.log\` or \`.txt\` file or load the entirely synthetic
+  36-minute demo with a deliberately injected error burst.
+- Reuse the bounded UTF-8/Unicode importer from Smart Search Lab, but
+  **never save, index, embed, or upload production log text**.
+- Parse dated log entries with common ISO/.NET timestamp forms and
+  \`TRACE/DEBUG/INFO/WARN/ERROR/FATAL\` levels; count skipped and
+  continuation lines. Unrecognized lines do not acquire invented times.
+- Aggregate WARN/ERROR/FATAL counts per interval. The baseline uses
+  the median and median absolute deviation (MAD), so an exceptional
+  error burst can be highlighted against the file's own typical rate.
+  A tiny log has no defensible baseline and should show that limitation.
+- Normalize numbers, GUIDs, and hexadecimal addresses to group error
+  messages into approximate templates, highlighting rare patterns only
+  with enough observations.
+- Show time-bucket timeline, detected findings, exact example log lines,
+  threshold/explanation, and a user-adjustable sensitivity setting.
+- Support cancellation and preserve the previous valid results when
+  a new import fails.
+
+**Important:** this component does NOT understand undocumented error
+codes or prove the cause of a crash. It is an unsupervised statistical
+detector, not an LLM. To interpret real work logs, we should validate
+the timestamp/message format on a *sanitized local excerpt* and then
+add a **project-specific event glossary**. An optional locally run
+Ollama interpreter may use the glossary and cite original lines,
+but should never claim to know undocumented system semantics.
+Confidential work logs should not be committed to a public repository.
 
 #### Local model setup (one-time)
 

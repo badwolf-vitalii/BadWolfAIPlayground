@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="clr-namespace:BadWolfAIPlayground.App.Controls"
         xmlns:search="clr-namespace:BadWolfAIPlayground.App.Search"
+        xmlns:anomaly="clr-namespace:BadWolfAIPlayground.App.Anomaly"
         Title="BadWolf AI Playground"
         Width="1400" Height="900" MinWidth="1090" MinHeight="760"
         WindowStartupLocation="CenterScreen"
@@ -44,13 +45,9 @@
                     <Button x:Name="SmartNavButton" Style="{StaticResource NavigationButton}"
                             Background="#0C1729" Foreground="#B4D5F5" Margin="0,9,0,0"
                             Content="⌕   Smart Search Lab" Click="ShowSmartSearch_Click" />
-                    <StackPanel Orientation="Horizontal" Margin="13,23,0,0">
-                        <TextBlock Text="⌁" FontSize="24" Foreground="#7187A4" />
-                        <TextBlock Text="Anomaly Detection" FontSize="12" Foreground="#899DB8"
-                                   Margin="12,4,0,0" />
-                    </StackPanel>
-                    <TextBlock Text="COMING SOON" FontSize="9" Foreground="#5D738C"
-                               Margin="48,0,0,0" />
+                    <Button x:Name="AnomalyNavButton" Style="{StaticResource NavigationButton}"
+                            Background="#0C1729" Foreground="#B4D5F5" Margin="0,9,0,0"
+                            Content="⌁   Anomaly Detection Lab" Click="ShowAnomaly_Click" />
                 </StackPanel>
 
                 <Border Grid.Row="2" Background="#101F34" CornerRadius="12"
@@ -61,7 +58,7 @@
                         <TextBlock Text="No API keys. No cloud. Just C# and experiments."
                                    TextWrapping="Wrap" FontSize="12" Margin="0,9,0,9"
                                    Foreground="#A2B8D0" />
-                        <TextBlock Text="v0.2.0  ·  .NET 8" FontSize="10"
+                        <TextBlock Text="v0.3.0  ·  .NET 8" FontSize="10"
                                    Foreground="#7088A6" />
                     </StackPanel>
                 </Border>
@@ -528,5 +525,7 @@
         </ScrollViewer>
         <search:SmartSearchView x:Name="SmartSearchContent" Grid.Column="1"
                                 Visibility="Collapsed" />
+        <anomaly:AnomalyView x:Name="AnomalyContent" Grid.Column="1"
+                             Visibility="Collapsed"/>
     </Grid>
 </Window>

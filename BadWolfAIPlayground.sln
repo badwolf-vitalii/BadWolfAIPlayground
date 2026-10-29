@@ -56,14 +56,6 @@ Global
         {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Debug|Any CPU.Build.0 = Debug|Any CPU
         {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.ActiveCfg = Release|Any CPU
         {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.Build.0 = Release|Any CPU
-        {542993F4-7BE2-453E-B48C-7A18146326C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-        {542993F4-7BE2-453E-B48C-7A18146326C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
-        {542993F4-7BE2-453E-B48C-7A18146326C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
-        {542993F4-7BE2-453E-B48C-7A18146326C1}.Release|Any CPU.Build.0 = Release|Any CPU
-        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.Build.0 = Release|Any CPU
     EndGlobalSection
     GlobalSection(SolutionProperties) = preSolution
         HideSolutionNode = FALSE

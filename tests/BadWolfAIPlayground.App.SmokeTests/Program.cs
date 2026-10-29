@@ -12,6 +12,7 @@ using System.Windows.Threading;
 using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
 using BadWolfAIPlayground.App.Search;
+using BadWolfAIPlayground.App.Anomaly;
 using BadWolfAIPlayground.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
@@ -373,6 +374,39 @@ internal static class Program
             Assert(smartSearch.Visibility == Visibility.Collapsed,
                 "Neural Network Lab navigation failed.");
             Console.WriteLine("PASS Smart Search navigation, demo and offline keyword comparison");
+
+            window.NavigateToAnomalyLab();
+            var anomalyView = FindDescendants<AnomalyView>(window).Single();
+            AnomalyViewModel analyzer = anomalyView.AnalysisModel;
+            Assert(anomalyView.Visibility == Visibility.Visible &&
+                   smartSearch.Visibility == Visibility.Collapsed &&
+                   anomalyView.FindName("UseAnomalyDemoButton") is Button &&
+                   anomalyView.FindName("SelectAnomalyLogButton") is Button &&
+                   anomalyView.FindName("AnomalySensitivitySlider") is Slider &&
+                   anomalyView.FindName("ReanalyzeLogButton") is Button,
+                "Anomaly lab must be visible and allow local log selection and sensitivity.");
+
+            Task demoAnalysis = analyzer.UseDemoAsync();
+            PumpUntil(() => demoAnalysis.IsCompleted, TimeSpan.FromSeconds(20));
+            demoAnalysis.GetAwaiter().GetResult();
+            Assert(analyzer.FindingCount >= 2 && analyzer.EventCount >= 200 &&
+                   analyzer.Timeline.Count == 36 &&
+                   analyzer.Findings.Any(f => f.Kind == "BURST") &&
+                   analyzer.Findings.Any(f => f.Kind == "RARE ERROR"),
+                "A real WPF demo must show the expected spike and rare error.");
+            double before = analyzer.Sensitivity;
+            analyzer.Sensitivity = 4.5;
+            Task reanalysis = analyzer.AnalyzeAsync();
+            PumpUntil(() => reanalysis.IsCompleted, TimeSpan.FromSeconds(20));
+            reanalysis.GetAwaiter().GetResult();
+            Assert(!analyzer.Busy && analyzer.EventCount >= 200 &&
+                   analyzer.Sensitivity > before &&
+                   analyzer.StatusText.Contains("locally", StringComparison.OrdinalIgnoreCase),
+                "Reanalysis must update UI locally without model inference.");
+            window.NavigateToNeuralLab();
+            Assert(anomalyView.Visibility == Visibility.Collapsed,
+                "Anomaly navigation must return to the neural lab.");
+            Console.WriteLine("PASS Anomaly Detection WPF navigation, demo, findings and reanalysis");
             return 0;
         }
         catch (Exception exception)
