@@ -23,6 +23,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Hybrid retrieval retains exact source anchors", TestSourceAnchorRetrieval),
     ("Local Ollama Q&A protocol", TestOllamaAnswerProtocol),
     ("Bounded Q&A context and actionable context errors", TestOllamaAnswerContext),
+    ("Local model catalog, CPU/GPU and chat timing", TestRuntimeCatalogAndMetrics),
 };
 int passed = 0;
 foreach ((string name, Func<Task> check) in tests)
@@ -501,6 +502,96 @@ static async Task TestFastAnswers()
         index, embedding, deep, "Як звали лиса?", expandQueries: true);
     Assert(deep.ExpandCalls == 1 && expanded.SearchQueries.Count == 2,
         "The slower multi-query expansion must remain explicitly opt-in.");
+}
+
+static async Task TestRuntimeCatalogAndMetrics()
+{
+    var handler = new StubHandler((request, _) =>
+    {
+        string json = request.RequestUri?.AbsolutePath switch
+        {
+            "/api/tags" => """
+                {"models":[
+                  {"name":"embeddinggemma:latest","size":720000000},
+                  {"name":"qwen2.5:0.5b-instruct","size":398000000},
+                  {"name":"qwen3:4b-instruct","size":3900000000}
+                ]}
+                """,
+            "/api/ps" => """
+                {"models":[
+                  {"name":"qwen3:4b-instruct","size":3900000000,
+                   "size_vram":0,"context_length":8192},
+                  {"name":"qwen2.5:0.5b-instruct","size":398000000,
+                   "size_vram":398000000,"context_length":4096}
+                ]}
+                """,
+            _ => throw new InvalidOperationException("Unexpected Ollama request")
+        };
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json")
+        });
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+    };
+    using var runtime = new OllamaRuntimeClient(http);
+    IReadOnlyList<LocalOllamaModel> models = await runtime.ListInstalledAsync();
+    Assert(models.Count == 3 && models[0].Name == "qwen2.5:0.5b-instruct" &&
+           models[0].Bytes == 398000000,
+        "Model discovery must return actual locally installed names and sizes.");
+    OllamaExecutionInfo cpu = await runtime.GetExecutionAsync("qwen3:4b-instruct");
+    OllamaExecutionInfo gpu = await runtime.GetExecutionAsync("qwen2.5:0.5b-instruct");
+    OllamaExecutionInfo unloaded = await runtime.GetExecutionAsync("qwen2.5:1.5b-instruct");
+    Assert(cpu.Loaded && cpu.GpuPercent == 0 && cpu.Display.Contains("100% CPU") &&
+           gpu.GpuPercent == 100 && gpu.Display.Contains("100% GPU") &&
+           !unloaded.Loaded && unloaded.GpuPercent is null &&
+           unloaded.Display.Contains("unknown", StringComparison.OrdinalIgnoreCase),
+        "Processor display must come from /api/ps; an unloaded model must be unknown.");
+
+    OllamaChatMetrics metrics = OllamaChatMetrics.FromResponse(
+        JsonDocument.Parse("""{"total_duration":5000000000,"load_duration":1000000000,
+            "prompt_eval_count":110,"prompt_eval_duration":2000000000,
+            "eval_count":80,"eval_duration":2000000000}""").RootElement);
+    Assert(metrics.PromptTokens == 110 && metrics.OutputTokens == 80 &&
+           Math.Abs(metrics.TokensPerSecond!.Value - 40.0) < 0.0001,
+        "Token speed must use output tokens divided by generation duration, not total request time.");
+    OllamaChatMetrics unknown = OllamaChatMetrics.FromResponse(
+        JsonDocument.Parse("{}").RootElement);
+    Assert(unknown.TokensPerSecond is null,
+        "Missing telemetry must be displayed as unknown, never as zero speed.");
+
+    string? selectedModel = null;
+    var chatHandler = new StubHandler(async (request, token) =>
+    {
+        string requestText = await request.Content!.ReadAsStringAsync(token);
+        using JsonDocument requestJson = JsonDocument.Parse(requestText);
+        selectedModel = requestJson.RootElement.GetProperty("model").GetString();
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                """
+                {"message":{"role":"assistant","content":
+                "{\"supported\":false,\"answer\":\"\",\"evidence\":[]}"},
+                 "prompt_eval_count":40,"eval_count":20,"eval_duration":1000000000}
+                """, Encoding.UTF8, "application/json")
+        };
+    });
+    using var chatHttp = new HttpClient(chatHandler)
+    {
+        BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+    };
+    using var answer = new OllamaAnswerProvider(client: chatHttp);
+    answer.SelectModel("qwen2.5:0.5b-instruct");
+    ProposedAnswer refusal = await answer.GenerateAsync("test",
+    [
+        new EvidencePassage(1, new SearchChunk("test.txt", null, 1, "Some sample evidence."), 0.5)
+    ]);
+    Assert(!refusal.Supported && selectedModel == "qwen2.5:0.5b-instruct" &&
+           answer.LastResponseMetrics?.OutputTokens == 20 &&
+           Math.Abs(answer.LastResponseMetrics.TokensPerSecond!.Value - 20) < 0.001,
+        "Switching the answer model must change /api/chat model and capture exact generation metrics.");
 }
 
 static async Task TestOllamaAnswerProtocol()

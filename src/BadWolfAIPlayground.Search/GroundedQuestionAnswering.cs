@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace BadWolfAIPlayground.Search;
@@ -25,6 +26,8 @@ public sealed record GroundedAnswer(
     public AnswerOutcome Outcome { get; init; } = AnswerOutcome.ModelDeclined;
     public IReadOnlyList<EvidencePassage> Candidates { get; init; } = [];
     public IReadOnlyList<string> SearchQueries { get; init; } = [];
+    public TimeSpan RetrievalDuration { get; init; }
+    public TimeSpan GenerationDuration { get; init; }
 }
 
 /// <summary>Only generates text; never reads files or makes remote calls on its own.</summary>
@@ -61,6 +64,7 @@ public static class GroundedQuestionAnswering
         ArgumentNullException.ThrowIfNull(embeddings);
         ArgumentNullException.ThrowIfNull(generator);
         ArgumentException.ThrowIfNullOrWhiteSpace(question);
+        var timer = Stopwatch.StartNew();
 
         // Fast mode uses one local generation call. Query expansion makes a
         // second, sequential LLM request and is opt-in for hard questions.
@@ -146,17 +150,20 @@ public static class GroundedQuestionAnswering
                 new EvidencePassage(position + 1, chunk, fused[chunk].Similarity))
             .ToArray();
 
+        TimeSpan retrievalDuration = timer.Elapsed;
         if (passages.Length == 0)
         {
             return new GroundedAnswer(NotFound, false, [], 0)
             {
                 Outcome = AnswerOutcome.NoCandidates,
-                SearchQueries = queries
+                SearchQueries = queries,
+                RetrievalDuration = retrievalDuration
             };
         }
 
         ProposedAnswer proposed = await generator.GenerateAsync(
             question, passages, cancellationToken).ConfigureAwait(false);
+        TimeSpan generationDuration = timer.Elapsed - retrievalDuration;
         if (!proposed.Supported || string.IsNullOrWhiteSpace(proposed.Answer) ||
             proposed.Evidence is null)
         {
@@ -164,7 +171,9 @@ public static class GroundedQuestionAnswering
             {
                 Outcome = AnswerOutcome.ModelDeclined,
                 Candidates = passages,
-                SearchQueries = queries
+                SearchQueries = queries,
+                RetrievalDuration = retrievalDuration,
+                GenerationDuration = generationDuration
             };
         }
 
@@ -202,13 +211,17 @@ public static class GroundedQuestionAnswering
               {
                   Outcome = AnswerOutcome.UnverifiableCitation,
                   Candidates = passages,
-                  SearchQueries = queries
+                  SearchQueries = queries,
+                  RetrievalDuration = retrievalDuration,
+                  GenerationDuration = generationDuration
               }
             : new GroundedAnswer(proposed.Answer.Trim(), true, valid, passages.Length)
               {
                   Outcome = AnswerOutcome.Verified,
                   Candidates = passages,
-                  SearchQueries = queries
+                  SearchQueries = queries,
+                  RetrievalDuration = retrievalDuration,
+                  GenerationDuration = generationDuration
               };
     }
 

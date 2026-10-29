@@ -19,7 +19,15 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
 
     private readonly HttpClient _client;
     private readonly bool _ownsClient;
-    public string ModelName { get; }
+    public string ModelName { get; private set; }
+    public OllamaChatMetrics? LastResponseMetrics { get; private set; }
+
+    public void SelectModel(string modelName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+        ModelName = modelName;
+        LastResponseMetrics = null;
+    }
 
     public OllamaAnswerProvider(string modelName = DefaultModel, HttpClient? client = null)
     {
@@ -164,9 +172,12 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
     private async Task<JsonDocument> ChatAsync(
         string system, string prompt, int maxTokens, CancellationToken token)
     {
+        LastResponseMetrics = null;
+        // Snapshot selection per request. The UI disables switching while busy.
+        string currentModel = ModelName;
         var request = new
         {
-            model = ModelName,
+            model = currentModel,
             stream = false,
             format = "json",
             messages = new[]
@@ -186,7 +197,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
                 if (response.StatusCode == HttpStatusCode.NotFound)
                 {
                     throw new InvalidOperationException(
-                        $"Local answer model '{ModelName}' is not installed. Run: ollama pull {ModelName}");
+                        $"Local answer model '{currentModel}' is not installed. Run: ollama pull {currentModel}");
                 }
 
                 string detail = await response.Content.ReadAsStringAsync(token)
@@ -215,6 +226,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
                 throw new InvalidDataException("Ollama returned no chat message content.");
             }
 
+            LastResponseMetrics = OllamaChatMetrics.FromResponse(responseJson.RootElement);
             string text = content.GetString() ?? "";
             return JsonDocument.Parse(text);
         }
