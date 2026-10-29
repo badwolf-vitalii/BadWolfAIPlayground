@@ -19,7 +19,8 @@ public static class LocalTextLoader
     public static async Task<IReadOnlyList<SearchDocument>> LoadAsync(
         IReadOnlyList<string> filePaths,
         CancellationToken cancellationToken = default,
-        IProgress<FileImportProgress>? progress = null)
+        IProgress<FileImportProgress>? progress = null,
+        TextFileEncoding fileEncoding = TextFileEncoding.Auto)
     {
         ArgumentNullException.ThrowIfNull(filePaths);
         if (filePaths.Count == 0 || filePaths.Count > MaxDocuments)
@@ -64,8 +65,10 @@ public static class LocalTextLoader
 
             await using var stream = new FileStream(info.FullName, FileMode.Open, FileAccess.Read,
                 FileShare.Read, BufferCharacters, FileOptions.Asynchronous | FileOptions.SequentialScan);
-            using var reader = new StreamReader(stream, new UTF8Encoding(false, true),
-                detectEncodingFromByteOrderMarks: true, bufferSize: BufferCharacters, leaveOpen: true);
+            using var reader = new StreamReader(stream, ResolveEncoding(fileEncoding),
+                detectEncodingFromByteOrderMarks: fileEncoding is TextFileEncoding.Auto or
+                    TextFileEncoding.Utf16LittleEndian or TextFileEncoding.Utf16BigEndian,
+                bufferSize: BufferCharacters, leaveOpen: true);
             var buffer = new char[BufferCharacters];
             var builder = new StringBuilder((int)Math.Min(stream.Length, 1_000_000));
 
@@ -77,7 +80,9 @@ public static class LocalTextLoader
                 {
                     if (buffer.AsSpan(0, count).Contains('\0'))
                     {
-                        throw new InvalidDataException($"{info.Name} contains binary data (NUL characters).");
+                        throw new InvalidDataException(
+                            $"{info.Name} contains NUL characters. If it is UTF-16 text without a BOM, " +
+                            "select UTF-16 LE or UTF-16 BE; otherwise the file may contain binary data.");
                     }
 
                     charactersCompleted += count;
@@ -99,9 +104,12 @@ public static class LocalTextLoader
             }
             catch (DecoderFallbackException exception)
             {
-                throw new InvalidDataException(
-                    $"{info.Name} is not UTF-8 text (or UTF-16 with a BOM). Convert it to UTF-8 and try again.",
-                    exception);
+                string reason = fileEncoding == TextFileEncoding.Auto
+                    ? $"{info.Name} contains bytes that are not valid UTF-8. " +
+                      "If this is a legacy TXT, select Windows-1251 (Cyrillic) or Windows-1252 (Western), then retry."
+                    : $"{info.Name} could not be decoded as {EncodingName(fileEncoding)}. " +
+                      "Choose the encoding used when the file was saved.";
+                throw new InvalidDataException(reason, exception);
             }
 
             // A file growing beyond the preflight size must not escape the overall safety cap.
@@ -127,4 +135,33 @@ public static class LocalTextLoader
 
         return documents;
     }
+
+    private static Encoding ResolveEncoding(TextFileEncoding fileEncoding)
+    {
+        // Code pages are never guessed: picking an incorrect legacy code page can silently
+        // produce readable but wrong text and therefore misleading semantic-search results.
+        return fileEncoding switch
+        {
+            TextFileEncoding.Auto => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true),
+            TextFileEncoding.Utf16LittleEndian => new UnicodeEncoding(
+                bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true),
+            TextFileEncoding.Utf16BigEndian => new UnicodeEncoding(
+                bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true),
+            TextFileEncoding.Windows1251 => CodePagesEncodingProvider.Instance.GetEncoding(
+                1251, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)!,
+            TextFileEncoding.Windows1252 => CodePagesEncodingProvider.Instance.GetEncoding(
+                1252, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback)!,
+            _ => throw new ArgumentOutOfRangeException(nameof(fileEncoding), fileEncoding, null)
+        };
+    }
+
+    private static string EncodingName(TextFileEncoding fileEncoding) => fileEncoding switch
+    {
+        TextFileEncoding.Windows1251 => "Windows-1251",
+        TextFileEncoding.Windows1252 => "Windows-1252",
+        TextFileEncoding.Utf16LittleEndian => "UTF-16 LE",
+        TextFileEncoding.Utf16BigEndian => "UTF-16 BE",
+        _ => "UTF-8 / Unicode BOM"
+    };
 }

@@ -11,6 +11,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Cancellation", TestCancellation),
     ("Ollama API protocol", TestOllamaProtocol),
     ("Large text file imports and safety limits", TestFileLoader),
+    ("Explicit legacy encodings and readable import errors", TestTextEncodings),
     ("Incremental embedding batches and progress", TestLargeIndex),
     ("Oversized index protection", TestIndexLimit)
 };
@@ -158,6 +159,75 @@ static async Task TestFileLoader()
     {
         Directory.Delete(folder, recursive: true);
     }
+}
+
+static async Task TestTextEncodings()
+{
+    string folder = Path.Combine(Path.GetTempPath(), $"badwolf-text-encoding-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(folder);
+    string file = Path.Combine(folder, "legacy.txt");
+    try
+    {
+        const string cyrillic = "Помилка запису в базу даних. З'єднання закрито.";
+        byte[] cp1251 = CodePagesEncodingProvider.Instance.GetEncoding(1251)!.GetBytes(cyrillic);
+        await File.WriteAllBytesAsync(file, cp1251);
+        InvalidDataException wrongEncoding = await CaptureAsync<InvalidDataException>(
+            () => LocalTextLoader.LoadAsync([file]));
+        Assert(wrongEncoding.Message.Contains("legacy.txt", StringComparison.Ordinal) &&
+               wrongEncoding.Message.Contains("Windows-1251", StringComparison.Ordinal),
+            "Default decoding errors must name the file and explain how to retry in a different encoding.");
+
+        IReadOnlyList<SearchDocument> legacy = await LocalTextLoader.LoadAsync(
+            [file], fileEncoding: TextFileEncoding.Windows1251);
+        Assert(legacy.Count == 1 && legacy[0].Content == cyrillic,
+            "Explicit Windows-1251 must preserve Ukrainian text without replacing characters.");
+        Assert(KeywordSearch.Find(TextChunker.Split(legacy), "Помилка").Count > 0,
+            "Decoded Cyrillic must be searchable.");
+
+        const string western = "Errore di comunicazione: città, perché, già.";
+        byte[] cp1252 = CodePagesEncodingProvider.Instance.GetEncoding(1252)!.GetBytes(western);
+        await File.WriteAllBytesAsync(file, cp1252);
+        IReadOnlyList<SearchDocument> westernText = await LocalTextLoader.LoadAsync(
+            [file], fileEncoding: TextFileEncoding.Windows1252);
+        Assert(westernText[0].Content == western,
+            "Explicit Windows-1252 must preserve accented Italian text.");
+
+        const string unicode = "No BOM - документ UTF16 без заголовка";
+        await File.WriteAllBytesAsync(file, Encoding.Unicode.GetBytes(unicode));
+        InvalidDataException noBom = await CaptureAsync<InvalidDataException>(
+            () => LocalTextLoader.LoadAsync([file]));
+        Assert(noBom.Message.Contains("UTF-16", StringComparison.Ordinal),
+            "BOM-less UTF-16 errors must recommend the correct encoding override.");
+        IReadOnlyList<SearchDocument> utf16 = await LocalTextLoader.LoadAsync(
+            [file], fileEncoding: TextFileEncoding.Utf16LittleEndian);
+        Assert(utf16[0].Content == unicode, "BOM-less UTF-16LE decoding failed.");
+        await File.WriteAllBytesAsync(file, Encoding.BigEndianUnicode.GetBytes(unicode));
+        IReadOnlyList<SearchDocument> utf16be = await LocalTextLoader.LoadAsync(
+            [file], fileEncoding: TextFileEncoding.Utf16BigEndian);
+        Assert(utf16be[0].Content == unicode, "BOM-less UTF-16BE decoding failed.");
+
+        await File.WriteAllTextAsync(file, "Valid UTF-8 text — тест.");
+        IReadOnlyList<SearchDocument> normal = await LocalTextLoader.LoadAsync([file]);
+        Assert(normal[0].Content == "Valid UTF-8 text — тест.",
+            "Auto detection must continue to read ordinary UTF-8.");
+    }
+    finally
+    {
+        Directory.Delete(folder, recursive: true);
+    }
+}
+
+static async Task<T> CaptureAsync<T>(Func<Task> operation) where T : Exception
+{
+    try
+    {
+        await operation();
+    }
+    catch (T error)
+    {
+        return error;
+    }
+    throw new InvalidOperationException($"Expected {typeof(T).Name} to capture.");
 }
 
 static async Task TestLargeIndex()

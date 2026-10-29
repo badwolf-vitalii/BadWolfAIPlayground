@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
 using BadWolfAIPlayground.App.Search;
+using BadWolfAIPlayground.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
 
@@ -128,6 +129,10 @@ internal static class Program
             var smartSearch = FindDescendants<SmartSearchView>(window).Single();
             Assert(smartSearch.Visibility == Visibility.Visible, "Smart Search navigation failed.");
             SmartSearchViewModel searchModel = smartSearch.SearchModel;
+            ComboBox encodingSelector = FindDescendants<ComboBox>(smartSearch).Single();
+            Assert(encodingSelector.SelectedItem is FileEncodingChoice initialChoice &&
+                   initialChoice.Encoding == TextFileEncoding.Auto,
+                "The file encoding selector must be visible and default to strict UTF-8 / BOM detection.");
             searchModel.LoadDemoCommand.Execute(null);
             Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 4,
                 "The local demonstration corpus did not load.");
@@ -184,6 +189,45 @@ internal static class Program
                 Assert(searchWrongThreadNotifications == 0,
                     "Large-file import and searches must update the ViewModel on the WPF UI thread.");
                 Console.WriteLine("PASS 3.5 MiB import, progress, preserved tail and large-file keyword search");
+
+                // A legacy Windows TXT must display its real error in the import card
+                // while keeping the previous large file, then succeed after choosing
+                // the original code page without converting the file manually.
+                byte[] legacyText = System.Text.CodePagesEncodingProvider.Instance.GetEncoding(1251)!
+                    .GetBytes("Помилка запису в базу даних. З'єднання закрито.");
+                File.WriteAllBytes(largePath, legacyText);
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Auto);
+                Task invalidImport = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => invalidImport.IsCompleted, TimeSpan.FromSeconds(20));
+                invalidImport.GetAwaiter().GetResult();
+                Assert(searchModel.HasImportError &&
+                       searchModel.ImportLabel.Contains("Import failed:", StringComparison.Ordinal) &&
+                       searchModel.ImportLabel.Contains("Windows-1251", StringComparison.Ordinal),
+                    "The import card must show the actual file decoding error and a usable retry suggestion.");
+                Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 1 &&
+                       searchModel.DocumentsLabel.Contains("chunks", StringComparison.Ordinal),
+                    "A rejected import must preserve the previous searchable document.");
+                searchModel.SelectedFileEncoding = searchModel.FileEncodingChoices.Single(
+                    choice => choice.Encoding == TextFileEncoding.Windows1251);
+                Assert(encodingSelector.SelectedItem is FileEncodingChoice selected &&
+                       selected.Encoding == TextFileEncoding.Windows1251,
+                    "The encoding choice must remain synchronized with the WPF selector.");
+                Task legacyImport = searchModel.ImportFilesAsync([largePath]);
+                PumpUntil(() => legacyImport.IsCompleted, TimeSpan.FromSeconds(20));
+                legacyImport.GetAwaiter().GetResult();
+                Assert(!searchModel.HasImportError && searchModel.ImportProgress == 100 &&
+                       searchModel.ImportLabel.StartsWith("Imported", StringComparison.Ordinal),
+                    "Retrying with Windows-1251 should import the original file without errors.");
+                searchModel.Query = "Помилка";
+                searchModel.CompareCommand.Execute(null);
+                PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));
+                Assert(searchModel.KeywordResults.Count > 0 &&
+                       searchModel.KeywordResults[0].Snippet.Contains("Помилка", StringComparison.Ordinal),
+                    "The correctly decoded legacy file must be searchable.");
+                Assert(searchWrongThreadNotifications == 0,
+                    "Decoding errors, encoding selection and retry must remain on the WPF dispatcher.");
+                Console.WriteLine("PASS failed TXT import diagnostics and Windows-1251 retry in WPF");
             }
             finally
             {

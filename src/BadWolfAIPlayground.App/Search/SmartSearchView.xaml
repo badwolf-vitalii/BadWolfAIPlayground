@@ -59,8 +59,31 @@
                             <Button Content="Clear" Command="{Binding ClearCommand}"
                                     Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
                         </WrapPanel>
-                        <TextBlock Text="{Binding ImportLabel}" Foreground="#9EB9D3"
-                                   FontSize="11" Margin="0,0,0,6" TextWrapping="Wrap" />
+                        <StackPanel Margin="0,0,0,12">
+                            <TextBlock Text="File encoding" Foreground="#B9D6F5"
+                                       FontSize="11" FontWeight="SemiBold" Margin="0,0,0,5" />
+                            <ComboBox ItemsSource="{Binding FileEncodingChoices}"
+                                      SelectedItem="{Binding SelectedFileEncoding, Mode=TwoWay}"
+                                      DisplayMemberPath="Label"
+                                      Background="#12263E" Foreground="#E3EFFC"
+                                      BorderBrush="#34516D" Padding="8,5" MinHeight="30" />
+                            <TextBlock Text="Use Auto for normal UTF-8 files. For older TXT files, choose the original Windows encoding and select the file again."
+                                       Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                                       FontSize="10" Margin="0,6,0,0" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding ImportLabel}"
+                                   FontSize="11" Margin="0,0,0,6" TextWrapping="Wrap">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="#9EB9D3" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasImportError}" Value="True">
+                                            <Setter Property="Foreground" Value="#FF999F" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                         <ProgressBar Value="{Binding ImportProgress, Mode=OneWay}" Minimum="0" Maximum="100"
                                      Height="6" Background="#1E3048" Foreground="#3EA2EA"
                                      BorderThickness="0" Margin="0,0,0,10" />
@@ -75,7 +98,7 @@
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                        <TextBlock Text="Supported: TXT, MD, LOG, JSON, CSV, XML, C#, XAML, YAML (UTF-8 and BOM-marked UTF-16). 40 files max, 16 MiB each, 32 MiB combined. New selection replaces the old set."
+                        <TextBlock Text="Supported: TXT, MD, LOG, JSON, CSV, XML, C#, XAML, YAML. Auto detects UTF-8/Unicode BOM; legacy Windows-1251/1252 and BOM-less UTF-16 are selectable. 40 files max, 16 MiB each, 32 MiB combined. New selection replaces the old set."
                                    Style="{StaticResource MutedText}" FontSize="10"
                                    TextWrapping="Wrap" Margin="0,13,0,0" />
                     </StackPanel>

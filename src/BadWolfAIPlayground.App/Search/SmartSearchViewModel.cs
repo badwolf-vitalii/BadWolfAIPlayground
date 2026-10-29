@@ -38,7 +38,18 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _searchHint = "Try a Ukrainian query against English demo documents.";
     private double _indexProgress;
     private double _importProgress;
-    private string _importLabel = "Select UTF-8 text files (up to 16 MiB each).";
+    private string _importLabel = "Select text files (up to 16 MiB each).";
+    private bool _hasImportError;
+    private FileEncodingChoice? _selectedFileEncoding;
+
+    public IReadOnlyList<FileEncodingChoice> FileEncodingChoices { get; } =
+    [
+        new("Auto (UTF-8 / Unicode BOM)", TextFileEncoding.Auto),
+        new("Windows-1251 (Cyrillic)", TextFileEncoding.Windows1251),
+        new("Windows-1252 (Western)", TextFileEncoding.Windows1252),
+        new("UTF-16 LE (no BOM)", TextFileEncoding.Utf16LittleEndian),
+        new("UTF-16 BE (no BOM)", TextFileEncoding.Utf16BigEndian)
+    ];
 
     public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null)
     {
@@ -150,10 +161,23 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _importLabel, value);
     }
 
+    public bool HasImportError
+    {
+        get => _hasImportError;
+        private set => SetProperty(ref _hasImportError, value);
+    }
+
+    public FileEncodingChoice SelectedFileEncoding
+    {
+        get => _selectedFileEncoding ?? FileEncodingChoices[0];
+        set => SetProperty(ref _selectedFileEncoding, value);
+    }
+
     private void LoadDemo()
     {
         ReplaceDocuments(DemoDocuments.Create());
         ImportProgress = 0;
+        HasImportError = false;
         ImportLabel = "Loaded the 4 built-in demo notes.";
     }
 
@@ -184,9 +208,11 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
         int generation = ++_importGeneration;
         bool completed = false;
+        TextFileEncoding encoding = SelectedFileEncoding.Encoding;
         ImportProgress = 0;
+        HasImportError = false;
         ImportLabel = "Reading selected files...";
-        await RunOperationAsync(async token =>
+        OperationOutcome outcome = await RunOperationAsync(async token =>
         {
             var progress = new Progress<FileImportProgress>(state =>
             {
@@ -204,7 +230,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 }));
             });
 
-            IReadOnlyList<SearchDocument> documents = await LocalTextLoader.LoadAsync(paths, token, progress);
+            IReadOnlyList<SearchDocument> documents = await LocalTextLoader.LoadAsync(
+                paths, token, progress, fileEncoding: encoding);
             await DispatchAsync(() => ImportLabel = "Preparing searchable text chunks...");
             IReadOnlyList<SearchChunk> chunks = await Task.Run(
                 () => TextChunker.Split(documents, cancellationToken: token), token);
@@ -223,9 +250,13 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         {
             _importGeneration++;
             ImportProgress = completed ? 100 : 0;
+            HasImportError = !completed && !outcome.Cancelled;
             ImportLabel = completed
                 ? $"Imported {_documents.Count} file(s) · {_chunks.Count:N0} searchable chunks."
-                : "Import did not complete; previous documents are unchanged.";
+                : outcome.Cancelled
+                    ? "Import cancelled. Previously loaded documents are unchanged."
+                    : $"Import failed: {outcome.ErrorMessage ?? "Unknown error"}. " +
+                      "Previously loaded documents are unchanged.";
         });
     }
 
@@ -263,7 +294,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     {
         ReplaceDocuments([]);
         ImportProgress = 0;
-        ImportLabel = "Select UTF-8 text files (up to 16 MiB each).";
+        HasImportError = false;
+        ImportLabel = "Select text files (up to 16 MiB each).";
         StatusText = "Documents cleared. Load examples or select files to begin again.";
     }
 
@@ -374,11 +406,11 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         });
     }
 
-    private async Task RunOperationAsync(Func<CancellationToken, Task> operation)
+    private async Task<OperationOutcome> RunOperationAsync(Func<CancellationToken, Task> operation)
     {
         if (IsBusy)
         {
-            return;
+            return new OperationOutcome(false, false, "Another operation is already running");
         }
 
         using var cancellation = new CancellationTokenSource();
@@ -387,6 +419,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         try
         {
             await operation(cancellation.Token);
+            return new OperationOutcome(true, false, null);
         }
         catch (OperationCanceledException)
         {
@@ -399,6 +432,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     IndexLabel = "No completed AI index (cancelled; source documents are retained).";
                 }
             });
+            return new OperationOutcome(false, true, null);
         }
         catch (Exception exception)
         {
@@ -411,6 +445,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     IndexLabel = "No completed AI index (source documents are retained).";
                 }
             });
+            return new OperationOutcome(false, false, exception.Message);
         }
         finally
         {
@@ -433,6 +468,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         return _dispatcher.InvokeAsync(action).Task;
     }
 
+    private sealed record OperationOutcome(bool Succeeded, bool Cancelled, string? ErrorMessage);
+
     public void Dispose()
     {
         if (_disposed)
@@ -446,3 +483,6 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _embeddings.Dispose();
     }
 }
+
+/// <summary>A visible, explicit file-decoding choice. Ambiguous legacy text is never guessed.</summary>
+public sealed record FileEncodingChoice(string Label, TextFileEncoding Encoding);
