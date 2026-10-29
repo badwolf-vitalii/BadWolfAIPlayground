@@ -12,7 +12,9 @@ var checks = new (string Name, Action Execute)[]
     ("Optional offline C# log-template source context", SourceContext),
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
-    ("File selection recomputes events and duplicate provenance", FolderSelection)
+    ("File selection recomputes events and duplicate provenance", FolderSelection),
+    ("Multiline exception context is bounded and does not invent events", MultilineContext),
+    ("Findings retain original exception evidence", FindingExceptionContext)
 };
 
 int failed = 0;
@@ -414,6 +416,75 @@ static void FolderSelection()
     {
         Directory.Delete(root, recursive: true);
     }
+}
+
+
+static void MultilineContext()
+{
+    const string raw =
+        "2026-10-29 09:00:00 ERROR Operation failed\n" +
+        "System.InvalidOperationException: Invalid state\n" +
+        "   at Example.Reader.Process() in C:\\Example\\Reader.cs:line 47\n" +
+        " ---> System.ArgumentException: Invalid argument\n" +
+        "--- End of inner exception stack trace ---\n" +
+        "unrelated undated text\n" +
+        "   at Example.Unrelated.ShouldNotAttach()\n" +
+        "2026-10-29 09:00:01 Device returned ERROR status without a level\n" +
+        "2026-10-29 09:00:02 INFO Recovery completed\n" +
+        "   at Example.Service.Recover()\n";
+    LogParseResult parsed = LogParser.Parse(raw, sourceFile: "Reader.log");
+    Ensure(parsed.Events.Count == 3 && parsed.ContinuationLines == 5 &&
+           parsed.SkippedLines == 2 && parsed.TotalLines == 10,
+        "Only contiguous exception/stack lines should be attached to dated events.");
+    Ensure(parsed.Events[0].Continuation.Contains("System.InvalidOperationException") &&
+           parsed.Events[0].Continuation.Contains("Reader.cs:line 47") &&
+           !parsed.Events[0].Continuation.Contains("ShouldNotAttach") &&
+           parsed.Events[0].SourceFile == "Reader.log" &&
+           parsed.Events[0].LineNumber == 1 &&
+           parsed.Events[1].Severity == LogSeverity.Unknown &&
+           parsed.Events[1].Continuation.Length == 0 &&
+           parsed.Events[2].Continuation.Contains("Recover()"),
+        "Context must retain exact text and provenance without inventing severity.");
+
+    string oversized = "2026-10-29 09:00:00 ERROR Too many frames\n" +
+        string.Join("\n", Enumerable.Range(0, LogParser.MaxContinuationLinesPerEvent + 10)
+            .Select(i => "   at Example.Frame" + i + "(" + new string('X', 180) + ")"));
+    LogParseResult bounded = LogParser.Parse(oversized);
+    Ensure(bounded.Events.Count == 1 &&
+           bounded.ContinuationLines == LogParser.MaxContinuationLinesPerEvent + 10 &&
+           bounded.Events[0].ContinuationTruncated &&
+           bounded.Events[0].Continuation.Length <= LogParser.MaxContinuationCharactersPerEvent &&
+           bounded.Events[0].Continuation.Split('\n').Length <=
+               LogParser.MaxContinuationLinesPerEvent,
+        "Always count recognized frames, but bound retained context per event.");
+}
+
+static void FindingExceptionContext()
+{
+    var builder = new System.Text.StringBuilder();
+    for (int minute = 0; minute < 36; minute++)
+    {
+        builder.AppendLine($"2026-10-29 09:{minute:00}:00 ERROR Retry timeout for job {minute}");
+        if (minute == 20)
+        {
+            builder.AppendLine("2026-10-29 09:20:05 ERROR Worker stopped unexpectedly");
+            builder.AppendLine("System.TimeoutException: A synthetic timeout");
+            builder.AppendLine("   at Example.Worker.Run() in C:\\Sample\\Worker.cs:line 25");
+        }
+    }
+
+    LogParseResult parsed = LogParser.Parse(builder.ToString(), sourceFile: "Worker.log");
+    AnomalyReport report = AnomalyDetector.Analyze(parsed);
+    AnomalyFinding? rare = report.Findings.FirstOrDefault(f =>
+        f.Kind == AnomalyKind.RareErrorPattern &&
+        f.Evidence == "Worker stopped unexpectedly");
+    Ensure(rare is not null && rare.Continuation.Contains("TimeoutException") &&
+           rare.Continuation.Contains("Worker.cs:line 25") &&
+           !rare.ContinuationTruncated &&
+           rare.SourceFile == "Worker.log" && rare.SourceLine > 0 &&
+           report.Source.Events.Count == 37 &&
+           report.TotalProblems == 37,
+        "Real exception details should reach a rare finding without adding dated events.");
 }
 
 static void Ensure(bool expression, string message)

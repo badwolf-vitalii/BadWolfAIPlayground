@@ -291,6 +291,20 @@
                                                        Foreground="#87D5EE" FontFamily="Consolas"
                                                        TextWrapping="Wrap"/>
                                         </Border>
+                                        <Expander Header="Exception / stack trace (original log)"
+                                                  Foreground="#B2DDF2" Background="#081625"
+                                                  Visibility="{Binding ContextVisibility}"
+                                                  Margin="0,8,0,0">
+                                            <Border Padding="8">
+                                                <ScrollViewer MaxHeight="180"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <TextBlock Text="{Binding Context}"
+                                                               Foreground="#C5E0F2" FontFamily="Consolas"
+                                                               FontSize="10" TextWrapping="NoWrap"/>
+                                                </ScrollViewer>
+                                            </Border>
+                                        </Expander>
                                         <TextBlock Text="{Binding SourceHint}"
                                                    Foreground="#A6D8B9" FontSize="10"
                                                    TextWrapping="Wrap" Margin="0,9,0,9"/>

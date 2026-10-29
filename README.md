@@ -481,3 +481,19 @@ against the imported file list and the selected root before
 opening to prevent traversal outside the Logs directory.
 Opening a log is a read/view action in an external editor;
 saving changes in that editor is the user's responsibility.
+
+### Multiline .NET exception and stack context
+
+For NLog layouts that emit exception stack traces on undated lines, finding cards
+now show a collapsed **Exception / stack trace (original log)** panel when
+there is captured context. Contiguous exception headings, stack frames, and
+inner-exception markers are attached to their preceding dated event. An
+unrelated or blank undated line ends the association; no timestamp or
+severity is guessed.
+
+Retained evidence is limited to **32 lines and 4,096 characters per event**.
+Additional recognized stack lines are counted but omitted with a visible
+truncation notice. Duplicate-event matching still uses timestamp, explicit
+severity and primary message, not the continuation. A severity-looking word
+inside a device message is not treated as a log level. Captured details
+remain in memory and do not imply a proven root cause.

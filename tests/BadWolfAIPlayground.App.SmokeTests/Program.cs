@@ -461,6 +461,14 @@ internal static class Program
                                 prefix + $"{20 + k:00}.0000 ERROR Sale request failed";
                             appLog.AppendLine(eventText);
                             salesLog.AppendLine(eventText);
+                            if (k == 0)
+                            {
+                                // Synthetic NLog exception continuation in both targets.
+                                appLog.AppendLine("System.TimeoutException: Retry exhausted");
+                                salesLog.AppendLine("System.TimeoutException: Retry exhausted");
+                                appLog.AppendLine("   at Example.Worker.Send()");
+                                salesLog.AppendLine("   at Example.Worker.Send()");
+                            }
                         }
                     }
                 }
@@ -480,7 +488,10 @@ internal static class Program
                        analyzer.Findings.Any(f =>
                            f.Kind == "BURST" &&
                            f.Evidence.Contains("SaleController_2026-10-29.log:",
-                               StringComparison.Ordinal)),
+                                StringComparison.Ordinal) &&
+                            f.Context.Contains("System.TimeoutException",
+                                StringComparison.Ordinal) &&
+                            f.ContextVisibility == Visibility.Visible),
                     "Multi-file analysis must keep original source lines and " +
                     "not count duplicated App NLog targets twice.");
                 Assert(analyzer.SourceFiles.Any(f =>
@@ -489,6 +500,14 @@ internal static class Program
                                StringComparison.OrdinalIgnoreCase) &&
                            f.Component == "QRReader"),
                     "WPF per-file list must include archive subfolders.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.Header is string header &&
+                    header.StartsWith("Exception / stack trace", StringComparison.Ordinal) &&
+                    expander.DataContext is AnomalyFindingRow row &&
+                    row.Context.Contains("System.TimeoutException", StringComparison.Ordinal)),
+                    "WPF findings must render expandable exception context.");
 
                 // Verify WPF's real checkbox -> ViewModel selection binding.
                 var fileExpander = (Expander)anomalyView.FindName("AnomalyFilesExpander");
@@ -509,7 +528,9 @@ internal static class Program
                        analyzer.SourceFiles.Count(f => f.Included) == 2 &&
                        analyzer.Findings.Any(f =>
                            f.Evidence.Contains("App_2026-10-29.log:",
-                               StringComparison.Ordinal)),
+                                StringComparison.Ordinal) &&
+                            f.Context.Contains("System.TimeoutException",
+                                StringComparison.Ordinal)),
                     "Disabling SaleController must retain App's original copy, " +
                     "recompute true event counts and update evidence origin.");
 

@@ -10,6 +10,8 @@ namespace BadWolfAIPlayground.Anomaly;
 public static partial class LogParser
 {
     public const int MaxEvents = 200_000;
+    public const int MaxContinuationLinesPerEvent = 32;
+    public const int MaxContinuationCharactersPerEvent = 4_096;
 
     public static LogParseResult Parse(
         string content, CancellationToken cancellationToken = default, string sourceFile = "")
@@ -17,6 +19,8 @@ public static partial class LogParser
         ArgumentNullException.ThrowIfNull(content);
         var parsed = new List<LogEvent>();
         int total = 0, skipped = 0, continuations = 0;
+        int capturedContinuationLines = 0;
+        bool canAttachContinuation = false;
         using var reader = new StringReader(content);
         string? line;
         while ((line = reader.ReadLine()) is not null)
@@ -34,23 +38,56 @@ public static partial class LogParser
                     CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal,
                     out DateTimeOffset timestamp))
             {
-                // A stack trace is continuation text, not a new dated event.
-                // Count it but do not invent time or severity for it.
-                if (parsed.Count > 0 && (line.StartsWith("   ", StringComparison.Ordinal) ||
-                    line.StartsWith("\t", StringComparison.Ordinal) ||
-                    line.TrimStart().StartsWith("at ", StringComparison.OrdinalIgnoreCase)))
+                // Only contiguous exception/stack lines belong to the previous
+                // dated entry. Do not invent a new timestamp or severity.
+                if (canAttachContinuation && IsContinuationLine(line))
                 {
                     continuations++;
+                    LogEvent previous = parsed[^1];
+                    if (capturedContinuationLines < MaxContinuationLinesPerEvent)
+                    {
+                        string fragment = line.TrimEnd();
+                        int separator = previous.Continuation.Length == 0 ? 0 : 1;
+                        int room = MaxContinuationCharactersPerEvent -
+                            previous.Continuation.Length - separator;
+                        if (room > 0)
+                        {
+                            string captured = fragment[..Math.Min(room, fragment.Length)];
+                            parsed[^1] = previous with
+                            {
+                                Continuation = separator == 0
+                                    ? captured : previous.Continuation + "\n" + captured,
+                                ContinuationTruncated = previous.ContinuationTruncated ||
+                                    captured.Length != fragment.Length
+                            };
+                            capturedContinuationLines++;
+                        }
+                        else
+                        {
+                            parsed[^1] = previous with { ContinuationTruncated = true };
+                        }
+                    }
+                    else
+                    {
+                        parsed[^1] = previous with { ContinuationTruncated = true };
+                    }
                 }
-                else if (!string.IsNullOrWhiteSpace(line))
+                else
                 {
-                    skipped++;
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        skipped++;
+                    }
+                    // Blank or unrelated lines terminate this context.
+                    canAttachContinuation = false;
                 }
                 continue;
             }
 
             string remainder = match.Groups["rest"].Value.Trim();
-            Match level = SeverityPattern().Match(remainder[..Math.Min(remainder.Length, 60)]);
+            // Only a leading severity token is reliable. The word ERROR
+            // inside a level-less device message is not severity metadata.
+            Match level = SeverityPattern().Match(remainder);
             LogSeverity severity = level.Success ? ParseSeverity(level.Groups["level"].Value)
                 : LogSeverity.Unknown;
             string message = level.Success
@@ -73,9 +110,27 @@ public static partial class LogParser
             {
                 SourceFile = sourceFile
             });
+            capturedContinuationLines = 0;
+            canAttachContinuation = true;
         }
         cancellationToken.ThrowIfCancellationRequested();
         return new LogParseResult(parsed, total, skipped, continuations);
+    }
+
+    private static bool IsContinuationLine(string line)
+    {
+        string trimmed = line.TrimStart();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        return char.IsWhiteSpace(line[0]) ||
+            trimmed.StartsWith("at ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("---> ", StringComparison.Ordinal) ||
+            trimmed.StartsWith("--- End of ", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("InnerException:", StringComparison.OrdinalIgnoreCase) ||
+            ExceptionHeaderPattern().IsMatch(trimmed);
     }
 
     private static LogSeverity ParseSeverity(string value) => value.ToUpperInvariant() switch
@@ -95,7 +150,12 @@ public static partial class LogParser
     private static partial Regex TimestampPattern();
 
     [GeneratedRegex(
-        @"(?:^|[\s\[\]\(])(?<level>TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)(?=$|[\s\]\):|,\-])",
+        @"^\[?(?<level>TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|ERR|FATAL|CRITICAL)\]?(?=$|[\s:|,\-])",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex SeverityPattern();
+
+    [GeneratedRegex(
+        @"^(?:--->\s*)?(?:[A-Za-z_][\w+]*\.)*[A-Za-z_][\w+]*(?:Exception|Error)(?:\s*:\s*.*)?$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex ExceptionHeaderPattern();
 }

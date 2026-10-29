@@ -11,6 +11,9 @@ public sealed record LogEvent(
     public string SourceFile { get; init; } = "";
     // Exact events copied to multiple NLog targets are counted only once.
     public IReadOnlyList<string> AlsoInFiles { get; init; } = [];
+    // Bounded undated exception/stack text from the original log event.
+    public string Continuation { get; init; } = "";
+    public bool ContinuationTruncated { get; init; }
 }
 
 public sealed record LogParseResult(
@@ -27,6 +30,8 @@ public sealed record AnomalyFinding(
 {
     public string SourceFile { get; init; } = "";
     public IReadOnlyList<string> AlsoInFiles { get; init; } = [];
+    public string Continuation { get; init; } = "";
+    public bool ContinuationTruncated { get; init; }
 }
 
 public sealed record AnomalyReport(

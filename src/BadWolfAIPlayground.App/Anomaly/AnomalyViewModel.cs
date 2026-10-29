@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
+using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
 using BadWolfAIPlayground.Anomaly;
@@ -666,7 +667,10 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 sourceHint)
             {
                 SourceFile = item.SourceFile,
-                SourceLine = item.SourceLine
+                SourceLine = item.SourceLine,
+                Context = item.ContinuationTruncated
+                    ? item.Continuation + "\n[Additional stack context omitted (safety limit).]"
+                    : item.Continuation
             });
         }
 
@@ -709,6 +713,9 @@ public sealed record AnomalyFindingRow(
 {
     public string SourceFile { get; init; } = "";
     public int SourceLine { get; init; } = 1;
+    public string Context { get; init; } = "";
+    public Visibility ContextVisibility => string.IsNullOrEmpty(Context)
+        ? Visibility.Collapsed : Visibility.Visible;
 }
 
 /// <summary>Per-file filter. The original file data stays in memory.</summary>

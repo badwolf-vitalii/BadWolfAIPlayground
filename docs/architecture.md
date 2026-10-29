@@ -473,3 +473,21 @@ automatic filtering through real checkboxes, all/none
 recalculation, deduplicated App/component evidence after
 selection, safe path containment, and Notepad++ command
 construction for an original log line.
+
+### Bounded exception continuation evidence
+
+`LogParser` attaches contiguous recognized undated .NET exception headers,
+indented frames and inner-exception markers to the preceding timestamped
+`LogEvent`. The per-event capture is capped at 32 lines and 4,096 characters;
+`ContinuationTruncated` records overflow while `ContinuationLines` counts
+all recognized lines. Blank/unrecognized undated content terminates the
+association. Severity tokens are anchored to the beginning of the
+post-timestamp text, preventing false ERROR classifications in device messages.
+
+`AnomalyDetector` propagates available exception context from its selected
+representative event to `AnomalyFinding`. Burst representatives favor a
+higher severity or same-severity entry with stack evidence. Timeline and rare
+pattern calculations, cross-target duplicate identity, and original
+file/physical-line provenance are unaffected. WPF displays a conditional
+collapsed stack expander. Synthetic tests cover truncated context, boundaries,
+severity, propagation, component filtering, and actual WPF binding.

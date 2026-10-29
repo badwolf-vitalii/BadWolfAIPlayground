@@ -72,7 +72,15 @@ public static partial class AnomalyDetector
             {
                 problems[index]++;
                 totalProblems++;
-                firstProblem[index] ??= entry;
+                LogEvent? previous = firstProblem[index];
+                // Prefer a severe example with original exception context,
+                // not an earlier, less informative warning in the same burst.
+                if (previous is null || entry.Severity > previous.Severity ||
+                    (entry.Severity == previous.Severity &&
+                     previous.Continuation.Length == 0 && entry.Continuation.Length > 0))
+                {
+                    firstProblem[index] = entry;
+                }
             }
         }
 
@@ -102,7 +110,9 @@ public static partial class AnomalyDetector
                     example.Message, example.LineNumber, problems[i], typical, threshold)
                 {
                     SourceFile = example.SourceFile,
-                    AlsoInFiles = example.AlsoInFiles
+                    AlsoInFiles = example.AlsoInFiles,
+                    Continuation = example.Continuation,
+                    ContinuationTruncated = example.ContinuationTruncated
                 });
             }
         }
@@ -123,7 +133,8 @@ public static partial class AnomalyDetector
                     continue;
                 }
 
-                LogEvent example = group.First();
+                LogEvent example = group.FirstOrDefault(e =>
+                    e.Continuation.Length != 0) ?? group.First();
                 findings.Add(new AnomalyFinding(AnomalyKind.RareErrorPattern,
                     example.Timestamp, "Rare error message pattern",
                     $"This normalized error pattern occurred {count} time(s) among " +
@@ -133,7 +144,9 @@ public static partial class AnomalyDetector
                     errors.Length, maxRare)
                 {
                     SourceFile = example.SourceFile,
-                    AlsoInFiles = example.AlsoInFiles
+                    AlsoInFiles = example.AlsoInFiles,
+                    Continuation = example.Continuation,
+                    ContinuationTruncated = example.ContinuationTruncated
                 });
             }
         }
