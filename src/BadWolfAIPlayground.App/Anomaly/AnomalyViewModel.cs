@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Windows.Input;
@@ -15,6 +16,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 {
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource, _chooseFolder;
+    private readonly RelayCommand _selectAll, _selectNone, _chooseEditor;
+    private readonly ParameterRelayCommand<AnomalyFindingRow> _openFinding;
+    private readonly ParameterRelayCommand<AnomalySourceFileRow> _openLogFile;
+    private LogFolderImportResult? _folderImport;
+    private string? _folderRoot;
+    private string? _singleFilePath;
+    private string? _notepadExecutable;
+    private bool _suppressFileSelection;
+    private string _editorStatus =
+        "Notepad++ is auto-detected. For a portable copy, click Locate Notepad++.";
     private CancellationTokenSource? _active;
     private LogParseResult? _loaded;
     private AnomalyReport? _lastReport;
@@ -41,6 +52,17 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _cancel = new RelayCommand(() => _active?.Cancel(), () => Busy);
         _chooseSource = new RelayCommand(async () => await ChooseSourceAsync(), () => !Busy);
         _chooseFolder = new RelayCommand(async () => await ChooseFolderAsync(), () => !Busy);
+        _selectAll = new RelayCommand(async () => await SelectAllFilesAsync(true),
+            () => CanEditFiles);
+        _selectNone = new RelayCommand(async () => await SelectAllFilesAsync(false),
+            () => CanEditFiles);
+        _chooseEditor = new RelayCommand(ChooseNotepadPlusPlus);
+        _openFinding = new ParameterRelayCommand<AnomalyFindingRow>(
+            item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
+        _openLogFile = new ParameterRelayCommand<AnomalySourceFileRow>(
+            item => OpenLogInNotepadPlusPlus(item.RelativePath, 1),
+            _ => _folderRoot is not null);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
@@ -49,6 +71,17 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
     public ICommand ChooseFolderCommand => _chooseFolder;
+    public ICommand SelectAllFilesCommand => _selectAll;
+    public ICommand SelectNoFilesCommand => _selectNone;
+    public ICommand ChooseNotepadCommand => _chooseEditor;
+    public ICommand OpenFindingCommand => _openFinding;
+    public ICommand OpenLogFileCommand => _openLogFile;
+    public bool CanEditFiles => !Busy && _folderImport is not null;
+    public string EditorStatus
+    {
+        get => _editorStatus;
+        private set => SetProperty(ref _editorStatus, value);
+    }
     public ICommand AnalyzeCommand => _run;
     public ICommand CancelCommand => _cancel;
     public ICommand ChooseSourceCommand => _chooseSource;
@@ -101,6 +134,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _cancel.NotifyCanExecuteChanged();
                 _chooseSource.NotifyCanExecuteChanged();
                 _chooseFolder.NotifyCanExecuteChanged();
+                _selectAll.NotifyCanExecuteChanged();
+                _selectNone.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(CanEditFiles));
             }
         }
     }
@@ -142,7 +178,10 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         {
             _loaded = parsed;
             ClearFileSummary();
+            _singleFilePath = Path.GetFullPath(path);
             SourceName = Path.GetFileName(path);
+            NotifyOpenCommands();
+
             Preview = text[..Math.Min(text.Length, 650)];
             Apply(result);
             _run.NotifyCanExecuteChanged();
@@ -177,29 +216,32 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         await _dispatcher.InvokeAsync(() =>
         {
             _loaded = imported.Combined;
+            ClearFileRows();
+            _folderImport = imported;
+            _folderRoot = Path.GetFullPath(folder);
+            _singleFilePath = null;
+            NotifyOpenCommands();
+            OnPropertyChanged(nameof(CanEditFiles));
             SourceName = $"{Path.GetFileName(Path.TrimEndingDirectorySeparator(folder))}" +
                 $" — {imported.Files.Count:N0} log files";
             Preview =
                 "All supported .log and .txt files in the chosen folder, including old/, " +
                 "were analyzed locally. Every finding includes its original " +
                 "relative filename and physical line number.";
-            SourceFiles.Clear();
             foreach (LogFolderFile file in imported.Files
                 .OrderByDescending(f => f.ProblemEvents)
                 .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
             {
-                SourceFiles.Add(new AnomalySourceFileRow(
+                var row = new AnomalySourceFileRow(
                     file.RelativePath, file.Component, file.DatedEvents,
-                    file.ProblemEvents, file.SkippedLines, file.ContinuationLines));
+                    file.ProblemEvents, file.SkippedLines, file.ContinuationLines);
+                row.IncludedChanged += OnFolderFileIncludedChanged;
+                SourceFiles.Add(row);
             }
             DuplicateCopies = imported.DuplicateCopies;
             int components = imported.Files.Select(f => f.Component)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count();
-            SourceFilesSummary =
-                $"{imported.Files.Count:N0} log files · {components:N0} components · " +
-                $"{imported.TotalBytes / 1048576.0:0.##} MiB. " +
-                $"Exact copies in multiple NLog targets: {imported.DuplicateCopies:N0}. " +
-                "The aggregate counts distinct events; file rows include original copies.";
+            UpdateSelectedFilesSummary(imported.Files.Count);
             Apply(report);
             _run.NotifyCanExecuteChanged();
         });
@@ -225,9 +267,229 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     private void ClearFileSummary()
     {
-        SourceFiles.Clear();
+        ClearFileRows();
+        _folderImport = null;
+        _folderRoot = null;
+        _singleFilePath = null;
         SourceFilesSummary = "Single log / built-in demo; no Logs folder selected.";
         DuplicateCopies = 0;
+        OnPropertyChanged(nameof(CanEditFiles));
+        NotifyOpenCommands();
+    }
+
+    private void ClearFileRows()
+    {
+        foreach (AnomalySourceFileRow row in SourceFiles)
+        {
+            row.IncludedChanged -= OnFolderFileIncludedChanged;
+        }
+        SourceFiles.Clear();
+    }
+
+    private void NotifyOpenCommands()
+    {
+        _openFinding.NotifyCanExecuteChanged();
+        _openLogFile.NotifyCanExecuteChanged();
+    }
+
+    private async void OnFolderFileIncludedChanged(object? sender, EventArgs e)
+    {
+        if (_suppressFileSelection)
+        {
+            return;
+        }
+        try
+        {
+            await RefreshFolderFilterAsync();
+        }
+        catch (Exception exception)
+        {
+            StatusText = $"Could not apply file filter: {exception.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Reanalyze the original imported events based on the current enabled
+    /// file set, rebuilding duplicate provenance. Never re-read work files.
+    /// </summary>
+    public Task RefreshFolderFilterAsync() => ExecuteAsync(async token =>
+    {
+        LogFolderImportResult? original = _folderImport;
+        if (original is null)
+        {
+            return;
+        }
+        string[] enabled = SourceFiles.Where(x => x.Included)
+            .Select(x => x.RelativePath).ToArray();
+        LogFolderSelection filtered = await Task.Run(() =>
+            LogFolderImporter.SelectFiles(original, enabled, token), token);
+        AnomalyReport report = await Task.Run(() =>
+            AnomalyDetector.Analyze(filtered.Combined,
+                new AnomalyOptions(Sensitivity), token), token);
+        token.ThrowIfCancellationRequested();
+
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _loaded = filtered.Combined;
+            DuplicateCopies = filtered.DuplicateCopies;
+            UpdateSelectedFilesSummary(filtered.EnabledFileCount);
+            Apply(report);
+            if (filtered.EnabledFileCount == 0)
+            {
+                StatusText =
+                    "No logs enabled. Check one or more files to analyze their events.";
+            }
+        });
+    });
+
+    public async Task SetIncludedFilesAsync(IReadOnlyCollection<string> filePaths)
+    {
+        ArgumentNullException.ThrowIfNull(filePaths);
+        if (_folderImport is null || Busy)
+        {
+            return;
+        }
+        var known = new HashSet<string>(
+            SourceFiles.Select(row => row.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var selected = new HashSet<string>(filePaths, StringComparer.OrdinalIgnoreCase);
+        if (!selected.IsSubsetOf(known))
+        {
+            throw new ArgumentException(
+                "Selection contains files that were not imported.", nameof(filePaths));
+        }
+
+        _suppressFileSelection = true;
+        try
+        {
+            foreach (AnomalySourceFileRow row in SourceFiles)
+            {
+                row.Included = selected.Contains(row.RelativePath);
+            }
+        }
+        finally
+        {
+            _suppressFileSelection = false;
+        }
+        await RefreshFolderFilterAsync();
+    }
+
+    private Task SelectAllFilesAsync(bool includeAll) => SetIncludedFilesAsync(
+        includeAll ? SourceFiles.Select(f => f.RelativePath).ToArray() : []);
+
+    private void UpdateSelectedFilesSummary(int enabledCount)
+    {
+        if (_folderImport is not LogFolderImportResult imported)
+        {
+            return;
+        }
+        int components = SourceFiles.Where(f => f.Included)
+            .Select(f => f.Component)
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+        SourceFilesSummary =
+            $"Enabled {enabledCount:N0} / {imported.Files.Count:N0} files " +
+            $"across {components:N0} components. " +
+            $"Exact NLog copies among enabled files: {DuplicateCopies:N0}. " +
+            "Per-file counts below are original; the timeline uses only enabled files.";
+    }
+
+    public (string FullPath, int Line) ResolveLogLocation(string relativeFile, int line)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativeFile);
+        if (line < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(line));
+        }
+
+        if (_folderImport is not null && _folderRoot is not null)
+        {
+            bool registered = _folderImport.Files.Any(f =>
+                string.Equals(f.RelativePath, relativeFile,
+                    StringComparison.OrdinalIgnoreCase));
+            if (!registered)
+            {
+                throw new InvalidOperationException(
+                    "The requested file is not part of the selected Logs folder.");
+            }
+
+            string root = Path.GetFullPath(_folderRoot);
+            string file = Path.GetFullPath(Path.Combine(root, relativeFile));
+            string prefix = Path.TrimEndingDirectorySeparator(root) +
+                Path.DirectorySeparatorChar;
+            if (!file.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Refusing to open a log outside the selected folder.");
+            }
+
+            return (file, line);
+        }
+
+        if (_singleFilePath is not null &&
+            string.Equals(Path.GetFileName(_singleFilePath), relativeFile,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return (_singleFilePath, line);
+        }
+
+        throw new InvalidOperationException(
+            "Load a local log file or Logs folder before opening in Notepad++.");
+    }
+
+    public void ConfigureNotepadPlusPlus(string executable)
+    {
+        NotepadPlusPlusLauncher.ValidateExecutable(executable);
+        _notepadExecutable = Path.GetFullPath(executable);
+        EditorStatus = "Notepad++ is configured for this session.";
+    }
+
+    private void ChooseNotepadPlusPlus()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Locate Notepad++ (notepad++.exe)",
+            Filter = "Notepad++ executable (notepad++.exe)|notepad++.exe",
+            CheckFileExists = true,
+            Multiselect = false
+        };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        try
+        {
+            ConfigureNotepadPlusPlus(dialog.FileName);
+        }
+        catch (Exception exception) when (exception is IOException or ArgumentException)
+        {
+            EditorStatus = $"Could not use Notepad++: {exception.Message}";
+        }
+    }
+
+    private void OpenLogInNotepadPlusPlus(string relativeFile, int line)
+    {
+        try
+        {
+            (string fullPath, int sourceLine) =
+                ResolveLogLocation(relativeFile, line);
+            string? executable = _notepadExecutable ??
+                NotepadPlusPlusLauncher.DiscoverExecutable();
+            if (executable is null)
+            {
+                StatusText = "Notepad++ not found. Click 'Locate Notepad++' " +
+                    "and select your notepad++.exe.";
+                return;
+            }
+
+            NotepadPlusPlusLauncher.Open(executable, fullPath, sourceLine);
+            StatusText = $"Opened {relativeFile}:{sourceLine} in Notepad++.";
+        }
+        catch (Exception exception) when (exception is IOException or
+            InvalidOperationException or ArgumentException or
+            System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            StatusText = $"Could not open log in Notepad++: {exception.Message}";
+        }
     }
 
     public Task AnalyzeAsync() => ExecuteAsync(async token =>
@@ -401,7 +663,11 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 item.Title,
                 item.Explanation,
                 $"{originalLocation}{otherTargets}: {item.Evidence}",
-                sourceHint));
+                sourceHint)
+            {
+                SourceFile = item.SourceFile,
+                SourceLine = item.SourceLine
+            });
         }
 
         EventCount = report.Source.Events.Count;
@@ -425,6 +691,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         _disposed = true;
         _active?.Cancel();
+        ClearFileRows();
+        _folderImport = null;
     }
 }
 
@@ -437,8 +705,36 @@ public sealed record AnomalyBucketRow(
 
 public sealed record AnomalyFindingRow(
     string Kind, string Time, string Title, string Explanation,
-    string Evidence, string SourceHint);
+    string Evidence, string SourceHint)
+{
+    public string SourceFile { get; init; } = "";
+    public int SourceLine { get; init; } = 1;
+}
 
-public sealed record AnomalySourceFileRow(
-    string RelativePath, string Component, int DatedEvents,
-    int ProblemEvents, int SkippedLines, int ContinuationLines);
+/// <summary>Per-file filter. The original file data stays in memory.</summary>
+public sealed class AnomalySourceFileRow(
+    string relativePath, string component, int datedEvents,
+    int problemEvents, int skippedLines, int continuationLines) : ObservableObject
+{
+    private bool _included = true;
+    public string RelativePath { get; } = relativePath;
+    public string Component { get; } = component;
+    public int DatedEvents { get; } = datedEvents;
+    public int ProblemEvents { get; } = problemEvents;
+    public int SkippedLines { get; } = skippedLines;
+    public int ContinuationLines { get; } = continuationLines;
+
+    public event EventHandler? IncludedChanged;
+
+    public bool Included
+    {
+        get => _included;
+        set
+        {
+            if (SetProperty(ref _included, value))
+            {
+                IncludedChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+}
