@@ -219,11 +219,17 @@ public static class GroundedQuestionAnswering
                 question, proposed.Answer, exactQuotes);
             valid = corroboration.Citations.ToArray();
 
-            // Stop immediately on a quote that also mentions the answer's
-            // essential facts. An unrelated verbatim quote triggers fallback.
-            // Otherwise retry
-            // just once, with a wider but still bounded set of source excerpts.
-            if (valid.Length > 0 || submitted.Length == passages.Length || attempts == 2)
+            // Retry only when the larger request can supply more passages
+            // OR additional actual source characters. With two long chunks,
+            // expanding 480 -> 700 chars may still uncover the missing fact;
+            // with two short chunks a second call would be wasted CPU time.
+            bool hasMoreEvidence = submitted.Length < passages.Length ||
+                submitted.Any(passage =>
+                    OllamaAnswerProvider.SelectExcerpt(
+                        passage.Chunk.Content, question, ExpandedExcerptCharacters).Length >
+                    OllamaAnswerProvider.SelectExcerpt(
+                        passage.Chunk.Content, question, passage.ExcerptCharacters).Length);
+            if (valid.Length > 0 || attempts == 2 || !hasMoreEvidence)
             {
                 break;
             }

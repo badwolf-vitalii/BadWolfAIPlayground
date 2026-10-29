@@ -223,8 +223,10 @@ The initial selection includes exact keyword and original-question semantic
 candidates plus one blended candidate where available. If Qwen declines
 to answer or its source quotations cannot be verified, the app **retries
 once** with up to seven wider excerpts (700 characters each), keeping
-stable source IDs and the same verified-quote requirement. If only three
-candidates exist, no redundant retry is sent. The user can cancel at
+stable source IDs and the same verified-quote requirement. If there are no
+additional passages or source characters to supply, no redundant retry is
+sent; even one long excerpt can be expanded when it contains more text.
+The user can cancel at
 any time. Optional *Deep query expansion* still performs additional
 query-rewriting work before answering.
 

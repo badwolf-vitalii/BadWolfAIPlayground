@@ -211,7 +211,10 @@ from the fused ranking. It sends the first three candidates with a
 is absent or has no verbatim citation does it try the complete
 candidate set once, bounded to 700 characters each. The same stable
 source IDs and source-document identity are maintained between
-attempts. Both the generator and the verifier use each
+attempts. A retry is skipped if there are no new passages **and**
+the existing passages cannot provide additional source characters;
+a single long passage can still be expanded on the second attempt.
+Both the generator and the verifier use each
 `EvidencePassage.ExcerptCharacters` value, preventing citation checks
 against text not actually submitted to the model. The evidence
 inspector displays only the final submitted set. No third attempt is

@@ -582,7 +582,7 @@ static async Task TestCitationRelevance()
     const string unrelated = "Лиса мало хто й запримітив, і нікому до нього не було діла.";
     const string related = "Лис Микита хитрував і обминав усі небезпеки.";
     var source = new SearchChunk("farbovanii-lis.txt", null, 2,
-        unrelated + " " + related);
+        unrelated + " " + related + " Лиса звали Микитою.");
     var wrong = new VerifiedCitation(1, source, unrelated);
     var correct = new VerifiedCitation(2, source, related);
 
@@ -622,7 +622,10 @@ static async Task TestCitationRelevance()
     SearchChunk[] chunks =
     [
         new("fox.txt", null, 1, related + " " + unrelated),
-        new("forest.txt", null, 1, "У лісі відбувалася інша пригода.")
+        new("forest.txt", null, 1, "У лісі відбувалася інша пригода."),
+        new("forest.txt", null, 2, "Другий лісовий герой жив окремо."),
+        new("forest.txt", null, 3, "Після дощу ліс був повний грибів."),
+        new("forest.txt", null, 4, "Сова летіла над старим деревом.")
     ];
     var embeddings = new FakeEmbeddings();
     SemanticIndex index = await SemanticSearch.BuildAsync(chunks, embeddings);
@@ -631,6 +634,7 @@ static async Task TestCitationRelevance()
     GroundedAnswer result = await GroundedQuestionAnswering.AskAsync(
         index, embeddings, model, question);
     Assert(result.Supported && result.AnswerAttempts == 2 &&
+           result.AvailablePassages > GroundedQuestionAnswering.InitialPassages &&
            model.Calls == 2 && result.Citations.Count == 1 &&
            result.Citations[0].Quote.Contains("Микита", StringComparison.Ordinal),
         "A non-supporting but verbatim first quote must trigger the existing fallback; " +
@@ -643,6 +647,31 @@ static async Task TestCitationRelevance()
            rejected.Citations.Count == 0 && rejected.AnswerAttempts == 2 &&
            rejected.UnsupportedAnswerTerms.Contains("Микита", StringComparer.OrdinalIgnoreCase),
         "Never display a fabricated 'verified' badge for unrelated exact quotations.");
+
+    // No additional text and no more candidate passages: don't waste a
+    // second CPU-bound generation call just to repeat the same prompt.
+    SearchChunk[] shortChunks = chunks.Take(2).ToArray();
+    SemanticIndex shortIndex = await SemanticSearch.BuildAsync(shortChunks, embeddings);
+    var shortGenerator = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
+    GroundedAnswer shortResult = await GroundedQuestionAnswering.AskAsync(
+        shortIndex, embeddings, shortGenerator, question);
+    Assert(!shortResult.Supported && shortResult.AnswerAttempts == 1 &&
+           shortGenerator.Calls == 1 &&
+           shortResult.Outcome == AnswerOutcome.UnsubstantiatedAnswer,
+        "With only short already-submitted evidence, don't pay for an identical retry.");
+
+    // The same single candidate may still contain additional evidence past
+    // the first 480 characters. Retry only because the longer excerpt adds text.
+    var longChunk = new SearchChunk("fox-long.txt", null, 1,
+        unrelated + new string('а', 480) + " " + related);
+    SemanticIndex longIndex = await SemanticSearch.BuildAsync([longChunk], embeddings);
+    var longGenerator = new MisleadingFoxAnswerGenerator();
+    GroundedAnswer expandedLong = await GroundedQuestionAnswering.AskAsync(
+        longIndex, embeddings, longGenerator, question);
+    Assert(expandedLong.Supported && expandedLong.AnswerAttempts == 2 &&
+           longGenerator.Calls == 2 &&
+           expandedLong.Citations.Count == 1,
+        "A longer excerpt can rescue an answer even when no additional chunks exist.");
 }
 
 static async Task TestRuntimeCatalogAndMetrics()
