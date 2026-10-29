@@ -385,6 +385,7 @@ internal static class Program
                    anomalyView.FindName("SelectAnomalyLogButton") is Button &&
                    anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
+                   anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
                    anomalyView.FindName("AnomalyFilesExpander") is Expander &&
                    anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
                    anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
@@ -399,8 +400,20 @@ internal static class Program
             Assert(analyzer.FindingCount >= 2 && analyzer.EventCount >= 200 &&
                    analyzer.Timeline.Count == 36 &&
                    analyzer.Findings.Any(f => f.Kind == "BURST") &&
-                   analyzer.Findings.Any(f => f.Kind == "RARE ERROR"),
-                "A real WPF demo must show the expected spike and rare error.");
+                   analyzer.Findings.Any(f => f.Kind == "RARE ERROR") &&
+                   analyzer.ExceptionCount == 1 &&
+                   analyzer.ExceptionEntries.Count == 1 &&
+                   analyzer.ExceptionEntries[0].Context.Contains("System.IO.IOException",
+                       StringComparison.Ordinal) &&
+                   analyzer.ExceptionEntries[0].SourceLine > 0 &&
+                   !analyzer.OpenExceptionCommand.CanExecute(analyzer.ExceptionEntries[0]),
+                "The synthetic demo must visibly list one multiline stack trace " +
+                "while keeping the external editor disabled for demo-only data.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView)
+                    .Any(item => item.DataContext is AnomalyExceptionRow row &&
+                                 row.Context.Contains("Storage.cs:line 82", StringComparison.Ordinal)),
+                "The new exception list must materialize actual WPF expanders.");
             // The same generic scanner can be fed local, non-proprietary
             // source. It never needs to fetch a private repository in CI.
             string contextDir = Path.Combine(Path.GetTempPath(),
@@ -435,6 +448,19 @@ internal static class Program
                    analyzer.Sensitivity > before &&
                    analyzer.StatusText.Contains("locally", StringComparison.OrdinalIgnoreCase),
                 "Reanalysis must update UI locally without model inference.");
+
+            // Exception context must be visible even when there is no anomaly.
+            Task nonAnomalous = analyzer.ImportTextAsync("Standalone context example",
+                "2026-10-29 09:00:00 INFO Single diagnostic\n" +
+                "System.InvalidOperationException: Synthetic diagnostics\n" +
+                "   at Demo.Engine.Check()\n");
+            PumpUntil(() => nonAnomalous.IsCompleted, TimeSpan.FromSeconds(20));
+            nonAnomalous.GetAwaiter().GetResult();
+            Assert(analyzer.FindingCount == 0 && analyzer.ExceptionCount == 1 &&
+                   analyzer.ExceptionEntries.Single().Severity == "INFO" &&
+                   analyzer.ExceptionSummary.Contains("not necessarily statistical anomalies",
+                       StringComparison.Ordinal),
+                "The independent exception list must not depend on anomaly thresholds.");
 
             // Test importing a whole application Logs folder, including old/
             // and duplicate NLog App/component targets. No work data in CI.
@@ -485,6 +511,10 @@ internal static class Program
                        analyzer.DuplicateCopies == 12 &&
                        analyzer.EventCount == 120 &&
                        analyzer.ProblemCount == 48 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "SaleController_", StringComparison.Ordinal) &&
+                       analyzer.OpenExceptionCommand.CanExecute(analyzer.ExceptionEntries[0]) &&
                        analyzer.Findings.Any(f =>
                            f.Kind == "BURST" &&
                            f.Evidence.Contains("SaleController_2026-10-29.log:",
@@ -526,6 +556,9 @@ internal static class Program
                        analyzer.ProblemCount == 12 &&
                        analyzer.DuplicateCopies == 0 &&
                        analyzer.SourceFiles.Count(f => f.Included) == 2 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "App_", StringComparison.Ordinal) &&
                        analyzer.Findings.Any(f =>
                            f.Evidence.Contains("App_2026-10-29.log:",
                                 StringComparison.Ordinal) &&
@@ -544,6 +577,9 @@ internal static class Program
                        analyzer.ProblemCount == 48 &&
                        analyzer.DuplicateCopies == 0 &&
                        analyzer.SourceFiles.Count(f => f.Included) == 1 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "SaleController_", StringComparison.Ordinal) &&
                        analyzer.Findings.Any(f =>
                            f.Evidence.Contains("SaleController_2026-10-29.log:",
                                StringComparison.Ordinal)),
@@ -554,6 +590,8 @@ internal static class Program
                 noLogs.GetAwaiter().GetResult();
                 Assert(analyzer.EventCount == 0 &&
                        analyzer.FindingCount == 0 &&
+                       analyzer.ExceptionCount == 0 &&
+                       analyzer.ExceptionEntries.Count == 0 &&
                        analyzer.Timeline.Count == 0 &&
                        analyzer.StatusText.Contains("No logs enabled",
                            StringComparison.Ordinal),
@@ -566,6 +604,7 @@ internal static class Program
                 Assert(analyzer.EventCount == 120 &&
                        analyzer.ProblemCount == 48 &&
                        analyzer.DuplicateCopies == 12 &&
+                       analyzer.ExceptionCount == 1 &&
                        analyzer.SourceFiles.All(f => f.Included),
                     "Include all must restore exact pre-filter counts and provenance.");
 

@@ -32,6 +32,11 @@ public static class DemoLogs
             {
                 Append(start.AddMinutes(minute).AddSeconds(42), "FATAL",
                     "Disk controller rejected write to sector 48392");
+                // Synthetic exception detail is deliberately undated: it
+                // belongs to the FATAL entry and is not a second event.
+                builder.AppendLine("System.IO.IOException: Synthetic disk write failure");
+                builder.AppendLine(@"   at Demo.Storage.WriteSector(Int32 sector) in C:\Demo\Storage.cs:line 82");
+                builder.AppendLine("   at Demo.Worker.Process()");
             }
         }
         return builder.ToString();

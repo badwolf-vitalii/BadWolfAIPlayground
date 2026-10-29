@@ -15,10 +15,12 @@ namespace BadWolfAIPlayground.App.Anomaly;
 /// <summary>Only explicitly selected local files or synthetic data are analyzed.</summary>
 public sealed class AnomalyViewModel : ObservableObject, IDisposable
 {
+    private const int MaxDisplayedExceptions = 40;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource, _chooseFolder;
     private readonly RelayCommand _selectAll, _selectNone, _chooseEditor;
     private readonly ParameterRelayCommand<AnomalyFindingRow> _openFinding;
+    private readonly ParameterRelayCommand<AnomalyExceptionRow> _openException;
     private readonly ParameterRelayCommand<AnomalySourceFileRow> _openLogFile;
     private LogFolderImportResult? _folderImport;
     private string? _folderRoot;
@@ -35,6 +37,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
     private string _source = "No file selected";
     private string _filesSummary = "Choose a Logs folder to inspect all components.";
+    private string _exceptionSummary = "Load a log or the demo to inspect exception details.";
     private int _duplicateCopies;
     private string _status = "Load a generated example or select a local LOG/TXT file.";
     private string _summary = "No analysis yet.";
@@ -42,7 +45,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private string _preview = "Nothing is uploaded or sent to Ollama.";
     private double _sensitivity = 3;
     private bool _busy;
-    private int _events, _problems, _findings;
+    private int _events, _problems, _findings, _exceptions;
     private bool _disposed;
 
     public AnomalyViewModel()
@@ -61,6 +64,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openFinding = new ParameterRelayCommand<AnomalyFindingRow>(
             item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
+        _openException = new ParameterRelayCommand<AnomalyExceptionRow>(
+            item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
         _openLogFile = new ParameterRelayCommand<AnomalySourceFileRow>(
             item => OpenLogInNotepadPlusPlus(item.RelativePath, 1),
             _ => _folderRoot is not null);
@@ -68,6 +74,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
     public ObservableCollection<AnomalyFindingRow> Findings { get; } = [];
+    public ObservableCollection<AnomalyExceptionRow> ExceptionEntries { get; } = [];
     public ObservableCollection<AnomalySourceFileRow> SourceFiles { get; } = [];
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
@@ -76,6 +83,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand SelectNoFilesCommand => _selectNone;
     public ICommand ChooseNotepadCommand => _chooseEditor;
     public ICommand OpenFindingCommand => _openFinding;
+    public ICommand OpenExceptionCommand => _openException;
     public ICommand OpenLogFileCommand => _openLogFile;
     public bool CanEditFiles => !Busy && _folderImport is not null;
     public string EditorStatus
@@ -109,6 +117,12 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public int EventCount { get => _events; private set => SetProperty(ref _events, value); }
     public int ProblemCount { get => _problems; private set => SetProperty(ref _problems, value); }
     public int FindingCount { get => _findings; private set => SetProperty(ref _findings, value); }
+    public int ExceptionCount { get => _exceptions; private set => SetProperty(ref _exceptions, value); }
+    public string ExceptionSummary
+    {
+        get => _exceptionSummary;
+        private set => SetProperty(ref _exceptionSummary, value);
+    }
 
     public double Sensitivity
     {
@@ -290,6 +304,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private void NotifyOpenCommands()
     {
         _openFinding.NotifyCanExecuteChanged();
+        _openException.NotifyCanExecuteChanged();
         _openLogFile.NotifyCanExecuteChanged();
     }
 
@@ -604,7 +619,33 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         _lastReport = report;
         Findings.Clear();
+        ExceptionEntries.Clear();
         Timeline.Clear();
+
+        // Show all captured exception context, even when the detector found
+        // no statistical anomaly. Display is bounded independently of import.
+        List<LogEvent> withContext = report.Source.Events
+            .Where(entry => entry.Continuation.Length > 0).ToList();
+        ExceptionCount = withContext.Count;
+        foreach (LogEvent entry in withContext
+            .OrderByDescending(item => item.Timestamp)
+            .Take(MaxDisplayedExceptions))
+        {
+            string continuation = entry.ContinuationTruncated
+                ? entry.Continuation + "\n[Additional stack context omitted (safety limit).]"
+                : entry.Continuation;
+            ExceptionEntries.Add(new AnomalyExceptionRow(
+                entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                entry.Severity.ToString().ToUpperInvariant(),
+                entry.SourceFile, entry.LineNumber, entry.Message, continuation));
+        }
+
+        ExceptionSummary = ExceptionCount == 0
+            ? "No multiline exception/stack details in the enabled logs. " +
+              "A log with its entire exception on one dated line will not appear here."
+            : $"Captured {ExceptionCount:N0} dated event(s) with exception/stack context. " +
+              $"Showing the newest {ExceptionEntries.Count:N0} (max {MaxDisplayedExceptions}). " +
+              "These are original log details, not necessarily statistical anomalies.";
         int maximum = Math.Max(1, report.PeakProblemCount);
         foreach (LogTimeBucket bucket in report.Buckets)
         {
@@ -705,6 +746,16 @@ public sealed record AnomalyBucketRow(
 {
     public string Color => Burst ? "#F0A080" : "#438BC1";
     public string Label => $"{Time}: {Problems} warning/error events of {Total}.";
+}
+
+/// <summary>One dated event with bounded original exception context.</summary>
+public sealed record AnomalyExceptionRow(
+    string Time, string Severity, string SourceFile,
+    int SourceLine, string Message, string Context)
+{
+    public string Location => string.IsNullOrWhiteSpace(SourceFile)
+        ? $"Log line {SourceLine}" : $"{SourceFile}:{SourceLine}";
+    public string Heading => $"{Time}  |  {Severity}  |  {Location}";
 }
 
 public sealed record AnomalyFindingRow(

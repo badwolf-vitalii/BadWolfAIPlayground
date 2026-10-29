@@ -497,3 +497,21 @@ truncation notice. Duplicate-event matching still uses timestamp, explicit
 severity and primary message, not the continuation. A severity-looking word
 inside a device message is not treated as a log level. Captured details
 remain in memory and do not imply a proven root cause.
+
+
+**Where to see it:** Open **Anomaly Detection Lab** and click **Use demo log**.
+The demo now contains a synthetic `System.IO.IOException` stack trace.
+The **Analysis overview** includes a visible **STACK CONTEXT** count,
+and section **4 — Exception / stack trace details** lists the source
+timestamp, original file/line, severity and event message. Expand a row
+to read the bounded exception stack. The list works **even when there
+are zero statistical findings**, and updates as files are included
+or excluded. The newest **40** entries are shown to keep the UI
+responsive; the counter reports the complete count for enabled logs.
+For real local logs, the expanded entry can jump to its original
+line in Notepad++. The button is disabled for the synthetic demo.
+
+A count of zero means no *multiline* context was captured; an exception
+written entirely on the original dated line remains in that message
+and is not counted as a separate stack trace. No exception content
+is sent, persisted or embedded.

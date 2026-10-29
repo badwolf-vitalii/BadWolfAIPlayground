@@ -49,8 +49,14 @@ static void DemoFindings()
         "Demonstration spike should be detected.");
     Ensure(report.Findings.Any(f =>
         f.Kind == AnomalyKind.RareErrorPattern &&
-        f.Evidence.Contains("Disk controller")),
-        "The rare disk failure needs an explainable finding.");
+        f.Evidence.Contains("Disk controller") &&
+        f.Continuation.Contains("System.IO.IOException", StringComparison.Ordinal)),
+        "The rare disk failure needs an explainable finding with real stack context.");
+    Ensure(parsed.Events.Count(e => e.Continuation.Length > 0) == 1 &&
+           parsed.ContinuationLines == 3 &&
+           parsed.Events.Single(e => e.Continuation.Length > 0)
+               .Continuation.Contains("Storage.cs:line 82", StringComparison.Ordinal),
+        "The built-in demo must visibly exercise multiline exception capture.");
     Ensure(report.Buckets.Count(b => b.IsBurst) == 1,
         "Only the deliberate high-rate minute should be a burst.");
 }

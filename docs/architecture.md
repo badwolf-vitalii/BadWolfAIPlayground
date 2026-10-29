@@ -491,3 +491,21 @@ pattern calculations, cross-target duplicate identity, and original
 file/physical-line provenance are unaffected. WPF displays a conditional
 collapsed stack expander. Synthetic tests cover truncated context, boundaries,
 severity, propagation, component filtering, and actual WPF binding.
+
+
+### Discoverable exception evidence independent of findings
+
+`DemoLogs` contains a synthetic, explicitly labeled multiline exception
+on the existing rare FATAL event. `AnomalyViewModel.Apply` enumerates the
+deduplicated, currently enabled `report.Source.Events`, counts all events
+with captured continuation text, and displays at most the **40 most recent**
+as `AnomalyExceptionRow` entries. This is independent of the
+`AnomalyDetector` finding threshold and therefore useful even with
+zero anomalies. The WPF overview shows a dedicated `ExceptionCount`
+metric; its separate section has per-event expanders with bounded
+original detail and a typed `OpenExceptionCommand` using the existing
+validated Notepad++ path/line launcher. Demo-only data has no local
+file target and cannot launch the editor. All/none/file filtering uses
+the same merged selection and source-file provenance as the findings.
+Tests verify the demo, non-anomalous context, WPF template, filtering,
+mirrored event identity, and safe external-editor availability.
