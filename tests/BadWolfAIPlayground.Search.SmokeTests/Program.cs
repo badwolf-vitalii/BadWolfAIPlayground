@@ -355,29 +355,6 @@ static async Task TestOllamaFingerprint()
         "Cache keys must incorporate Ollama model content digests, not mutable tag names.");
 }
 
-sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int.MaxValue) : IEmbeddingProvider
-{
-    public string ModelName => "checkpoint-test";
-    public int Calls { get; private set; }
-
-    public Task<string> GetModelFingerprintAsync(CancellationToken token = default) =>
-        Task.FromResult(fingerprint);
-
-    public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs,
-        CancellationToken token = default)
-    {
-        token.ThrowIfCancellationRequested();
-        Calls++;
-        if (Calls > stopAfterBatches)
-        {
-            throw new OperationCanceledException();
-        }
-
-        return Task.FromResult<IReadOnlyList<float[]>>(
-            inputs.Select(_ => new[] { 1f, 0f, 0f }).ToArray());
-    }
-}
-
 static async Task TestGroundedAnswers()
 {
     SearchChunk[] chunks =
@@ -451,6 +428,29 @@ static async Task TestOllamaAnswerProtocol()
     Assert(generated.Supported && generated.Evidence.Count == 1 &&
            generated.Evidence[0].Quote == "взяла з його плоду" && requests == 2,
         "The structured answer and source quote must be parsed correctly.");
+}
+
+sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int.MaxValue) : IEmbeddingProvider
+{
+    public string ModelName => "checkpoint-test";
+    public int Calls { get; private set; }
+
+    public Task<string> GetModelFingerprintAsync(CancellationToken token = default) =>
+        Task.FromResult(fingerprint);
+
+    public Task<IReadOnlyList<float[]>> EmbedAsync(IReadOnlyList<string> inputs,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        Calls++;
+        if (Calls > stopAfterBatches)
+        {
+            throw new OperationCanceledException();
+        }
+
+        return Task.FromResult<IReadOnlyList<float[]>>(
+            inputs.Select(_ => new[] { 1f, 0f, 0f }).ToArray());
+    }
 }
 
 sealed class FakeAnswerGenerator(bool inventQuote = false, bool refuse = false) : ILocalAnswerGenerator
