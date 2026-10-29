@@ -15,6 +15,7 @@ public static partial class LogFolderImporter
     public const long MaxFileBytes = 16L * 1024 * 1024;
     public const long MaxTotalBytes = 256L * 1024 * 1024;
     public const int MaxCombinedEvents = 500_000;
+    public const int MaxRawEvents = 1_000_000;
 
     public static LogFolderImportResult Import(
         string folder, CancellationToken cancellationToken = default,
@@ -84,12 +85,10 @@ public static partial class LogFolderImporter
             a.Relative, b.Relative));
 
         var files = new List<LogFolderFile>(entries.Count);
-        var combined = new List<LogEvent>();
-        // Track candidates for exact cross-file duplicate copies, but never
-        // remove two identical log records from the SAME file.
-        var seen = new Dictionary<(DateTimeOffset, LogSeverity, string), List<int>>();
-        int totalLines = 0, skipped = 0, continuations = 0, duplicateCopies = 0;
-
+        // Retain parsed, original per-file events in memory. Filtering needs
+        // these raw rows: merely hiding a deduplicated App/Sale event would
+        // discard the remaining copy even when its log is still enabled.
+        var originalEvents = new List<LogEvent>();
         for (int i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -97,80 +96,140 @@ public static partial class LogFolderImporter
             progress?.Report(new LogFolderProgress(i + 1, entries.Count, relative));
 
             string content = ReadBoundedText(full, relative, cancellationToken);
-            LogParseResult result = LogParser.Parse(
-                content, cancellationToken, relative);
-
-            totalLines = checked(totalLines + result.TotalLines);
-            skipped = checked(skipped + result.SkippedLines);
-            continuations = checked(continuations + result.ContinuationLines);
-            int problems = result.Events.Count(e => e.Severity >= LogSeverity.Warning);
+            LogParseResult parsed = LogParser.Parse(content, cancellationToken, relative);
+            int problems = parsed.Events.Count(e => e.Severity >= LogSeverity.Warning);
             files.Add(new LogFolderFile(relative, ComponentName(relative),
-                result.Events.Count, problems, result.SkippedLines,
-                result.ContinuationLines));
-
-            foreach (LogEvent entry in result.Events)
+                parsed.Events.Count, problems, parsed.SkippedLines,
+                parsed.ContinuationLines)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var key = (entry.Timestamp, entry.Severity, entry.Message);
-                if (!seen.TryGetValue(key, out List<int>? candidates))
-                {
-                    candidates = [];
-                    seen[key] = candidates;
-                }
+                TotalLines = parsed.TotalLines
+            });
 
-                int duplicateIndex = -1;
-                foreach (int candidateIndex in candidates)
-                {
-                    LogEvent previous = combined[candidateIndex];
-                    if (!string.Equals(previous.SourceFile, relative,
-                            StringComparison.OrdinalIgnoreCase) &&
-                        IsKnownMirroredTargetPair(previous.SourceFile, relative) &&
-                        !previous.AlsoInFiles.Contains(
-                            relative, StringComparer.OrdinalIgnoreCase))
-                    {
-                        duplicateIndex = candidateIndex;
-                        break;
-                    }
-                }
-
-                if (duplicateIndex >= 0)
-                {
-                    LogEvent previous = combined[duplicateIndex];
-                    // When a generic App log mirrors another component's NLog
-                    // target, retain the more specific component as the
-                    // primary origin and keep the mirrored file as an alias.
-                    bool previousIsGeneral = IsGeneralAppLog(previous.SourceFile);
-                    bool incomingIsSpecific = !IsGeneralAppLog(relative);
-                    combined[duplicateIndex] = previousIsGeneral && incomingIsSpecific
-                        ? entry with
-                        {
-                            AlsoInFiles = [..previous.AlsoInFiles, previous.SourceFile]
-                        }
-                        : previous with
-                        {
-                            AlsoInFiles = [..previous.AlsoInFiles, relative]
-                        };
-                    duplicateCopies++;
-                }
-                else
-                {
-                    if (combined.Count >= MaxCombinedEvents)
-                    {
-                        throw new InvalidDataException(
-                            $"More than {MaxCombinedEvents:N0} dated log events " +
-                            "were found. Choose a smaller date range.");
-                    }
-
-                    candidates.Add(combined.Count);
-                    combined.Add(entry);
-                }
+            if (originalEvents.Count + parsed.Events.Count > MaxRawEvents)
+            {
+                throw new InvalidDataException(
+                    $"More than {MaxRawEvents:N0} raw log events found. " +
+                    "Choose a smaller log folder.");
             }
+            originalEvents.AddRange(parsed.Events);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        LogFolderSelection selected = MergeSelected(
+            files, originalEvents, new HashSet<string>(
+                files.Select(f => f.RelativePath), StringComparer.OrdinalIgnoreCase),
+            cancellationToken);
+
         return new LogFolderImportResult(
-            new LogParseResult(combined, totalLines, skipped, continuations),
-            files, duplicateCopies, totalBytes);
+            selected.Combined, files, selected.DuplicateCopies, totalBytes)
+        {
+            RawEvents = originalEvents
+        };
+    }
+
+    /// <summary>
+    /// Recompute the timeline for a user-selected subset without re-reading
+    /// changing work files. Cross-target duplicates are recomputed *after*
+    /// filtering so turning off a component never loses its remaining App copy.
+    /// </summary>
+    public static LogFolderSelection SelectFiles(
+        LogFolderImportResult original, IReadOnlyCollection<string> enabledFiles,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(enabledFiles);
+        var allPaths = new HashSet<string>(
+            original.Files.Select(f => f.RelativePath), StringComparer.OrdinalIgnoreCase);
+        var enabled = new HashSet<string>(enabledFiles, StringComparer.OrdinalIgnoreCase);
+        if (!enabled.IsSubsetOf(allPaths))
+        {
+            throw new ArgumentException(
+                "The requested selection contains a file outside the imported Logs folder.",
+                nameof(enabledFiles));
+        }
+
+        return MergeSelected(original.Files, original.RawEvents, enabled, token);
+    }
+
+    private static LogFolderSelection MergeSelected(
+        IReadOnlyList<LogFolderFile> files, IReadOnlyList<LogEvent> raw,
+        HashSet<string> enabled, CancellationToken token)
+    {
+        var combined = new List<LogEvent>();
+        var seen = new Dictionary<(DateTimeOffset, LogSeverity, string), List<int>>();
+        int duplicateCopies = 0;
+
+        foreach (LogEvent entry in raw)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!enabled.Contains(entry.SourceFile))
+            {
+                continue;
+            }
+
+            var key = (entry.Timestamp, entry.Severity, entry.Message);
+            if (!seen.TryGetValue(key, out List<int>? candidates))
+            {
+                candidates = [];
+                seen[key] = candidates;
+            }
+
+            int duplicateIndex = -1;
+            foreach (int index in candidates)
+            {
+                LogEvent previous = combined[index];
+                if (!string.Equals(previous.SourceFile, entry.SourceFile,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    IsKnownMirroredTargetPair(previous.SourceFile, entry.SourceFile) &&
+                    !previous.AlsoInFiles.Contains(
+                        entry.SourceFile, StringComparer.OrdinalIgnoreCase))
+                {
+                    duplicateIndex = index;
+                    break;
+                }
+            }
+
+            if (duplicateIndex >= 0)
+            {
+                LogEvent previous = combined[duplicateIndex];
+                // Keep component-specific provenance for a mirrored App
+                // target and retain the real aliases for later opening.
+                combined[duplicateIndex] = IsGeneralAppLog(previous.SourceFile) &&
+                                           !IsGeneralAppLog(entry.SourceFile)
+                    ? entry with
+                    {
+                        AlsoInFiles = [..previous.AlsoInFiles, previous.SourceFile]
+                    }
+                    : previous with
+                    {
+                        AlsoInFiles = [..previous.AlsoInFiles, entry.SourceFile]
+                    };
+                duplicateCopies++;
+            }
+            else
+            {
+                if (combined.Count >= MaxCombinedEvents)
+                {
+                    throw new InvalidDataException(
+                        $"More than {MaxCombinedEvents:N0} distinct dated events found. " +
+                        "Choose a smaller folder or date range.");
+                }
+                candidates.Add(combined.Count);
+                combined.Add(entry);
+            }
+        }
+
+        token.ThrowIfCancellationRequested();
+        LogFolderFile[] activeFiles = files
+            .Where(file => enabled.Contains(file.RelativePath)).ToArray();
+        var result = new LogParseResult(
+            combined,
+            checked((int)activeFiles.Sum(f => (long)f.TotalLines)),
+            checked(activeFiles.Sum(f => f.SkippedLines)),
+            checked(activeFiles.Sum(f => f.ContinuationLines)));
+
+        return new LogFolderSelection(result, duplicateCopies,
+            activeFiles.Length);
     }
 
     private static string ReadBoundedText(
@@ -237,11 +296,21 @@ public static partial class LogFolderImporter
 
 public sealed record LogFolderFile(
     string RelativePath, string Component,
-    int DatedEvents, int ProblemEvents, int SkippedLines, int ContinuationLines);
+    int DatedEvents, int ProblemEvents, int SkippedLines, int ContinuationLines)
+{
+    public int TotalLines { get; init; }
+}
 
 public sealed record LogFolderProgress(
     int CurrentFile, int TotalFiles, string RelativePath);
 
 public sealed record LogFolderImportResult(
     LogParseResult Combined, IReadOnlyList<LogFolderFile> Files,
-    int DuplicateCopies, long TotalBytes);
+    int DuplicateCopies, long TotalBytes)
+{
+    // Original per-file entries; never persisted or sent to a service.
+    public IReadOnlyList<LogEvent> RawEvents { get; init; } = [];
+}
+
+public sealed record LogFolderSelection(
+    LogParseResult Combined, int DuplicateCopies, int EnabledFileCount);

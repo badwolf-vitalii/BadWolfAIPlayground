@@ -11,7 +11,8 @@ var checks = new (string Name, Action Execute)[]
     ("Sensitivity controls actual threshold", Sensitivity),
     ("Optional offline C# log-template source context", SourceContext),
     ("Import entire Logs directory with component provenance", FolderImport),
-    ("Folder importer fails safely for invalid and oversized sets", FolderGuards)
+    ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
+    ("File selection recomputes events and duplicate provenance", FolderSelection)
 };
 
 int failed = 0;
@@ -319,6 +320,95 @@ static void FolderGuards()
         try { LogFolderImporter.Import(root); }
         catch (InvalidDataException) { failed = true; }
         Ensure(failed, "Invalid encoding must not be silently replaced with mojibake.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+
+static void FolderSelection()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-Filter-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var app = new System.Text.StringBuilder();
+        var sales = new System.Text.StringBuilder();
+        var reader = new System.Text.StringBuilder();
+        for (int minute = 0; minute < 36; minute++)
+        {
+            string t = $"2026-10-29 09:{minute:00}:";
+            app.AppendLine(t + "00.0000 INFO App alive");
+            sales.AppendLine(t + "01.0000 ERROR Sale connection timeout");
+            reader.AppendLine(t + "02.0000 INFO Device ready");
+            if (minute == 24)
+            {
+                for (int i = 0; i < 12; i++)
+                {
+                    string mirrored = t + $"{20 + i:00}.0000 ERROR Sale request failed";
+                    app.AppendLine(mirrored);
+                    sales.AppendLine(mirrored);
+                }
+            }
+        }
+
+        string appPath = "App_2026-10-29.log";
+        string salesPath = "SaleController_2026-10-29.log";
+        string readerPath = "POSReader_2026-10-29.log";
+        File.WriteAllText(Path.Combine(root, appPath), app.ToString());
+        File.WriteAllText(Path.Combine(root, salesPath), sales.ToString());
+        File.WriteAllText(Path.Combine(root, readerPath), reader.ToString());
+
+        LogFolderImportResult original = LogFolderImporter.Import(root);
+        Ensure(original.RawEvents.Count == 132 && original.Combined.Events.Count == 120,
+            "A complete import must retain raw NLog copies for reversible filtering.");
+
+        LogFolderSelection onlySales = LogFolderImporter.SelectFiles(original, [salesPath]);
+        Ensure(onlySales.Combined.Events.Count == 48 &&
+               onlySales.DuplicateCopies == 0 &&
+               onlySales.Combined.Events.All(e => e.SourceFile == salesPath),
+            "Filtering App out must retain all genuine sales records, including mirrors.");
+
+        LogFolderSelection onlyApp = LogFolderImporter.SelectFiles(original, [appPath]);
+        Ensure(onlyApp.Combined.Events.Count == 48 &&
+               onlyApp.DuplicateCopies == 0 &&
+               onlyApp.Combined.Events.Any(e =>
+                   e.Message == "Sale request failed" && e.SourceFile == appPath),
+            "Filtering Sales out must recover the App-side copy of mirrored entries.");
+
+        LogFolderSelection unrelated = LogFolderImporter.SelectFiles(
+            original, [readerPath]);
+        Ensure(unrelated.Combined.Events.Count == 36 &&
+               unrelated.Combined.Events.All(e => e.Severity == LogSeverity.Info) &&
+               AnomalyDetector.Analyze(unrelated.Combined).Findings.Count == 0,
+            "Disabled components must disappear from the actual anomaly result.");
+
+        LogFolderSelection empty = LogFolderImporter.SelectFiles(original, []);
+        Ensure(empty.Combined.Events.Count == 0 && empty.Combined.TotalLines == 0 &&
+               AnomalyDetector.Analyze(empty.Combined).Findings.Count == 0,
+            "Disabling all logs must leave an explicitly empty result.");
+
+        LogFolderSelection restored = LogFolderImporter.SelectFiles(
+            original, [appPath, readerPath, salesPath]);
+        Ensure(restored.Combined.Events.Count == 120 &&
+               restored.DuplicateCopies == 12 &&
+               restored.Combined.TotalLines == original.Combined.TotalLines,
+            "Re-enabling all files must restore the original deduplicated view.");
+
+        bool badSelection = false;
+        try { LogFolderImporter.SelectFiles(original, ["../outside.log"]); }
+        catch (ArgumentException) { badSelection = true; }
+        Ensure(badSelection, "Unknown or unsafe relative paths must not be accepted.");
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        bool canceledThrown = false;
+        try { LogFolderImporter.SelectFiles(original, [salesPath], canceled.Token); }
+        catch (OperationCanceledException) { canceledThrown = true; }
+        Ensure(canceledThrown, "Re-filtering must support cancellation.");
     }
     finally
     {
