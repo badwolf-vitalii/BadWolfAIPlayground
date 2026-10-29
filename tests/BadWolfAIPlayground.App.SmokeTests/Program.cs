@@ -134,6 +134,24 @@ internal static class Program
             Assert(encodingSelector.SelectedItem is FileEncodingChoice initialChoice &&
                    initialChoice.Encoding == TextFileEncoding.Auto,
                 "The file encoding selector must be visible and default to strict UTF-8 / BOM detection.");
+            Assert(encodingSelector.Style is not null &&
+                   encodingSelector.Style.BasedOn is null,
+                "File encoding must use the dedicated dark ComboBox style.");
+            encodingSelector.ApplyTemplate();
+            Assert(encodingSelector.Template.FindName("DropDownToggle", encodingSelector) is ToggleButton,
+                "The dark ComboBox template must render a visible dropdown arrow.");
+            Assert(encodingSelector.Template.FindName("ContentSite", encodingSelector) is ContentPresenter,
+                "The selected encoding must remain visible on the dark ComboBox surface.");
+            Assert(encodingSelector.Foreground is SolidColorBrush foreground &&
+                   foreground.Color.R > 190 && foreground.Color.G > 190 &&
+                   encodingSelector.Background is SolidColorBrush background &&
+                   background.Color.R < 70 && background.Color.G < 90,
+                "File encoding must have legible light text on a dark background.");
+            Assert(encodingSelector.ItemContainerStyle is not null &&
+                   encodingSelector.ItemContainerStyle.Setters.OfType<Setter>().Any(setter =>
+                       setter.Property == Control.ForegroundProperty),
+                "Every dropdown option must use a high-contrast foreground.");
+            Console.WriteLine("PASS dark file encoding selector and dropdown item styling");
             searchModel.LoadDemoCommand.Execute(null);
             Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 4,
                 "The local demonstration corpus did not load.");
@@ -228,6 +246,28 @@ internal static class Program
                     "The correctly decoded legacy file must be searchable.");
                 Assert(searchWrongThreadNotifications == 0,
                     "Decoding errors, encoding selection and retry must remain on the WPF dispatcher.");
+                Assert(searchModel.HasPreviousFiles && searchModel.RestoreFilesCommand.CanExecute(null),
+                    "A successful file import must remember source paths for the next session.");
+
+                // Simulate restarting: a brand-new ViewModel must restore file paths
+                // and the encoding choice without reading source content automatically.
+                using (var restarted = new SmartSearchViewModel())
+                {
+                    Assert(restarted.HasPreviousFiles && !restarted.HasDocuments,
+                        "A new session must offer explicit restore without auto-opening private files.");
+                    Task restoring = restarted.RestorePreviousFilesAsync();
+                    PumpUntil(() => restoring.IsCompleted, TimeSpan.FromSeconds(20));
+                    restoring.GetAwaiter().GetResult();
+                    Assert(restarted.HasDocuments && !restarted.HasImportError &&
+                           restarted.SelectedFileEncoding.Encoding == TextFileEncoding.Windows1251,
+                        "Restored files must preserve the original decoding choice.");
+                    restarted.Query = "Помилка";
+                    restarted.CompareCommand.Execute(null);
+                    PumpUntil(() => !restarted.IsBusy, TimeSpan.FromSeconds(20));
+                    Assert(restarted.KeywordResults.Count > 0,
+                        "Restored files must be searchable without a new file picker.");
+                }
+                Console.WriteLine("PASS saved file selection and restore after restarting the ViewModel");
                 Console.WriteLine("PASS failed TXT import diagnostics and Windows-1251 retry in WPF");
             }
             finally

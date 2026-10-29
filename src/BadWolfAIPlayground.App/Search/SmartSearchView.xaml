@@ -56,6 +56,9 @@
                                     Style="{StaticResource PrimaryButton}" Margin="0,0,7,7" />
                             <Button Content="Select text files" Command="{Binding LoadFilesCommand}"
                                     Style="{StaticResource SecondaryButton}" Margin="0,0,7,7" />
+                            <Button Content="Restore previous files" Command="{Binding RestoreFilesCommand}"
+                                    Style="{StaticResource SecondaryButton}" Margin="0,0,7,7"
+                                    ToolTip="Reload the last files and decoding choice after restarting. Then Build AI index to reuse saved embeddings." />
                             <Button Content="Clear" Command="{Binding ClearCommand}"
                                     Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
                         </WrapPanel>
@@ -65,12 +68,15 @@
                             <ComboBox x:Name="FileEncodingSelector" ItemsSource="{Binding FileEncodingChoices}"
                                       SelectedItem="{Binding SelectedFileEncoding, Mode=TwoWay}"
                                       DisplayMemberPath="Label"
-                                      Background="#12263E" Foreground="#E3EFFC"
-                                      BorderBrush="#34516D" Padding="8,5" MinHeight="30" />
+                                      Style="{StaticResource DarkComboBox}"
+                                      ToolTip="The selected text and every dropdown entry use a high-contrast dark theme." />
                             <TextBlock Text="Use Auto for normal UTF-8 files. For older TXT files, choose the original Windows encoding and select the file again."
                                        Style="{StaticResource MutedText}" TextWrapping="Wrap"
                                        FontSize="10" Margin="0,6,0,0" />
                         </StackPanel>
+                        <TextBlock Text="{Binding PreviousFilesLabel}"
+                                   Foreground="#94B9D7" FontSize="10"
+                                   TextWrapping="Wrap" Margin="0,0,0,9" />
                         <TextBlock Text="{Binding ImportLabel}"
                                    FontSize="11" Margin="0,0,0,6" TextWrapping="Wrap">
                             <TextBlock.Style>
@@ -126,7 +132,8 @@
                                    TextWrapping="Wrap" FontSize="11" Margin="0,0,0,12" />
                         <WrapPanel>
                             <Button Content="Build AI index" Command="{Binding BuildIndexCommand}"
-                                    Style="{StaticResource PrimaryButton}" Margin="0,0,8,7" />
+                                    Style="{StaticResource PrimaryButton}" Margin="0,0,8,7"
+                                    ToolTip="Save each completed batch locally and skip completed batches when resuming." />
                             <Button Content="Cancel" Command="{Binding CancelCommand}"
                                     Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
                         </WrapPanel>
@@ -135,7 +142,7 @@
                                      Foreground="#3EA2EA" BorderThickness="0" Margin="0,8,0,7" />
                         <TextBlock Text="{Binding IndexLabel}" Foreground="#8FDBCB"
                                    FontSize="11" TextWrapping="Wrap" />
-                        <TextBlock Text="Large files can require thousands of local embedding calls and several minutes. Progress updates after each batch of eight. Cancel stops indexing without deleting the imported files."
+                        <TextBlock Text="Large files can take time. Each completed batch of eight is saved to your PC. After restarting, click Restore previous files and Build AI index to continue; changes to the files or model restart indexing."
                                    Style="{StaticResource MutedText}" FontSize="10"
                                    TextWrapping="Wrap" Margin="0,10,0,0" />
                     </StackPanel>
