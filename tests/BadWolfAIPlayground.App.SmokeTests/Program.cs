@@ -156,6 +156,15 @@ internal static class Program
             Assert(searchModel.HasDocuments && searchModel.DocumentNames.Count == 4,
                 "The local demonstration corpus did not load.");
             Assert(!searchModel.HasIndex, "A demo must not pretend to have generated AI embeddings.");
+            Assert(!searchModel.AskDocumentCommand.CanExecute(null),
+                "Answer generation must not run before a real semantic index exists.");
+            Assert(smartSearch.FindName("AskDocumentButton") is Button,
+                "The Smart Search Lab must expose a separate Ask document action.");
+            Assert(smartSearch.FindName("AnswerTextBlock") is TextBlock,
+                "The grounded answer must have a dedicated readable area.");
+            Assert(searchModel.AnswerSources.Count == 0,
+                "An unloaded document must not display fabricated citations.");
+            Console.WriteLine("PASS separate grounded-answer UI and no fabricated pre-index answer");
             searchModel.Query = "SQLite locked";
             searchModel.CompareCommand.Execute(null);
             PumpUntil(() => !searchModel.IsBusy, TimeSpan.FromSeconds(20));

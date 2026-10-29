@@ -46,6 +46,20 @@ The model download is roughly **622 MB**. The first download requires internet a
 
 **Large text files:** the import now reads files in cancellable blocks, with a separate import progress bar. The lab accepts a **3.5 MB TXT file** without splitting it by hand. The limits are **40 files, 16 MiB per file, 32 MiB combined, 24 million decoded characters, and 25,000 search chunks**. Text is divided into overlapping **1,800-character** chunks (180-character overlap). Chunks are prepared off the UI thread, retained for subsequent queries and embedded in batches of eight via local Ollama. The UI shows the estimated number of batches before indexing and progress during indexing; **large files can take many minutes** depending on your hardware and text size. Every completed eight-chunk batch is saved to `%LOCALAPPDATA%\BadWolfAIPlayground\SearchIndexes` as a checksummed binary checkpoint. You can **Cancel** or close the app at any point: no incomplete index can be queried, but completed batches remain on disk. After restarting, open Smart Search Lab, click **Restore previous files**, and then **Build AI index**. The app reloads the files, checks their exact text and the model digest, and skips all compatible cached batches. If files, chunking or the local model change, it creates a new cache instead of reusing stale results. Fully completed indexes also load from saved vectors without re-embedding the documents. The most recent file paths and decoding choice are saved (not file contents) in `%LOCALAPPDATA%\BadWolfAIPlayground\last-search-files.json`. Models still need Ollama for query embeddings. To erase private local metadata and vector caches, delete those locations in File Explorer when the application is closed; vector data may reveal information about the documents and is not encrypted. Importing another file set replaces the previous one only on successful completion. The default **File encoding: Auto** accepts UTF-8 and Unicode with a BOM. If a text file fails to decode, the **Choose documents** card shows the actual file name and reason (rather than only a generic "Import did not complete" message). For old ANSI text, select **Windows-1251 (Cyrillic)** or **Windows-1252 (Western)** before retrying; BOM-less UTF-16 LE/BE can also be selected explicitly. The importer deliberately does not guess legacy encodings because the wrong code page can silently corrupt search results. Binary data with NUL characters is still rejected. Cosine scores are relevance rankings, not calibrated correctness probabilities.
 
+#### Ask the document (optional local Q&A)
+
+**Compare searches** displays nearest text snippets and similarity scores; it does not answer natural-language questions. A model may return five weakly related snippets for a question, especially when the selected file omits the relevant passage.
+
+For **Ask document**, install a separate text-generating Ollama model once (EmbeddingGemma can only produce vectors):
+
+```powershell
+ollama pull qwen3:4b-instruct
+```
+
+The instruction model is approximately 2.5 GB. You can continue using keyword and semantic search without it. With an AI index built, type a question and click **Ask document**. The app rewrites the question into search terms, combines lexical and semantic retrieval, sends at most seven passages to the local answer model, and displays a short response with quoted evidence and source chunk IDs. The model is instructed to use **only the selected documents** and to decline when the excerpts do not support an answer. The app checks every quoted passage against the actual imported text; an answer without a valid source quote is rejected.
+
+**Important:** This is a grounded local RAG experiment, not a guaranteed fact checker. A verbatim quote confirms that the text exists but does not prove the interpretation. The language model might still misread a passage. Questions about absent chapters or concepts (such as the traditional "apple" when a translation says only "fruit") may return "not found" or need different wording. No text is sent to cloud services.
+
 #### Try your own large TXT file
 
 1. In **Smart Search Lab**, choose **File encoding: Auto** (default) and click **Select text files** to choose your 3.5 MB TXT file. For a file previously saved in Windows-1251 or Windows-1252, select that encoding instead.
@@ -112,7 +126,7 @@ CI tests both search algorithms using deterministic fake embeddings and the Olla
 
 - **v0.1:** Neural Network Lab with XOR, interactive lesson, visual loss and weight diagrams.
 - **v0.2:** Local semantic vs keyword search using a replaceable embedding provider.
-- **Later:** faster indexing and automatic session restore, ONNX embedding backend, additional file importers, custom datasets, experiment comparisons.
+- **Later:** stronger relevance reranking, answer quality evaluations, faster indexing, ONNX embedding backend, additional file importers, custom datasets, experiment comparisons.
 - **Later:** log and telemetry anomaly detection with baseline comparisons.
 
 ## License

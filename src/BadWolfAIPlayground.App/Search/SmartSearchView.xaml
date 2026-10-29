@@ -11,6 +11,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <StackPanel Grid.Row="0" Margin="0,0,0,22">
@@ -152,7 +153,7 @@
             <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,0,0,17">
                 <StackPanel>
                     <TextBlock Text="3  Compare results" FontSize="17" FontWeight="SemiBold" />
-                    <TextBlock Text="Ask a question. Exact word matching and AI vector similarity are computed independently."
+                    <TextBlock Text="These are similarity rankings, not answers. An unrelated passage can still receive a cosine score."
                                Style="{StaticResource MutedText}" FontSize="11" TextWrapping="Wrap"
                                Margin="0,6,0,14" />
                     <Grid>
@@ -173,7 +174,56 @@
                 </StackPanel>
             </Border>
 
-            <Grid Grid.Row="4" Margin="0,0,0,18">
+            <Border Grid.Row="4" Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="4  Ask the document" FontSize="17" FontWeight="SemiBold" />
+                    <TextBlock Text="Generate a local answer to the question above, using retrieved passages as evidence. The answer must include checkable quotes from the selected files."
+                               Style="{StaticResource MutedText}" FontSize="11" TextWrapping="Wrap"
+                               Margin="0,6,0,11" />
+                    <TextBlock Text="ONE-TIME ANSWER MODEL SETUP (separate from EmbeddingGemma)"
+                               Foreground="#8ABCE5" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,5" />
+                    <Border Background="#0B1526" BorderBrush="#34516D" BorderThickness="1"
+                            CornerRadius="7" Padding="12,9" Margin="0,0,0,10">
+                        <TextBlock Text="ollama pull qwen3:4b-instruct"
+                                   FontFamily="Consolas" FontSize="12" Foreground="#C7E6FF" />
+                    </Border>
+                    <WrapPanel Margin="0,0,0,10">
+                        <Button x:Name="AskDocumentButton" Content="Ask document"
+                                Command="{Binding AskDocumentCommand}"
+                                Style="{StaticResource PrimaryButton}" Margin="0,0,8,7" />
+                        <Button Content="Copy answer-model command"
+                                Command="{Binding CopyAnswerModelCommand}"
+                                Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding AnswerStatus}" Foreground="#A5C7DF"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10" />
+                    <Border Background="#0B1728" BorderBrush="#28526A" BorderThickness="1"
+                            CornerRadius="9" Padding="15" Margin="0,0,0,11">
+                        <TextBlock x:Name="AnswerTextBlock" Text="{Binding AnswerText}"
+                                   TextWrapping="Wrap" Foreground="#E8F2FF" FontSize="13" />
+                    </Border>
+                    <ItemsControl ItemsSource="{Binding AnswerSources}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#0B1F32" BorderBrush="#29645F"
+                                        BorderThickness="1" CornerRadius="8"
+                                        Margin="0,0,0,8" Padding="13">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" Foreground="#91E3D3"
+                                                   FontSize="11" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Quote}" Foreground="#CBE2F5"
+                                                   FontSize="12" TextWrapping="Wrap" Margin="0,7,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Text="Citations are verbatim snippets checked against the imported text. They do not guarantee that the model's interpretation is correct. If the necessary passage is missing, the app should say so."
+                               Style="{StaticResource MutedText}" FontSize="10" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
+
+            <Grid Grid.Row="5" Margin="0,0,0,18">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="1*" />
                     <ColumnDefinition Width="1*" />
@@ -233,7 +283,7 @@
                     </StackPanel>
                 </Border>
             </Grid>
-            <TextBlock Grid.Row="5" Text="Experiment: cosine similarity is not a confidence percentage. Results must be checked against the original text. The model and documents stay local."
+            <TextBlock Grid.Row="6" Text="Experiment: cosine similarity is not a confidence percentage. Results must be checked against the original text. The model and documents stay local."
                        Foreground="#7893AE" FontSize="11" TextWrapping="Wrap"
                        HorizontalAlignment="Center" Margin="0,4,0,0" />
         </Grid>

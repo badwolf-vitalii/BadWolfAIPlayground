@@ -71,3 +71,41 @@ Progress callbacks are explicitly dispatched to the captured WPF `Dispatcher`, e
 - **Scoring:** lexical results are ranked by term occurrences; semantic results use normalized dot product, equal to cosine similarity. A value like `0.71` is **not a 71% probability**. Review the retrieved source before trusting any result.
 - **Security and limitations:** only user-selected local text files are read; text import enforces file count, size and decoded character limits, rejecting NULs and invalid sequences in the selected encoding. Legacy code pages are never guessed automatically, since incorrect decoding may return plausible but incorrect search hits. The import card displays failures inline, retains the true exception message and preserves the previous document set on failure or cancellation. Search does not execute file content or follow internet links. A model's local endpoint may write its own logs/cache as configured by Ollama. Document text itself is not written to the checkpoint cache, but the local binary embedding vectors may reveal information and are not encrypted. The most recent selected paths and encoding are stored locally in `last-search-files.json` and only read on user-initiated **Restore previous files**. Neither source text nor files are loaded automatically on startup. Old caches are not automatically deleted; remove the local files from Explorer if needed. OCR, PDF import, and background file watching are not included.
 - **Verification:** package-free search smoke tests use a deterministic mock embedding provider, an HTTP handler stub for Ollama, chunk boundaries, multi-megabyte UTF-8 import, byte-based progress, legacy Windows encodings, explicit BOM-less UTF-16, actionable failures, safety limits, batch indexing, cancellation, cross-language ranking behavior, and validation. The Windows WPF smoke test navigates between labs, verifies keyword search with Ollama absent, and imports a synthetic 3.5 MiB file, checks actual error display and retries a Windows-1251 file to catch regressions in UI responsiveness, threading, encoding and file limits. Search smoke tests also simulate an interrupted build, saved-batch resumption, a fully cached index, changed text/model digests, corrupt checkpoint recovery and Ollama fingerprint validation. The WPF smoke test checks ComboBox dark-theme contrast and restoring the previous selected files/encoding after a new ViewModel is created. Actual embedding model performance still requires a manual local test with EmbeddingGemma installed.
+
+## Grounded document answers (optional Ollama model)
+
+The **Compare searches** mode intentionally shows only keyword matches and
+cosine-similarity rankings. Those scores are not correctness probabilities,
+and the top-ranked text may have no answer to a natural-language question.
+
+**Ask document** uses an additional, user-installed local generator
+(`qwen3:4b-instruct`, via Ollama `/api/chat`). EmbeddingGemma remains the
+separate vector-retrieval model. The answer pipeline:
+
+1. Propose at most two alternative retrieval phrases with a local chat model.
+   These phrases are search hints, **not verified facts**.
+2. Search both the original and rewritten phrases using dense embeddings
+   and lexical matching. Merge candidates by reciprocal-rank fusion.
+3. Send the seven best snippets (not the whole file) to the local chat model
+   with source IDs and an instruction to use only those snippets.
+4. Parse structured JSON with `supported`, `answer`, and verbatim
+   `{id, quote}` evidence. Verify that every cited substring exists in
+   the referenced original chunk, allowing only whitespace normalization.
+5. Show cited answers with source filenames/chunk IDs; otherwise show an
+   explicit "not found in selected text" message. Never return an
+   unsupported answer as if it were verified.
+
+The source documents are untrusted input; instructions embedded in them
+must be treated as data, and no tool or filesystem action is driven by
+model-generated content. Quote matching is only an authenticity check:
+it cannot guarantee a correct inference or a relevant answer. Source
+omissions, translation differences, incomplete passages, contextual
+ambiguities and model quality still matter. The WPF UI labels the
+response as AI-generated and asks users to read the quotes. A missing
+answer model generates an actionable Ollama installation error; no model
+download or cloud call is automatic.
+
+Search-library smoke tests use fake answer/embedding models and mocked
+Ollama `/api/chat`, verify query expansion, source/citation validation,
+unsupported-answer handling, and local JSON response parsing. They do
+not measure the quality of the real Qwen3 model.

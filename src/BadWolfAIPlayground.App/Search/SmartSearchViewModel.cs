@@ -13,6 +13,7 @@ namespace BadWolfAIPlayground.App.Search;
 public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 {
     private readonly OllamaEmbeddingProvider _embeddings;
+    private readonly OllamaAnswerProvider _answerModel;
     private readonly Dispatcher _dispatcher;
     private readonly SearchIndexCheckpointStore _checkpoints;
     private readonly RecentSearchFilesStore _recentFiles;
@@ -27,6 +28,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _checkModelCommand;
     private readonly RelayCommand _buildIndexCommand;
     private readonly RelayCommand _compareCommand;
+    private readonly RelayCommand _askDocumentCommand;
+    private readonly RelayCommand _copyAnswerModelCommand;
     private readonly RelayCommand _cancelCommand;
     private readonly RelayCommand _copyCommand;
     private SemanticIndex? _index;
@@ -41,6 +44,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _documentsLabel = "0 documents selected";
     private string _indexLabel = "No AI index yet";
     private string _searchHint = "Try a Ukrainian query against English demo documents.";
+    private string _answerText = "No answer yet. First build the AI index, then click Ask document.";
+    private string _answerStatus = "For cited answers, install a separate local model: ollama pull qwen3:4b-instruct";
     private double _indexProgress;
     private double _importProgress;
     private string _importLabel = "Select text files (up to 16 MiB each).";
@@ -57,10 +62,12 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     ];
 
     public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null,
-        SearchIndexCheckpointStore? checkpoints = null, RecentSearchFilesStore? recentFiles = null)
+        SearchIndexCheckpointStore? checkpoints = null, RecentSearchFilesStore? recentFiles = null,
+        OllamaAnswerProvider? answerModel = null)
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _embeddings = embeddings ?? new OllamaEmbeddingProvider();
+        _answerModel = answerModel ?? new OllamaAnswerProvider();
         _checkpoints = checkpoints ?? new SearchIndexCheckpointStore();
         _recentFiles = recentFiles ?? new RecentSearchFilesStore();
         _lastSelection = _recentFiles.Load();
@@ -73,6 +80,10 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _buildIndexCommand = new RelayCommand(async () => await BuildIndexAsync(), () => !IsBusy && HasDocuments);
         _compareCommand = new RelayCommand(async () => await CompareAsync(),
             () => !IsBusy && HasDocuments && !string.IsNullOrWhiteSpace(Query));
+        _askDocumentCommand = new RelayCommand(async () => await AskDocumentAsync(),
+            () => !IsBusy && HasIndex && !string.IsNullOrWhiteSpace(Query));
+        _copyAnswerModelCommand = new RelayCommand(
+            () => Clipboard.SetText("ollama pull qwen3:4b-instruct"));
         _cancelCommand = new RelayCommand(() => _cancellation?.Cancel(), () => IsBusy);
         _copyCommand = new RelayCommand(() => Clipboard.SetText("ollama pull embeddinggemma"));
     }
@@ -84,12 +95,15 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     public ICommand CheckModelCommand => _checkModelCommand;
     public ICommand BuildIndexCommand => _buildIndexCommand;
     public ICommand CompareCommand => _compareCommand;
+    public ICommand AskDocumentCommand => _askDocumentCommand;
+    public ICommand CopyAnswerModelCommand => _copyAnswerModelCommand;
     public ICommand CancelCommand => _cancelCommand;
     public ICommand CopyInstallCommand => _copyCommand;
 
     public ObservableCollection<string> DocumentNames { get; } = [];
     public ObservableCollection<SearchResultRow> KeywordResults { get; } = [];
     public ObservableCollection<SearchResultRow> SemanticResults { get; } = [];
+    public ObservableCollection<AnswerSourceRow> AnswerSources { get; } = [];
 
     public string ModelName => _embeddings.ModelName;
     public bool HasDocuments => _documents.Count > 0;
@@ -107,6 +121,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _query, value))
             {
                 _compareCommand.NotifyCanExecuteChanged();
+                _askDocumentCommand.NotifyCanExecuteChanged();
+                ResetAnswer();
             }
         }
     }
@@ -125,6 +141,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 _checkModelCommand.NotifyCanExecuteChanged();
                 _buildIndexCommand.NotifyCanExecuteChanged();
                 _compareCommand.NotifyCanExecuteChanged();
+                _askDocumentCommand.NotifyCanExecuteChanged();
                 _cancelCommand.NotifyCanExecuteChanged();
             }
         }
@@ -158,6 +175,25 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     {
         get => _searchHint;
         private set => SetProperty(ref _searchHint, value);
+    }
+
+    public string AnswerText
+    {
+        get => _answerText;
+        private set => SetProperty(ref _answerText, value);
+    }
+
+    public string AnswerStatus
+    {
+        get => _answerStatus;
+        private set => SetProperty(ref _answerStatus, value);
+    }
+
+    private void ResetAnswer()
+    {
+        AnswerSources.Clear();
+        AnswerText = "No answer yet. Ask document to get a sourced answer (requires a local instruction model).";
+        AnswerStatus = "Answers require qwen3:4b-instruct, installed separately from EmbeddingGemma.";
     }
 
     public double IndexProgress
@@ -325,6 +361,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _index = null;
         KeywordResults.Clear();
         SemanticResults.Clear();
+        ResetAnswer();
         OnPropertyChanged(nameof(HasDocuments));
         OnPropertyChanged(nameof(HasIndex));
         DocumentsLabel = $"{_documents.Count} document(s) · {_chunks.Count:N0} text chunks";
@@ -337,6 +374,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _clearCommand.NotifyCanExecuteChanged();
         _buildIndexCommand.NotifyCanExecuteChanged();
         _compareCommand.NotifyCanExecuteChanged();
+        _askDocumentCommand.NotifyCanExecuteChanged();
     }
 
     private void Clear()
@@ -380,6 +418,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _index = null;
         OnPropertyChanged(nameof(HasIndex));
         SemanticResults.Clear();
+        ResetAnswer();
+        _askDocumentCommand.NotifyCanExecuteChanged();
         IndexProgress = 0;
         IndexLabel = $"Checking saved batches for {chunks.Count:N0} chunks...";
         OperationOutcome outcome = await RunOperationAsync(async token =>
@@ -404,6 +444,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             {
                 _index = built;
                 OnPropertyChanged(nameof(HasIndex));
+                _askDocumentCommand.NotifyCanExecuteChanged();
                 IndexProgress = 100;
                 IndexLabel = $"Ready: {built.Chunks.Count:N0} chunks · {built.ModelName} · " +
                              $"{built.ReusedChunks:N0} restored from disk.";
@@ -459,10 +500,61 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                     SemanticResults.Add(new SearchResultRow(result, semantic: true));
                 }
 
-                StatusText = $"Comparison complete: {keyword.Count} lexical and {semantic.Count} semantic matches.";
-                SearchHint = "The AI ranks by cosine similarity. Verify the text: even a high score can be irrelevant.";
+                StatusText = $"Comparison complete: {keyword.Count} keyword and {semantic.Count} semantic candidates.";
+                SearchHint = "Rankings are not answers: cosine similarity is not confidence. For a cited answer use Ask document below.";
             });
         });
+    }
+
+    private async Task AskDocumentAsync()
+    {
+        SemanticIndex? index = _index;
+        if (index is null)
+        {
+            AnswerStatus = "Build AI index first; text generation alone cannot search the entire file.";
+            return;
+        }
+
+        string question = Query.Trim();
+        AnswerSources.Clear();
+        AnswerText = "Searching relevant passages and preparing an answer...";
+        AnswerStatus = "Using the local answer model and verifying verbatim citations. This may take a moment.";
+        OperationOutcome outcome = await RunOperationAsync(async token =>
+        {
+            GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
+                index, _embeddings, _answerModel, question, token);
+
+            await DispatchAsync(() =>
+            {
+                AnswerText = answer.Text;
+                foreach (VerifiedCitation citation in answer.Citations)
+                {
+                    AnswerSources.Add(new AnswerSourceRow(
+                        $"[S{citation.Id}] {citation.Chunk.DocumentName} · chunk {citation.Chunk.Number}",
+                        citation.Quote));
+                }
+
+                AnswerStatus = answer.Supported
+                    ? $"AI-generated answer with {answer.Citations.Count} verifiable quotation(s) " +
+                      $"from {answer.ExaminedPassages} retrieved passages. Read the quotes: this is not guaranteed to be correct."
+                    : "The selected excerpts did not provide a verifiable answer. " +
+                      "Try rephrasing the question or importing the relevant section.";
+            });
+        });
+
+        if (!outcome.Succeeded)
+        {
+            await DispatchAsync(() =>
+            {
+                AnswerSources.Clear();
+                AnswerText = outcome.Cancelled ? "Answer generation cancelled." :
+                    "No verified answer was generated.";
+                AnswerStatus = outcome.Cancelled
+                    ? "You can ask the document again."
+                    : $"Could not generate a local answer: {outcome.ErrorMessage}. " +
+                      "Install the answer model with: ollama pull qwen3:4b-instruct";
+            });
+        }
     }
 
     private async Task<OperationOutcome> RunOperationAsync(Func<CancellationToken, Task> operation)
@@ -540,8 +632,11 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _indexGeneration++;
         _cancellation?.Cancel();
         _embeddings.Dispose();
+        _answerModel.Dispose();
     }
 }
+
+public sealed record AnswerSourceRow(string Title, string Quote);
 
 /// <summary>A visible, explicit file-decoding choice. Ambiguous legacy text is never guessed.</summary>
 public sealed record FileEncodingChoice(string Label, TextFileEncoding Encoding);

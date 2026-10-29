@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using BadWolfAIPlayground.Search;
 
 var tests = new (string Name, Func<Task> Check)[]
@@ -16,6 +17,8 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Oversized index protection", TestIndexLimit),
     ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
     ("Ollama model digest validation", TestOllamaFingerprint),
+    ("Grounded answers and verbatim citations", TestGroundedAnswers),
+    ("Local Ollama Q&A protocol", TestOllamaAnswerProtocol),
 };
 int passed = 0;
 foreach ((string name, Func<Task> check) in tests)
@@ -372,6 +375,109 @@ sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int
 
         return Task.FromResult<IReadOnlyList<float[]>>(
             inputs.Select(_ => new[] { 1f, 0f, 0f }).ToArray());
+    }
+}
+
+static async Task TestGroundedAnswers()
+{
+    SearchChunk[] chunks =
+    [
+        new("Genesis.txt", null, 1,
+            "І побачила жінка, що дерево добре на їжу, і взяла з його плоду, та й з'їла."),
+        new("Other.txt", null, 1, "Сонце світить над полем. Птахи літають над рікою.")
+    ];
+    var vectors = new FakeEmbeddings();
+    SemanticIndex index = await SemanticSearch.BuildAsync(chunks, vectors);
+
+    var grounded = new FakeAnswerGenerator();
+    GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
+        index, vectors, grounded, "Де Єва взяла яблуко?");
+    Assert(answer.Supported && answer.Citations.Count == 1 &&
+           answer.Citations[0].Chunk.DocumentName == "Genesis.txt" &&
+           answer.Citations[0].Quote.Contains("плоду", StringComparison.Ordinal),
+        "The answer must cite an exact passage from the selected document.");
+    Assert(grounded.ReceivedPassages.Any(x => x.Chunk.DocumentName == "Genesis.txt"),
+        "Retrieval should find a relevant passage even if the wording differs.");
+
+    GroundedAnswer fabricated = await GroundedQuestionAnswering.AskAsync(
+        index, vectors, new FakeAnswerGenerator(inventQuote: true), "Де Єва взяла яблуко?");
+    Assert(!fabricated.Supported && fabricated.Citations.Count == 0 &&
+           fabricated.Text.Contains("Не вдалося", StringComparison.Ordinal),
+        "A model answer with an invented quote must not be displayed as verified.");
+
+    GroundedAnswer missing = await GroundedQuestionAnswering.AskAsync(
+        index, vectors, new FakeAnswerGenerator(refuse: true), "Хто побудував піраміди?");
+    Assert(!missing.Supported,
+        "Questions unsupported by the selected text must produce a clear no-answer state.");
+}
+
+static async Task TestOllamaAnswerProtocol()
+{
+    int requests = 0;
+    var handler = new StubHandler(async (request, token) =>
+    {
+        Assert(request.RequestUri?.AbsolutePath == "/api/chat",
+            "Answer generation must use the local Ollama chat endpoint.");
+        string body = await request.Content!.ReadAsStringAsync(token);
+        using JsonDocument requestJson = JsonDocument.Parse(body);
+        Assert(requestJson.RootElement.GetProperty("model").GetString() == "qwen3:4b-instruct" &&
+               requestJson.RootElement.GetProperty("stream").GetBoolean() == false &&
+               requestJson.RootElement.GetProperty("format").GetString() == "json",
+            "The answer model and structured local response settings are missing.");
+
+        string response = requests++ == 0
+            ? "{\"queries\":[\"дерево плід Едем\"]}"
+            : "{\"supported\":true,\"answer\":\"Взяла плід із дерева.\",\"evidence\":[{\"id\":1,\"quote\":\"взяла з його плоду\"}]}";
+        string wrapper = JsonSerializer.Serialize(new { message = new { role = "assistant", content = response } });
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(wrapper, Encoding.UTF8, "application/json")
+        };
+    });
+
+    using var client = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(OllamaEmbeddingProvider.LocalEndpoint)
+    };
+    using var localModel = new OllamaAnswerProvider(client: client);
+    IReadOnlyList<string> expanded = await localModel.ExpandSearchAsync("Де Єва взяла яблуко?");
+    Assert(expanded.Count == 1 && expanded[0].Contains("плід", StringComparison.Ordinal),
+        "The model must suggest semantic search vocabulary.");
+
+    ProposedAnswer generated = await localModel.GenerateAsync("Де?", [
+        new EvidencePassage(1,
+            new SearchChunk("Genesis.txt", null, 1, "взяла з його плоду"),
+            0.5)]);
+    Assert(generated.Supported && generated.Evidence.Count == 1 &&
+           generated.Evidence[0].Quote == "взяла з його плоду" && requests == 2,
+        "The structured answer and source quote must be parsed correctly.");
+}
+
+sealed class FakeAnswerGenerator(bool inventQuote = false, bool refuse = false) : ILocalAnswerGenerator
+{
+    public string ModelName => "fake-local-answer-model";
+    public IReadOnlyList<EvidencePassage> ReceivedPassages { get; private set; } = [];
+
+    public Task<IReadOnlyList<string>> ExpandSearchAsync(string question, CancellationToken token = default) =>
+        Task.FromResult<IReadOnlyList<string>>(["жінка взяла плід дерева"]);
+
+    public Task<ProposedAnswer> GenerateAsync(
+        string question, IReadOnlyList<EvidencePassage> passages, CancellationToken token = default)
+    {
+        ReceivedPassages = passages;
+        EvidencePassage? relevant = passages.FirstOrDefault(
+            p => p.Chunk.Content.Contains("плоду", StringComparison.Ordinal));
+        if (refuse || relevant is null)
+        {
+            return Task.FromResult(new ProposedAnswer(false, "", []));
+        }
+
+        return Task.FromResult(new ProposedAnswer(true, "Вона взяла плід із дерева.",
+        [
+            new ProposedEvidence(relevant.Id, inventQuote
+                ? "вигадана цитата з відсутнього документа"
+                : "взяла з його плоду")
+        ]));
     }
 }
 
