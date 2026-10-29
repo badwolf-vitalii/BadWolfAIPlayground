@@ -237,3 +237,36 @@ with wider evidence, rejection of fabricated quotations after retry,
 cancellation between attempts, accurate character counts and real
 multi-response metric aggregation. Live CPU timings and correctness
 on source books are manual acceptance tests.
+
+
+### Answer-bearing citation validation
+
+The original `GroundedQuestionAnswering.ValidateEvidence` confirmed that
+a quote was copied from the candidate excerpt but never checked whether
+that quote supported the answer. This led to a real-world bug: Qwen
+answered `Лиса Микита` yet quoted a line about the fox that did not
+mention the name.
+
+The new `AnswerEvidenceValidator` operates *after* the exact-substring
+provenance check, never instead of it. It identifies distinctive
+non-stopword answer terms not already contained in the question,
+and conservatively checks their occurrence in the quoted text. All
+new names and numeric facts must be present, allowing narrow nominal
+suffix variation for inflected forms. At least half of distinctive answer
+terms must match the cited source text. Quotes that match no distinctive
+answer term are filtered out rather than shown as supporting citations.
+
+An unrelated verbatim citation triggers the existing single bounded
+retry, not an additional independent LLM verification call. Failure
+after the retry is reported as `UnsubstantiatedAnswer`, distinct from
+`UnverifiableCitation` (no exact quote) and `ModelDeclined`.
+Only quotes passing both provenance and lexical corroboration can be
+displayed in the supported-answer area. The UI explains that matching
+words/names is NOT semantic proof or an entailment guarantee; correct
+paraphrases may need better textual evidence, while some semantically
+misleading matches remain possible.
+
+Search tests reproduce the user's *Farbovanyi Lys* mismatch with an
+exact but irrelevant quote, verify positive and negative citations,
+Ukrainian name inflections, missing years, one adaptive fallback
+after weak evidence, and an unsupported outcome if retries remain weak.

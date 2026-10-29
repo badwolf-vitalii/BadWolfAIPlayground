@@ -73,7 +73,7 @@ For **Ask document**, install a separate text-generating Ollama model once (Embe
 ollama pull qwen3:4b-instruct
 ```
 
-The instruction model is approximately 2.5 GB. You can continue using keyword and semantic search without it. With an AI index built, type a question and click **Ask document**. The app rewrites the question into search terms, combines lexical and semantic retrieval, sends at most seven passages to the local answer model, and displays a short response with quoted evidence and source chunk IDs. The model is instructed to use **only the selected documents** and to decline when the excerpts do not support an answer. The app checks every quoted passage against the actual imported text; an answer without a valid source quote is rejected.
+The instruction model is approximately 2.5 GB. You can continue using keyword and semantic search without it. With an AI index built, type a question and click **Ask document**. The app rewrites the question into search terms, combines lexical and semantic retrieval, sends at most seven passages to the local answer model, and displays a short response with quoted evidence and source chunk IDs. The model is instructed to use **only the selected documents** and to decline when the excerpts do not support an answer. The app first checks quoted passages against the actual imported text, then checks that the quotes mention distinctive answer facts such as names and numbers. An answer without a relevant, verifiable quote is rejected.
 
 **Context handling:** the answer model uses an explicitly requested **8,192-token context window**, with up to seven source excerpts bounded to **900 characters each** (rather than sending entire 1,800-character search chunks). Source quotes are validated against the full text regardless of excerpt truncation. This avoids the usual local 4,096-token default causing the `request exceeds available context size` error. Enlarging the context uses more model memory; if Ollama still rejects the request, check its context-length setting. Existing text files and completed embedding indexes do not need to be reimported or rebuilt for this change.
 
@@ -245,3 +245,34 @@ The previous on-device baseline for a Qwen2.5 1.5B question about
 *Farbovanyi Lys* was about 35 seconds and 3,651 prompt tokens; this
 is an observation from one run, not a guaranteed benchmark. Repeat
 the same question with the same model to measure your real improvement.
+
+
+### Citation relevance: verified text is not verified reasoning
+
+A real user test revealed a dangerous false positive: the model answered
+**"Лиса Микита"** but cited an unrelated sentence
+**"Лиса мало хто й запримітив, і нікому до нього не було діла."**
+The quotation was genuinely in the book but did not name the fox.
+
+Document Q&A now performs two separate checks **without an extra AI call**:
+1. Confirm that each quote is a verbatim substring of the exact text
+   sent to the answer model (existing source-provenance check).
+2. Check that the cited text actually contains answer-specific information:
+   the key words that differ from the question, and all distinctive proper
+   names or numbers present in the answer. Conservative matching accepts
+   some common Ukrainian grammatical endings (e.g. Микита / Микитою).
+   Irrelevant citations are removed even when other citations are valid.
+
+When the model quotes a real but irrelevant sentence, **Ask document**
+automatically attempts one wider retrieval/generation pass, as with other
+uncited responses. If the wider pass still fails, the UI explicitly
+reports **Unsubstantiated answer**, shows which answer words were not
+found in its quotes, and does *not* show the proposed answer as verified.
+The evidence inspector still shows the source text used by the model.
+
+**Limitation:** this is a conservative *lexical* relevance check, not a
+general semantic entailment engine or a factual guarantee. It can reject
+a correct paraphrase when the supporting quote uses different vocabulary,
+and it cannot detect every misleading quote containing the right name.
+The tests reproduce the actual fox/name failure and verify that an
+irrelevant citation never passes just because it is verbatim.

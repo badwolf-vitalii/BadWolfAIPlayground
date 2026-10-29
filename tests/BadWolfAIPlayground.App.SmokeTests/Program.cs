@@ -216,6 +216,8 @@ internal static class Program
                 "Evidence inspector must start empty without fabricated passages.");
             Assert(searchModel.AnswerSources.Count == 0,
                 "An unloaded document must not display fabricated citations.");
+            Assert(Enum.IsDefined(AnswerOutcome.UnsubstantiatedAnswer),
+                "The UI must distinguish an irrelevant verbatim citation from a fabricated quote.");
             Console.WriteLine("PASS separate grounded-answer UI and no fabricated pre-index answer");
             searchModel.Query = "SQLite locked";
             searchModel.CompareCommand.Execute(null);

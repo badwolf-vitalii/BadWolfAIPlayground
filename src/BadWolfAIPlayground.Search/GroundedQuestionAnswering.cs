@@ -21,7 +21,8 @@ public enum AnswerOutcome
     Verified,
     NoCandidates,
     ModelDeclined,
-    UnverifiableCitation
+    UnverifiableCitation,
+    UnsubstantiatedAnswer
 }
 
 public sealed record GroundedAnswer(
@@ -38,6 +39,7 @@ public sealed record GroundedAnswer(
     public int TotalPassagesSubmitted { get; init; }
     public int ExcerptCharactersSubmitted { get; init; }
     public int FullContextCharacters { get; init; }
+    public IReadOnlyList<string> UnsupportedAnswerTerms { get; init; } = [];
 }
 
 /// <summary>Only generates text; never reads files or makes remote calls on its own.</summary>
@@ -197,6 +199,8 @@ public static class GroundedQuestionAnswering
         int attempts = 0;
         ProposedAnswer proposed;
         VerifiedCitation[] valid;
+        AnswerEvidenceValidator.Assessment corroboration =
+            new([], []);
 
         while (true)
         {
@@ -209,9 +213,15 @@ public static class GroundedQuestionAnswering
 
             proposed = await generator.GenerateAsync(question, submitted, cancellationToken)
                 .ConfigureAwait(false);
-            valid = ValidateEvidence(proposed, submitted, question, cancellationToken);
+            VerifiedCitation[] exactQuotes = ValidateEvidence(
+                proposed, submitted, question, cancellationToken);
+            corroboration = AnswerEvidenceValidator.Check(
+                question, proposed.Answer, exactQuotes);
+            valid = corroboration.Citations.ToArray();
 
-            // Stop immediately on a verbatim-cited result. Otherwise retry
+            // Stop immediately on a quote that also mentions the answer's
+            // essential facts. An unrelated verbatim quote triggers fallback.
+            // Otherwise retry
             // just once, with a wider but still bounded set of source excerpts.
             if (valid.Length > 0 || submitted.Length == passages.Length || attempts == 2)
             {
@@ -228,7 +238,9 @@ public static class GroundedQuestionAnswering
             ? AnswerOutcome.Verified
             : !proposed.Supported || string.IsNullOrWhiteSpace(proposed.Answer)
                 ? AnswerOutcome.ModelDeclined
-                : AnswerOutcome.UnverifiableCitation;
+                : corroboration.MissingAnswerTerms.Count > 0
+                    ? AnswerOutcome.UnsubstantiatedAnswer
+                    : AnswerOutcome.UnverifiableCitation;
 
         return new GroundedAnswer(
             outcome == AnswerOutcome.Verified ? proposed.Answer.Trim() : NotFound,
@@ -243,7 +255,8 @@ public static class GroundedQuestionAnswering
             AvailablePassages = passages.Length,
             TotalPassagesSubmitted = submittedPassages,
             ExcerptCharactersSubmitted = submittedCharacters,
-            FullContextCharacters = fullContextCharacters
+            FullContextCharacters = fullContextCharacters,
+            UnsupportedAnswerTerms = corroboration.MissingAnswerTerms
         };
     }
 

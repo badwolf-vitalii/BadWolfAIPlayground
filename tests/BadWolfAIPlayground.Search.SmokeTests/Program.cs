@@ -16,6 +16,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Explicit legacy encodings and readable import errors", TestTextEncodings),
     ("Fast document Q&A skips slow query-expansion call", TestFastAnswers),
     ("Adaptive cited answers and fallback retrieval", TestAdaptiveAnswering),
+    ("Verbatim citations must support the stated answer", TestCitationRelevance),
     ("Incremental embedding batches and progress", TestLargeIndex),
     ("Oversized index protection", TestIndexLimit),
     ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
@@ -574,6 +575,76 @@ static async Task TestAdaptiveAnswering()
         "Missing metrics must not silently become zero or invented token savings.");
 }
 
+static async Task TestCitationRelevance()
+{
+    const string question = "Як звали лиса?";
+    const string modelAnswer = "Лиса Микита";
+    const string unrelated = "Лиса мало хто й запримітив, і нікому до нього не було діла.";
+    const string related = "Лис Микита хитрував і обминав усі небезпеки.";
+    var source = new SearchChunk("farbovanii-lis.txt", null, 2,
+        unrelated + " " + related);
+    var wrong = new VerifiedCitation(1, source, unrelated);
+    var correct = new VerifiedCitation(2, source, related);
+
+    AnswerEvidenceValidator.Assessment invalid = AnswerEvidenceValidator.Check(
+        question, modelAnswer, [wrong]);
+    Assert(invalid.Citations.Count == 0 &&
+           invalid.MissingAnswerTerms.Contains("Микита", StringComparer.OrdinalIgnoreCase),
+        "Regression: a real quote about the fox without 'Микита' cannot prove its name.");
+
+    AnswerEvidenceValidator.Assessment supported = AnswerEvidenceValidator.Check(
+        question, modelAnswer, [wrong, correct]);
+    Assert(supported.Citations.Count == 1 && supported.Citations[0].Id == 2,
+        "Reject an unrelated exact quote, retain only the quotation naming the fox.");
+
+    AnswerEvidenceValidator.Assessment inflected = AnswerEvidenceValidator.Check(
+        question, "Микита", [
+            new VerifiedCitation(1, source, "Лиса звали Микитою.")
+        ]);
+    Assert(inflected.Citations.Count == 1,
+        "A narrow, genuine Ukrainian inflection of a name should still corroborate it.");
+
+    AnswerEvidenceValidator.Assessment numberMissing = AnswerEvidenceValidator.Check(
+        "У якому році народився герой?", "1945 року", [
+            new VerifiedCitation(1, source, "Герой народився у далекому році.")
+        ]);
+    Assert(numberMissing.Citations.Count == 0 &&
+           numberMissing.MissingAnswerTerms.Contains("1945"),
+        "A year or number in the answer must exist in the quoted passage.");
+
+    AnswerEvidenceValidator.Assessment numberPresent = AnswerEvidenceValidator.Check(
+        "У якому році народився герой?", "1945 року", [
+            new VerifiedCitation(1, source, "Герой народився у 1945 році.")
+        ]);
+    Assert(numberPresent.Citations.Count == 1,
+        "The same short answer with an actual matching year should be accepted.");
+
+    SearchChunk[] chunks =
+    [
+        new("fox.txt", null, 1, related + " " + unrelated),
+        new("forest.txt", null, 1, "У лісі відбувалася інша пригода.")
+    ];
+    var embeddings = new FakeEmbeddings();
+    SemanticIndex index = await SemanticSearch.BuildAsync(chunks, embeddings);
+    var model = new MisleadingFoxAnswerGenerator();
+
+    GroundedAnswer result = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, model, question);
+    Assert(result.Supported && result.AnswerAttempts == 2 &&
+           model.Calls == 2 && result.Citations.Count == 1 &&
+           result.Citations[0].Quote.Contains("Микита", StringComparison.Ordinal),
+        "A non-supporting but verbatim first quote must trigger the existing fallback; " +
+        "the corrected evidence must support the answer.");
+
+    var neverRelevant = new MisleadingFoxAnswerGenerator(alwaysIrrelevant: true);
+    GroundedAnswer rejected = await GroundedQuestionAnswering.AskAsync(
+        index, embeddings, neverRelevant, question);
+    Assert(!rejected.Supported && rejected.Outcome == AnswerOutcome.UnsubstantiatedAnswer &&
+           rejected.Citations.Count == 0 && rejected.AnswerAttempts == 2 &&
+           rejected.UnsupportedAnswerTerms.Contains("Микита", StringComparer.OrdinalIgnoreCase),
+        "Never display a fabricated 'verified' badge for unrelated exact quotations.");
+}
+
 static async Task TestRuntimeCatalogAndMetrics()
 {
     var handler = new StubHandler((request, _) =>
@@ -797,6 +868,32 @@ sealed class CheckpointEmbeddings(string fingerprint, int stopAfterBatches = int
     }
 }
 
+sealed class MisleadingFoxAnswerGenerator(bool alwaysIrrelevant = false) : ILocalAnswerGenerator
+{
+    public string ModelName => "citation-provenance-test";
+    public int Calls { get; private set; }
+
+    public Task<IReadOnlyList<string>> ExpandSearchAsync(
+        string question, CancellationToken token = default) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
+
+    public Task<ProposedAnswer> GenerateAsync(
+        string question, IReadOnlyList<EvidencePassage> passages,
+        CancellationToken token = default)
+    {
+        token.ThrowIfCancellationRequested();
+        Calls++;
+        EvidencePassage passage = passages.First(p =>
+            p.Chunk.Content.Contains("Лис Микита", StringComparison.Ordinal));
+        bool wrong = alwaysIrrelevant || Calls == 1;
+        string quote = wrong
+            ? "Лиса мало хто й запримітив, і нікому до нього не було діла."
+            : "Лис Микита хитрував і обминав усі небезпеки.";
+        return Task.FromResult(new ProposedAnswer(true, "Лиса Микита",
+            [new ProposedEvidence(passage.Id, quote)]));
+    }
+}
+
 sealed class AdaptiveAnswerGenerator(
     bool refuseFirst = false, bool inventQuote = false,
     CancellationTokenSource? cancelAfterFirst = null) : ILocalAnswerGenerator
@@ -860,7 +957,7 @@ sealed class FakeAnswerGenerator(bool inventQuote = false, bool refuse = false) 
             return Task.FromResult(new ProposedAnswer(false, "", []));
         }
 
-        return Task.FromResult(new ProposedAnswer(true, "Вона взяла плід із дерева.",
+        return Task.FromResult(new ProposedAnswer(true, "Вона взяла з його плоду.",
         [
             new ProposedEvidence(relevant.Id, inventQuote
                 ? "вигадана цитата з відсутнього документа"

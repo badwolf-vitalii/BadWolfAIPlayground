@@ -739,16 +739,22 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 AnswerStatus = answer.Outcome switch
                 {
                     AnswerOutcome.Verified =>
-                        $"Qwen returned an answer with {answer.Citations.Count} quote(s) found in " +
-                        "the exact supplied excerpts. Check whether they actually support its claims.",
+                        $"Qwen returned an answer with {answer.Citations.Count} source quote(s) " +
+                        "containing the answer's key words/names. This is lexical corroboration, " +
+                        "NOT a guarantee that the interpretation is correct.",
                     AnswerOutcome.NoCandidates =>
                         "The retrieval stage returned no source passages. Check the imported files.",
                     AnswerOutcome.ModelDeclined =>
                         $"Qwen declined to answer from the {answer.Candidates.Count} passages selected by search. " +
                         "It does NOT mean the answer is absent from the file; inspect the excerpts below.",
                     AnswerOutcome.UnverifiableCitation =>
-                        "Qwen proposed an answer, but none of its quoted text matched the passages it was given. " +
-                        "The draft was rejected, not labeled as a confirmed answer. Inspect the excerpts below.",
+                        "Qwen proposed an answer without a usable verbatim source quotation. " +
+                        "The draft was rejected; inspect the excerpts below.",
+                    AnswerOutcome.UnsubstantiatedAnswer =>
+                        "Qwen copied a real quote, but it did not substantiate the answer's " +
+                        $"distinctive words or names ({string.Join(", ", answer.UnsupportedAnswerTerms)}). " +
+                        "This is a lexical evidence check, not semantic fact-checking. " +
+                        "The draft was rejected; inspect the excerpts below.",
                     _ => "No verifiable document answer."
                 };
             });

@@ -101,6 +101,14 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
             {"supported":true,"answer":"concise answer","evidence":[{"id":1,"quote":"EXACT verbatim source substring"}]}
             Each quote must copy 8-400 characters from its labeled excerpt;
             a citation ID must match a supplied excerpt. Cite at most three.
+            IMPORTANT: A real quote is NOT enough. The quote must directly
+            support the answer's specific facts, such as the stated name,
+            date, number, place or action. For a name answer, copy a sentence
+            that actually CONTAINS that name, not an unrelated sentence
+            mentioning the character. For a numeric answer, cite the number.
+            Do not cite a passage just because it exists in the document.
+            If the supplied excerpts do not mention the key answer fact,
+            return {"supported":false,"answer":"","evidence":[]}.
             If unsupported, return {"supported":false,"answer":"","evidence":[]}.
             If a question assumes a detail not stated in a source, correct that
             assumption only if supported by the supplied excerpts.
@@ -113,7 +121,7 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
         {
             prompt.AppendLine($"[SOURCE {passage.Id}] {passage.Chunk.DocumentName} / chunk {passage.Chunk.Number}");
             // Only submit a short, verifiable excerpt, not the entire 1,800-character
-            // chunk. Every quotation is still validated against the full source.
+            // chunk. Every quotation is checked against this exact excerpt.
             prompt.AppendLine(SelectExcerpt(passage.Chunk.Content, question, passage.ExcerptCharacters));
             prompt.AppendLine($"[END SOURCE {passage.Id}]");
         }
