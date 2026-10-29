@@ -1,0 +1,31 @@
+name: Build and smoke tests
+
+on:
+  push:
+    branches:
+      - main
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore BadWolfAIPlayground.sln
+      - name: Build Windows desktop application
+        run: dotnet build BadWolfAIPlayground.sln --configuration Release --no-restore
+      - name: Run neural network smoke tests
+        run: dotnet run --project tests/BadWolfAIPlayground.Core.SmokeTests/BadWolfAIPlayground.Core.SmokeTests.csproj --configuration Release --no-build
+      - name: Run WPF UI startup smoke tests
+        run: dotnet run --project tests/BadWolfAIPlayground.App.SmokeTests/BadWolfAIPlayground.App.SmokeTests.csproj --configuration Release --no-build
