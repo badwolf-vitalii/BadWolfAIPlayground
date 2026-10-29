@@ -162,6 +162,11 @@ internal static class Program
                 "The Smart Search Lab must expose a separate Ask document action.");
             Assert(smartSearch.FindName("AnswerTextBlock") is TextBlock,
                 "The grounded answer must have a dedicated readable area.");
+            Assert(smartSearch.FindName("RetrievedEvidenceExpander") is Expander,
+                "The QA UI must expose actual model evidence even when no answer can be verified.");
+            Assert(searchModel.RetrievedPassages.Count == 0 &&
+                   searchModel.RetrievalDetails.Contains("Ask document", StringComparison.Ordinal),
+                "Evidence inspector must start empty without fabricated passages.");
             Assert(searchModel.AnswerSources.Count == 0,
                 "An unloaded document must not display fabricated citations.");
             Console.WriteLine("PASS separate grounded-answer UI and no fabricated pre-index answer");

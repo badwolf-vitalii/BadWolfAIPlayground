@@ -47,6 +47,23 @@ The model download is roughly **622 MB**. The first download requires internet a
 **Large text files:** the import now reads files in cancellable blocks, with a separate import progress bar. The lab accepts a **3.5 MB TXT file** without splitting it by hand. The limits are **40 files, 16 MiB per file, 32 MiB combined, 24 million decoded characters, and 25,000 search chunks**. Text is divided into overlapping **1,800-character** chunks (180-character overlap). Chunks are prepared off the UI thread, retained for subsequent queries and embedded in batches of eight via local Ollama. The UI shows the estimated number of batches before indexing and progress during indexing; **large files can take many minutes** depending on your hardware and text size. Every completed eight-chunk batch is saved to `%LOCALAPPDATA%\BadWolfAIPlayground\SearchIndexes` as a checksummed binary checkpoint. You can **Cancel** or close the app at any point: no incomplete index can be queried, but completed batches remain on disk. After restarting, open Smart Search Lab, click **Restore previous files**, and then **Build AI index**. The app reloads the files, checks their exact text and the model digest, and skips all compatible cached batches. If files, chunking or the local model change, it creates a new cache instead of reusing stale results. Fully completed indexes also load from saved vectors without re-embedding the documents. The most recent file paths and decoding choice are saved (not file contents) in `%LOCALAPPDATA%\BadWolfAIPlayground\last-search-files.json`. Models still need Ollama for query embeddings. To erase private local metadata and vector caches, delete those locations in File Explorer when the application is closed; vector data may reveal information about the documents and is not encrypted. Importing another file set replaces the previous one only on successful completion. The default **File encoding: Auto** accepts UTF-8 and Unicode with a BOM. If a text file fails to decode, the **Choose documents** card shows the actual file name and reason (rather than only a generic "Import did not complete" message). For old ANSI text, select **Windows-1251 (Cyrillic)** or **Windows-1252 (Western)** before retrying; BOM-less UTF-16 LE/BE can also be selected explicitly. The importer deliberately does not guess legacy encodings because the wrong code page can silently corrupt search results. Binary data with NUL characters is still rejected. Cosine scores are relevance rankings, not calibrated correctness probabilities.
 
 #### Ask the document (optional local Q&A)
+#### Why a document question may not return an answer
+
+When **Ask document** cannot verify an answer, expand **Inspect source passages sent to Qwen**.
+The UI now distinguishes three cases: no passages retrieved, the local model declining
+to answer from the selected passages, or the model producing text with an unverified
+quotation. It shows the actual bounded excerpts that were sent to the model and the
+search phrases used (including model-proposed alternatives). This makes it possible to
+see whether the right passage was retrieved before blaming the answer model.
+
+The retrieval step reserves slots for **exact keyword candidates and embedding candidates
+from the original question** before filling the remaining positions from the blended
+ranking, avoiding loss of a rare literal match under multiple weak semantic rewrites.
+The source quote check is applied to the exact excerpt supplied to Qwen rather than
+hidden text elsewhere in a longer indexed chunk. A matched quote establishes source
+provenance, not factual correctness. This still does not guarantee good answers;
+text coverage, language and model behavior must be validated on real documents.
+
 
 **Compare searches** displays nearest text snippets and similarity scores; it does not answer natural-language questions. A model may return five weakly related snippets for a question, especially when the selected file omits the relevant passage.
 

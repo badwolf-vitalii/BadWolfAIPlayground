@@ -10,8 +10,22 @@ public sealed record ProposedEvidence(int Id, string Quote);
 public sealed record ProposedAnswer(bool Supported, string Answer, IReadOnlyList<ProposedEvidence> Evidence);
 
 public sealed record VerifiedCitation(int Id, SearchChunk Chunk, string Quote);
+public enum AnswerOutcome
+{
+    Verified,
+    NoCandidates,
+    ModelDeclined,
+    UnverifiableCitation
+}
+
 public sealed record GroundedAnswer(
-    string Text, bool Supported, IReadOnlyList<VerifiedCitation> Citations, int ExaminedPassages);
+    string Text, bool Supported, IReadOnlyList<VerifiedCitation> Citations, int ExaminedPassages)
+{
+    // An unsupported answer must still reveal the passages the local model read.
+    public AnswerOutcome Outcome { get; init; } = AnswerOutcome.ModelDeclined;
+    public IReadOnlyList<EvidencePassage> Candidates { get; init; } = [];
+    public IReadOnlyList<string> SearchQueries { get; init; } = [];
+}
 
 /// <summary>Only generates text; never reads files or makes remote calls on its own.</summary>
 public interface ILocalAnswerGenerator
@@ -62,6 +76,8 @@ public static class GroundedQuestionAnswering
         // from overwhelming dense semantic similarity, and allows synonyms
         // to surface passages that do not contain the question's exact words.
         var fused = new Dictionary<SearchChunk, (double Rank, double Similarity)>();
+        IReadOnlyList<SearchHit> originalLexical = [];
+        IReadOnlyList<SearchHit> originalSemantic = [];
         foreach (string query in queries)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -72,6 +88,12 @@ public static class GroundedQuestionAnswering
                 KeywordSearch.Find(index.Chunks, query, limit: 24,
                     cancellationToken: cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
+
+            if (string.Equals(query, queries[0], StringComparison.Ordinal))
+            {
+                originalLexical = lexical;
+                originalSemantic = semantic;
+            }
 
             for (int i = 0; i < semantic.Count; i++)
             {
@@ -88,16 +110,44 @@ public static class GroundedQuestionAnswering
             }
         }
 
-        EvidencePassage[] passages = fused
+        // Reserve room for exact source-term matches and semantic matches from
+        // the original question. Pure fusion can bury a rare exact term under
+        // several weakly related rewrites, especially in long documents.
+        var selected = new List<SearchChunk>(MaxPassages);
+        void AddDistinct(IEnumerable<SearchChunk> source, int max)
+        {
+            foreach (SearchChunk chunk in source.Take(max))
+            {
+                if (selected.Count >= MaxPassages)
+                {
+                    return;
+                }
+                if (!selected.Contains(chunk))
+                {
+                    selected.Add(chunk);
+                }
+            }
+        }
+
+        AddDistinct(originalLexical.Select(hit => hit.Chunk), 2);
+        AddDistinct(originalSemantic.Select(hit => hit.Chunk), 2);
+        AddDistinct(fused
             .OrderByDescending(pair => pair.Value.Rank)
             .ThenByDescending(pair => pair.Value.Similarity)
-            .Take(MaxPassages)
-            .Select((pair, index) => new EvidencePassage(index + 1, pair.Key, pair.Value.Similarity))
+            .Select(pair => pair.Key), MaxPassages);
+
+        EvidencePassage[] passages = selected
+            .Select((chunk, position) =>
+                new EvidencePassage(position + 1, chunk, fused[chunk].Similarity))
             .ToArray();
 
         if (passages.Length == 0)
         {
-            return new GroundedAnswer(NotFound, false, [], 0);
+            return new GroundedAnswer(NotFound, false, [], 0)
+            {
+                Outcome = AnswerOutcome.NoCandidates,
+                SearchQueries = queries
+            };
         }
 
         ProposedAnswer proposed = await generator.GenerateAsync(
@@ -105,7 +155,12 @@ public static class GroundedQuestionAnswering
         if (!proposed.Supported || string.IsNullOrWhiteSpace(proposed.Answer) ||
             proposed.Evidence is null)
         {
-            return new GroundedAnswer(NotFound, false, [], passages.Length);
+            return new GroundedAnswer(NotFound, false, [], passages.Length)
+            {
+                Outcome = AnswerOutcome.ModelDeclined,
+                Candidates = passages,
+                SearchQueries = queries
+            };
         }
 
         var valid = new List<VerifiedCitation>();
@@ -121,7 +176,10 @@ public static class GroundedQuestionAnswering
 
             // Permit newline/spacing normalization, not paraphrases. The full
             // source text is never replaced by a model-generated quote.
-            string source = NormalizeWhitespace(passage.Chunk.Content);
+            // Verify quotes against exactly the excerpt sent to Qwen,
+            // not hidden text elsewhere in a larger indexed chunk.
+            string source = NormalizeWhitespace(
+                OllamaAnswerProvider.SelectExcerpt(passage.Chunk.Content, question));
             if (!source.Contains(NormalizeWhitespace(quote), StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -136,7 +194,17 @@ public static class GroundedQuestionAnswering
         // A plausible answer with no checkable source is not an answer.
         return valid.Count == 0
             ? new GroundedAnswer(NotFound, false, [], passages.Length)
-            : new GroundedAnswer(proposed.Answer.Trim(), true, valid, passages.Length);
+              {
+                  Outcome = AnswerOutcome.UnverifiableCitation,
+                  Candidates = passages,
+                  SearchQueries = queries
+              }
+            : new GroundedAnswer(proposed.Answer.Trim(), true, valid, passages.Length)
+              {
+                  Outcome = AnswerOutcome.Verified,
+                  Candidates = passages,
+                  SearchQueries = queries
+              };
     }
 
     private static string NormalizeWhitespace(string input) =>

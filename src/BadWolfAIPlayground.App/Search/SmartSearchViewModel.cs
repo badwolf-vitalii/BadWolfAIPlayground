@@ -46,6 +46,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _searchHint = "Try a Ukrainian query against English demo documents.";
     private string _answerText = "No answer yet. First build the AI index, then click Ask document.";
     private string _answerStatus = "For cited answers, install a separate local model: ollama pull qwen3:4b-instruct";
+    private string _retrievalDetails = "Ask document to inspect the actual source excerpts it sends to the local model.";
     private double _indexProgress;
     private double _importProgress;
     private string _importLabel = "Select text files (up to 16 MiB each).";
@@ -104,6 +105,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     public ObservableCollection<SearchResultRow> KeywordResults { get; } = [];
     public ObservableCollection<SearchResultRow> SemanticResults { get; } = [];
     public ObservableCollection<AnswerSourceRow> AnswerSources { get; } = [];
+    public ObservableCollection<RetrievedPassageRow> RetrievedPassages { get; } = [];
 
     public string ModelName => _embeddings.ModelName;
     public bool HasDocuments => _documents.Count > 0;
@@ -189,9 +191,17 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         private set => SetProperty(ref _answerStatus, value);
     }
 
+    public string RetrievalDetails
+    {
+        get => _retrievalDetails;
+        private set => SetProperty(ref _retrievalDetails, value);
+    }
+
     private void ResetAnswer()
     {
         AnswerSources.Clear();
+        RetrievedPassages.Clear();
+        RetrievalDetails = "Ask document to inspect the exact excerpts sent to the local model.";
         AnswerText = "No answer yet. Ask document to get a sourced answer (requires a local instruction model).";
         AnswerStatus = "Answers require qwen3:4b-instruct, installed separately from EmbeddingGemma.";
     }
@@ -517,6 +527,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
         string question = Query.Trim();
         AnswerSources.Clear();
+        RetrievedPassages.Clear();
+        RetrievalDetails = "Searching the selected files for source passages...";
         AnswerText = "Searching relevant passages and preparing an answer...";
         AnswerStatus = "Using the local answer model and verifying verbatim citations. This may take a moment.";
         string previousSearchStatus = StatusText;
@@ -528,6 +540,17 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             await DispatchAsync(() =>
             {
                 AnswerText = answer.Text;
+                foreach (EvidencePassage candidate in answer.Candidates)
+                {
+                    RetrievedPassages.Add(new RetrievedPassageRow(
+                        $"[S{candidate.Id}] {candidate.Chunk.DocumentName} · chunk {candidate.Chunk.Number}",
+                        OllamaAnswerProvider.SelectExcerpt(candidate.Chunk.Content, question),
+                        candidate.Chunk.FullPath ?? "Built-in demonstration document"));
+                }
+                RetrievalDetails = $"{answer.Candidates.Count} excerpt(s) sent to Qwen. " +
+                    $"Search phrases: {string.Join(" | ", answer.SearchQueries)}. " +
+                    "The excerpts below are the actual original document text, not generated answers.";
+
                 foreach (VerifiedCitation citation in answer.Citations)
                 {
                     AnswerSources.Add(new AnswerSourceRow(
@@ -535,11 +558,21 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                         citation.Quote));
                 }
 
-                AnswerStatus = answer.Supported
-                    ? $"AI-generated answer with {answer.Citations.Count} verifiable quotation(s) " +
-                      $"from {answer.ExaminedPassages} retrieved passages. Read the quotes: this is not guaranteed to be correct."
-                    : "The selected excerpts did not provide a verifiable answer. " +
-                      "Try rephrasing the question or importing the relevant section.";
+                AnswerStatus = answer.Outcome switch
+                {
+                    AnswerOutcome.Verified =>
+                        $"Qwen returned an answer with {answer.Citations.Count} quote(s) found in " +
+                        "the exact supplied excerpts. Check whether they actually support its claims.",
+                    AnswerOutcome.NoCandidates =>
+                        "The retrieval stage returned no source passages. Check the imported files.",
+                    AnswerOutcome.ModelDeclined =>
+                        $"Qwen declined to answer from the {answer.Candidates.Count} passages selected by search. " +
+                        "It does NOT mean the answer is absent from the file; inspect the excerpts below.",
+                    AnswerOutcome.UnverifiableCitation =>
+                        "Qwen proposed an answer, but none of its quoted text matched the passages it was given. " +
+                        "The draft was rejected, not labeled as a confirmed answer. Inspect the excerpts below.",
+                    _ => "No verifiable document answer."
+                };
             });
         });
 
@@ -641,6 +674,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 }
 
 public sealed record AnswerSourceRow(string Title, string Quote);
+public sealed record RetrievedPassageRow(string Title, string Excerpt, string SourcePath);
 
 /// <summary>A visible, explicit file-decoding choice. Ambiguous legacy text is never guessed.</summary>
 public sealed record FileEncodingChoice(string Label, TextFileEncoding Encoding);

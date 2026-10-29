@@ -19,6 +19,7 @@ var tests = new (string Name, Func<Task> Check)[]
     ("Resumable, validated on-disk embedding checkpoints", TestResumableIndex),
     ("Ollama model digest validation", TestOllamaFingerprint),
     ("Grounded answers and verbatim citations", TestGroundedAnswers),
+    ("Hybrid retrieval retains exact source anchors", TestSourceAnchorRetrieval),
     ("Local Ollama Q&A protocol", TestOllamaAnswerProtocol),
     ("Bounded Q&A context and actionable context errors", TestOllamaAnswerContext),
 };
@@ -394,7 +395,9 @@ static async Task TestGroundedAnswers()
     var grounded = new FakeAnswerGenerator();
     GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
         index, vectors, grounded, "Де Єва взяла яблуко?");
-    Assert(answer.Supported && answer.Citations.Count == 1 &&
+    Assert(answer.Supported && answer.Outcome == AnswerOutcome.Verified &&
+           answer.Candidates.Count > 0 && answer.SearchQueries.Count > 0 &&
+           answer.Citations.Count == 1 &&
            answer.Citations[0].Chunk.DocumentName == "Genesis.txt" &&
            answer.Citations[0].Quote.Contains("плоду", StringComparison.Ordinal),
         "The answer must cite an exact passage from the selected document.");
@@ -403,14 +406,52 @@ static async Task TestGroundedAnswers()
 
     GroundedAnswer fabricated = await GroundedQuestionAnswering.AskAsync(
         index, vectors, new FakeAnswerGenerator(inventQuote: true), "Де Єва взяла яблуко?");
-    Assert(!fabricated.Supported && fabricated.Citations.Count == 0 &&
+    Assert(!fabricated.Supported &&
+           fabricated.Outcome == AnswerOutcome.UnverifiableCitation &&
+           fabricated.Candidates.Count > 0 && fabricated.Citations.Count == 0 &&
            fabricated.Text.Contains("Не вдалося", StringComparison.Ordinal),
         "A model answer with an invented quote must not be displayed as verified.");
 
     GroundedAnswer missing = await GroundedQuestionAnswering.AskAsync(
         index, vectors, new FakeAnswerGenerator(refuse: true), "Хто побудував піраміди?");
-    Assert(!missing.Supported,
-        "Questions unsupported by the selected text must produce a clear no-answer state.");
+    Assert(!missing.Supported && missing.Outcome == AnswerOutcome.ModelDeclined &&
+           missing.Candidates.Count > 0,
+        "Model refusal must remain distinguishable from missing retrieval candidates.");
+}
+
+static async Task TestSourceAnchorRetrieval()
+{
+    // Dense search's top 24 is intentionally crowded by irrelevant chunks.
+    // A rare word from the original question must still be sent to the
+    // answer model even if semantic score favors boilerplate.
+    var chunks = Enumerable.Range(1, 30)
+        .Select(number => new SearchChunk("A-filler.txt", null, number,
+            "Нічого суттєвого про запитання в цьому фрагменті немає."))
+        .ToList();
+    var relevant = new SearchChunk("Z-original.txt", null, 31,
+        "І сказав змій до жінки: ваші очі розкриються, і станете ви, немов Боги, знаючи добро й зло. " +
+        "І взяла вона з його плоду.");
+    chunks.Add(relevant);
+    var provider = new FakeEmbeddings();
+    SemanticIndex index = await SemanticSearch.BuildAsync(chunks, provider);
+    var generator = new FakeAnswerGenerator();
+
+    GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
+        index, provider, generator, "Що запропонував Єві змій?");
+    Assert(generator.ReceivedPassages.Any(p => p.Chunk == relevant) &&
+           answer.Candidates.Any(p => p.Chunk == relevant),
+        "An exact rare-word match from the original question must survive fusion.");
+    Assert(answer.Candidates.Count <= GroundedQuestionAnswering.MaxPassages &&
+           answer.SearchQueries.Count <= GroundedQuestionAnswering.MaxQueries,
+        "Only a bounded, inspectable number of source passages may be shown.");
+
+    foreach (EvidencePassage passage in answer.Candidates)
+    {
+        string sent = OllamaAnswerProvider.SelectExcerpt(passage.Chunk.Content, "Що запропонував Єві змій?");
+        Assert(passage.Chunk.Content.Contains(sent, StringComparison.Ordinal) &&
+               sent.Length <= OllamaAnswerProvider.MaxExcerptCharacters,
+            "The inspector must show only text really present in the source and sent to the local model.");
+    }
 }
 
 static async Task TestOllamaAnswerProtocol()

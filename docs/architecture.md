@@ -126,3 +126,26 @@ reinstalling an already working model. Ask-document failures are shown
 only in the answer panel instead of overwriting Compare-searches status.
 The HTTP smoke test checks explicit context length, bounded input
 and friendly recovery from an Ollama 400 context-window error.
+
+
+### Inspecting retrieval and failure reasons
+
+The grounded Q&A pipeline surfaces `AnswerOutcome`: `Verified`,
+`NoCandidates`, `ModelDeclined`, or `UnverifiableCitation`.
+Even unsuccessful model answers return the original search queries and all
+candidate passages so the WPF evidence expander can display exactly
+what was sent to the local model. This distinguishes failed retrieval
+from a model refusal and from invalid generated quotations, without
+pretending that the original source lacks the answer.
+
+Diverse selection reserves up to two keyword candidates and two
+embedding candidates from the **original** question before adding
+remaining candidates by reciprocal-rank fusion across rewritten
+queries. This protects rare exact query anchors when semantic ranking
+is noisy. All shown excerpts come directly from the indexed document;
+the quotation verifier checks against that same clipped excerpt,
+not hidden content elsewhere in the parent chunk. UI and engine
+smoke tests verify result statuses, evidence provenance, candidate
+limits, and exact-anchor retention with intentionally noisy
+semantic vectors. Real model relevance remains unverified without
+an end-to-end test against a supplied source corpus.

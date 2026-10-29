@@ -134,7 +134,8 @@ public sealed class OllamaAnswerProvider : ILocalAnswerGenerator, IDisposable
         return new ProposedAnswer(true, value, quotes);
     }
 
-    private static string SelectExcerpt(string content, string question)
+    /// <summary>Returns the exact bounded source text shown to the local answer model.</summary>
+    public static string SelectExcerpt(string content, string question)
     {
         if (content.Length <= MaxExcerptCharacters)
         {

@@ -218,6 +218,34 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <Expander x:Name="RetrievedEvidenceExpander"
+                              Header="Inspect source passages sent to Qwen"
+                              IsExpanded="False" Foreground="#D5EAFF"
+                              Background="#10243B" BorderBrush="#35536D"
+                              Margin="0,3,0,12" Padding="8">
+                        <StackPanel>
+                            <TextBlock Text="{Binding RetrievalDetails}" Foreground="#A9C9E0"
+                                       TextWrapping="Wrap" FontSize="11" Margin="0,6,0,10" />
+                            <ItemsControl ItemsSource="{Binding RetrievedPassages}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="#0B1B2F" BorderBrush="#36506B"
+                                                BorderThickness="1" CornerRadius="7"
+                                                Margin="0,0,0,7" Padding="12">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" Foreground="#97D9F5"
+                                                           FontWeight="SemiBold" FontSize="11"
+                                                           ToolTip="{Binding SourcePath}" />
+                                                <TextBlock Text="{Binding Excerpt}" Foreground="#DAE7F5"
+                                                           TextWrapping="Wrap" FontSize="11"
+                                                           Margin="0,7,0,0" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Expander>
                     <TextBlock Text="Citations are verbatim snippets checked against the imported text. They do not guarantee that the model's interpretation is correct. If the necessary passage is missing, the app should say so."
                                Style="{StaticResource MutedText}" FontSize="10" TextWrapping="Wrap" />
                 </StackPanel>
