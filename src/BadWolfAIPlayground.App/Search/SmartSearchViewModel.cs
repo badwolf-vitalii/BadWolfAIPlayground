@@ -217,11 +217,16 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         });
 
         // Progress<T> callbacks are posted asynchronously; ignore any remaining old updates.
-        _importGeneration++;
-        ImportProgress = completed ? 100 : 0;
-        ImportLabel = completed
-            ? $"Imported {_documents.Count} file(s) · {_chunks.Count:N0} searchable chunks."
-            : "Import did not complete; previous documents are unchanged.";
+        // Even an STA smoke-test caller may have no SynchronizationContext:
+        // all WPF-bound properties must be finalized explicitly on the Dispatcher.
+        await DispatchAsync(() =>
+        {
+            _importGeneration++;
+            ImportProgress = completed ? 100 : 0;
+            ImportLabel = completed
+                ? $"Imported {_documents.Count} file(s) · {_chunks.Count:N0} searchable chunks."
+                : "Import did not complete; previous documents are unchanged.";
+        });
     }
 
     private void ReplaceDocuments(
