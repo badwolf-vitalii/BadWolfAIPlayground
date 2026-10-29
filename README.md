@@ -439,3 +439,45 @@ generic App/component mirroring pattern and duplicate copies of
 the same named file from different directories. Other
 identical events remain visible separately. This is tested with
 two synthetic independent device logs.
+
+
+### Enable/disable individual log files and jump to Notepad++
+
+After selecting a whole Logs folder, expand **Files & Components**:
+- Each imported file has an **Include** checkbox. Changes
+  automatically rerun detection on **only the enabled files**,
+  updating the summary, error timeline, finding cards and per-finding
+  evidence without re-reading files from disk.
+- **Include all** and **Exclude all** provide quick selection.
+  An empty selection displays zero analyzed events rather than a
+  misleading all-components baseline. Per-file row counts remain
+  visible for comparison, regardless of the Include state.
+- The imported original per-file events are retained in memory
+  solely for this session. When files are toggled, exact
+  mirrored-event deduplication is recomputed from the enabled
+  source files. Thus turning off a component log will not
+  accidentally erase an event that remains in its enabled
+  App log (or vice versa). Cross-component duplicates never
+  cause unrelated logs to be discarded.
+
+Every finding now has an **Open in Notepad++** button that opens the
+original on-disk `.log`/`.txt` file at its **actual physical
+source line** (`notepad++.exe -n42 "C:\\path\\file.log"`).
+The per-file list offers an **Open** button (line 1).
+Notepad++ is discovered from Windows App Paths, standard
+installation folders, or PATH. For portable installations,
+click **Locate Notepad++** and select `notepad++.exe` manually.
+No Notepad++ installation or model download is performed by
+the application. When the editor is missing or the file
+has moved, a clear error is displayed without changing the
+analysis. For synthetic demo data, opening a nonexistent file
+is disabled.
+
+The tool stores the selected folder's absolute location
+**only in process memory** to resolve original files; no local
+work paths, event content or editor settings are committed,
+transmitted, or persisted. Source file paths are validated
+against the imported file list and the selected root before
+opening to prevent traversal outside the Logs directory.
+Opening a log is a read/view action in an external editor;
+saving changes in that editor is the user's responsibility.

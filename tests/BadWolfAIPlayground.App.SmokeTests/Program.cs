@@ -385,6 +385,10 @@ internal static class Program
                    anomalyView.FindName("SelectAnomalyLogButton") is Button &&
                    anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
+                   anomalyView.FindName("AnomalyFilesExpander") is Expander &&
+                   anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
+                   anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
+                   anomalyView.FindName("LocateNotepadPlusPlusButton") is Button &&
                    anomalyView.FindName("AnomalySensitivitySlider") is Slider &&
                    anomalyView.FindName("ReanalyzeLogButton") is Button,
                 "Anomaly lab must be visible and allow local log selection and sensitivity.");
@@ -485,6 +489,90 @@ internal static class Program
                                StringComparison.OrdinalIgnoreCase) &&
                            f.Component == "QRReader"),
                     "WPF per-file list must include archive subfolders.");
+
+                // Verify WPF's real checkbox -> ViewModel selection binding.
+                var fileExpander = (Expander)anomalyView.FindName("AnomalyFilesExpander");
+                fileExpander.IsExpanded = true;
+                anomalyView.UpdateLayout();
+                var salesCheck = FindDescendants<CheckBox>(anomalyView)
+                    .FirstOrDefault(box =>
+                        box.DataContext is AnomalySourceFileRow row &&
+                        row.Component == "SaleController");
+                Assert(salesCheck is not null && salesCheck.IsChecked == true,
+                    "The source file's Include checkbox must be visible and checked.");
+                salesCheck.IsChecked = false;
+                PumpUntil(() => !analyzer.Busy && analyzer.EventCount == 84,
+                    TimeSpan.FromSeconds(20));
+                Assert(analyzer.EventCount == 84 &&
+                       analyzer.ProblemCount == 12 &&
+                       analyzer.DuplicateCopies == 0 &&
+                       analyzer.SourceFiles.Count(f => f.Included) == 2 &&
+                       analyzer.Findings.Any(f =>
+                           f.Evidence.Contains("App_2026-10-29.log:",
+                               StringComparison.Ordinal)),
+                    "Disabling SaleController must retain App's original copy, " +
+                    "recompute true event counts and update evidence origin.");
+
+                // Switching from App to Sales must recover Sales' copy in the
+                // rebuilt raw-event view, not a stale pre-merged alias.
+                Task salesOnly = analyzer.SetIncludedFilesAsync(
+                    ["SaleController_2026-10-29.log"]);
+                PumpUntil(() => salesOnly.IsCompleted, TimeSpan.FromSeconds(20));
+                salesOnly.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 48 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.DuplicateCopies == 0 &&
+                       analyzer.SourceFiles.Count(f => f.Included) == 1 &&
+                       analyzer.Findings.Any(f =>
+                           f.Evidence.Contains("SaleController_2026-10-29.log:",
+                               StringComparison.Ordinal)),
+                    "Selecting Sales alone must keep its original errors and source lines.");
+
+                Task noLogs = analyzer.SetIncludedFilesAsync([]);
+                PumpUntil(() => noLogs.IsCompleted, TimeSpan.FromSeconds(20));
+                noLogs.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 0 &&
+                       analyzer.FindingCount == 0 &&
+                       analyzer.Timeline.Count == 0 &&
+                       analyzer.StatusText.Contains("No logs enabled",
+                           StringComparison.Ordinal),
+                    "Exclude all should visibly show zero events without inventing an incident.");
+
+                Task restore = analyzer.SetIncludedFilesAsync(
+                    analyzer.SourceFiles.Select(f => f.RelativePath).ToArray());
+                PumpUntil(() => restore.IsCompleted, TimeSpan.FromSeconds(20));
+                restore.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.DuplicateCopies == 12 &&
+                       analyzer.SourceFiles.All(f => f.Included),
+                    "Include all must restore exact pre-filter counts and provenance.");
+
+                // No Notepad++ is started in CI; verify the exact safe
+                // command-line construction and original-file resolution.
+                (string resolved, int line) = analyzer.ResolveLogLocation(
+                    "SaleController_2026-10-29.log", 44);
+                var startInfo = NotepadPlusPlusLauncher.CreateStartInfo(
+                    @"C:\Program Files\Notepad++\notepad++.exe", resolved, line);
+                Assert(resolved == Path.GetFullPath(Path.Combine(
+                           logFolder, "SaleController_2026-10-29.log")) &&
+                       line == 44 && !startInfo.UseShellExecute &&
+                       startInfo.ArgumentList.Count == 2 &&
+                       startInfo.ArgumentList[0] == "-n44" &&
+                       startInfo.ArgumentList[1] == resolved,
+                    "Notepad++ jump must preserve the exact physical line " +
+                    "and pass paths as separately quoted arguments.");
+                bool rejectedOutside = false;
+                try { analyzer.ResolveLogLocation("../secret.log", 1); }
+                catch (InvalidOperationException) { rejectedOutside = true; }
+                Assert(rejectedOutside, "Open action must reject unimported paths.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Button>(anomalyView)
+                        .Any(button => button.Content is string label &&
+                            label == "Open in Notepad++" &&
+                            button.Command is not null),
+                    "Each evidence card must expose a real Notepad++ command.");
 
                 int validCount = analyzer.EventCount;
                 Task badFolder = analyzer.ImportFolderAsync(

@@ -121,7 +121,8 @@
                     </UniformGrid>
                     <TextBlock Text="{Binding Summary}" Foreground="#BED5EA"
                                FontSize="11" TextWrapping="Wrap"/>
-                    <Expander Margin="0,15,0,0" Foreground="#D2E7F6"
+                    <Expander x:Name="AnomalyFilesExpander"
+                              Margin="0,15,0,0" Foreground="#D2E7F6"
                               Background="#0B1D30">
                         <Expander.Header>
                             <TextBlock Text="FILES &amp; COMPONENTS"

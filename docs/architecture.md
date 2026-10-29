@@ -426,3 +426,50 @@ component target, or duplicate copies of the *same filename*
 in different folders. Other components retain independent
 events even at identical timestamps. A regression test guards
 against accidental undercounting of simultaneous device events.
+
+
+### Per-file filtering and precise local log navigation
+
+A `LogFolderImportResult` retains bounded `RawEvents` in
+memory and the initial deduplicated `Combined` report.
+`LogFolderImporter.SelectFiles` validates selected paths
+against the original imported file list and rebuilds
+cross-target deduplication from **only the enabled raw
+events**, recomputing per-file totals and duplicate counts.
+This avoids incorrect counts and lost evidence when the
+primary component target of a previously deduplicated
+App/component pair is disabled. The import has a maximum
+of 1,000,000 raw parsed entries (in addition to the
+500,000 distinct-event analysis cap). Selection never
+causes a second disk read, copy of log text to a server,
+embedding operation, or Ollama request.
+
+`AnomalySourceFileRow.Included` is an observable state,
+bound directly to per-log WPF checkboxes. Changing a file
+triggers asynchronous, cancellable local recomputation of
+the timeline and detection findings. Include all / Exclude
+all allow bulk selection with one recomputation. While busy,
+file controls are disabled to avoid contradictory results.
+An empty selection explicitly shows no events. The previous
+valid data remains available if a reanalysis fails.
+
+`AnomalyFindingRow.SourceFile` and `SourceLine` preserve
+original relative filename and physical line without relying
+on display parsing. WPF finding actions pass the typed row
+as a command parameter. `ResolveLogLocation` requires the
+file to be part of the imported file list and verifies that
+its normalized absolute path is below the selected root;
+single-file mode has its own authorized path. The path
+remains only in volatile ViewModel memory.
+
+`NotepadPlusPlusLauncher` builds a `ProcessStartInfo`
+using separate `ArgumentList` entries (`-nLINE`, filename)
+rather than interpolating a shell command. Windows
+App Paths/Program Files/PATH supply automatic discovery;
+optional explicit `notepad++.exe` selection supports a
+portable installation without persistent settings.
+No editor is started in CI. WPF smoke tests verify
+automatic filtering through real checkboxes, all/none
+recalculation, deduplicated App/component evidence after
+selection, safe path containment, and Notepad++ command
+construction for an original log line.
