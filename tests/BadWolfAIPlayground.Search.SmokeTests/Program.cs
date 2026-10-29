@@ -600,8 +600,24 @@ static async Task TestCitationRelevance()
     VerifiedCitation? located = AnswerEvidenceValidator.LocateSupportingQuote(
         question, modelAnswer, [new EvidencePassage(1, source, 0.3)], [source]);
     Assert(located is { LocatedInSource: true } &&
-           located.Quote.Contains("Микита", StringComparison.Ordinal),
-        "Recover a relevant original-text sentence without making another LLM request.");
+           located.Chunk == source &&
+           source.Content.Contains(located.Quote, StringComparison.Ordinal) &&
+           AnswerEvidenceValidator.Check(question, modelAnswer, [located]).Citations.Count == 1,
+        "Recover a real answer-bearing sentence, including valid Ukrainian inflections, " +
+        "without another local-model call.");
+
+    var otherSource = new SearchChunk("second-chapter.txt", null, 3,
+        "У лісі всі знали, що Лис Микита завжди хитрує.");
+    var onlyUnrelated = new SearchChunk("first-chapter.txt", null, 1, unrelated);
+    VerifiedCitation? outsidePrompt = AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer,
+        [new EvidencePassage(1, onlyUnrelated, 0.2)],
+        [onlyUnrelated, otherSource]);
+    Assert(outsidePrompt is { LocatedInSource: true, Id: 0 } &&
+           outsidePrompt.Chunk == otherSource &&
+           outsidePrompt.Quote.Contains("Лис Микита", StringComparison.Ordinal),
+        "Find an answer-bearing quotation in the indexed document even when it " +
+        "was not part of the small model context; preserve its local provenance.");
 
     AnswerEvidenceValidator.Assessment inflected = AnswerEvidenceValidator.Check(
         question, "Микита", [
