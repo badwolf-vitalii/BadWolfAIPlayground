@@ -182,7 +182,6 @@ static void FolderImport()
     try
     {
         Directory.CreateDirectory(Path.Combine(root, "old"));
-        string start = "2026-10-29 09:00:00.0000";
         var app = new System.Text.StringBuilder();
         var sale = new System.Text.StringBuilder();
         var pos = new System.Text.StringBuilder();
@@ -267,6 +266,17 @@ static void FolderImport()
                    e.Message == "Device unavailable") == 2,
             "Independent same-time/same-text device events must not be " +
             "mistaken for NLog copies and dropped.");
+
+        // A copied archived file with the same name represents an older
+        // backup of the SAME NLog target, not a second active component.
+        File.WriteAllText(Path.Combine(root, "old", "App_2026-10-29.log"),
+            app.ToString());
+        LogFolderImportResult archivedCopy = LogFolderImporter.Import(root);
+        Ensure(archivedCopy.DuplicateCopies == 60 &&
+               archivedCopy.Combined.Events.Count(e =>
+                   e.Message == "Sale request failed") == 12,
+            "A copied App archive must not produce another incident burst, " +
+            "and the original per-file statistics should remain intact.");
     }
     finally
     {

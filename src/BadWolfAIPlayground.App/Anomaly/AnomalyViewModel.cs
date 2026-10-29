@@ -156,9 +156,10 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public Task ImportFolderAsync(string folder) => ExecuteAsync(async token =>
     {
         StatusText = "Scanning local Logs folder...";
+        bool showProgress = true;
         var progress = new Progress<LogFolderProgress>(item =>
         {
-            if (Busy && _active?.IsCancellationRequested == false)
+            if (showProgress && Busy && _active?.IsCancellationRequested == false)
             {
                 StatusText =
                     $"Reading {item.CurrentFile}/{item.TotalFiles}: {item.RelativePath}";
@@ -170,6 +171,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             AnomalyDetector.Analyze(imported.Combined,
                 new AnomalyOptions(Sensitivity), token), token);
         token.ThrowIfCancellationRequested();
+        // Some progress callbacks may still be queued on the dispatcher.
+        // Do not let them overwrite the final "Completed locally" status.
+        showProgress = false;
         await _dispatcher.InvokeAsync(() =>
         {
             _loaded = imported.Combined;
