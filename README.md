@@ -174,3 +174,42 @@ restores the extra Qwen rewrite call if needed for harder searches.
 Timing still depends on whether Ollama runs Qwen on GPU or CPU; check
 `ollama ps` while answering (the `PROCESSOR` column should ideally be
 `100% GPU`). This speedup does not guarantee relevance or answer quality.
+
+
+### Local model switching and performance (CPU/GPU)
+
+Smart Search Lab can run entirely on a **CPU-only Windows PC**. After
+building the EmbeddingGemma search index, click **Refresh installed models**
+under **Ask document**. Ollama's local `GET /api/tags` endpoint lists models
+that are actually installed; select any supported text-generating model in
+the dark-themed dropdown. **Changing the answer model does not rebuild or
+invalidate the EmbeddingGemma index**, because document vectors use a
+different model. Missing models are never downloaded automatically.
+
+Smaller instruct models can reduce CPU latency (with a likely trade-off in
+answer quality, especially for strict JSON citations or Ukrainian):
+
+```powershell
+ollama pull qwen2.5:0.5b-instruct  # around 398 MB; lightweight, lower accuracy
+ollama pull qwen2.5:1.5b-instruct  # around 986 MB; stronger, still CPU-friendly
+```
+
+The previously used `qwen3:4b-instruct` remains the default. You can
+switch back at any time. Click **Refresh installed models** after a pull.
+
+The new **Request performance** panel shows:
+- Retrieval/search time (including any optional deep query rewrite);
+- Answer-generation time and end-to-end request time;
+- Prompt/output token counts and Qwen output tokens per second;
+- Model loading time, when reported by Ollama;
+- CPU/GPU placement taken from the local `GET /api/ps` endpoint.
+
+The CPU/GPU indicator is **unknown** if the selected model is not loaded
+or Ollama does not provide usable VRAM metrics. For running models,
+0% GPU memory means 100% CPU; partial offload is estimated from
+`size_vram / size`. This is not a Windows GPU utilization monitor.
+Output speed is computed from `eval_count / eval_duration`, not
+end-to-end seconds; missing metrics are shown as *n/a*, not invented.
+Both `/api/tags` and `/api/ps` are local. No API key or cloud access is
+required. Low-memory models may give poorer answers; verify their
+quotations instead of assuming that faster means better.

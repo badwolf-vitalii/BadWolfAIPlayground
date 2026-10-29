@@ -168,3 +168,34 @@ a single local Qwen answer request. An opt-in WPF checkbox re-enables
 the expensive query expansion for deeper searches when needed. This
 lowers expected latency but real GPU/offloading performance and relevance
 need user-side validation on actual source text.
+
+
+### Runtime model selection and measured performance
+
+`OllamaRuntimeClient` reads Ollama's loopback `GET /api/tags` for
+local model names/sizes, and `GET /api/ps` for currently loaded model
+memory placement (`size_vram`, `size`, `context_length`).
+`SmartSearchViewModel.SelectedAnswerModel` changes only the optional
+`OllamaAnswerProvider` generation model; it never changes the
+EmbeddingGemma index. The UI disables changes while a request is
+running to avoid mixing results between different generation models.
+The default remains `qwen3:4b-instruct`, with small CPU-oriented
+alternatives shown as copyable `ollama pull` commands (no download
+performed by the app).
+
+`GroundedQuestionAnswering` separately measures retrieval time
+(including optional query rewriting) and generation wall time.
+`OllamaChatMetrics` parses Ollama's non-streamed response
+`prompt_eval_count`, `eval_count`, `eval_duration`,
+`load_duration` and `total_duration` (nanoseconds), with
+`eval_count * 1e9 / eval_duration` as output tokens/second.
+The WPF panel also reports total elapsed time. Processor placement
+is from Ollama's loaded model API, not inferred from the computer's
+graphics card or assumed from model parameter count. Unloaded models
+and absent metrics remain *unknown*.
+
+Search-library smoke tests use stub local HTTP responses to check
+installed model discovery, processor reporting (CPU/GPU/unloaded),
+model selection forwarded into `/api/chat`, and output token math.
+The Windows WPF smoke test checks the picker and performance panel.
+Real CPU throughput and answer quality remain manual user-side checks.

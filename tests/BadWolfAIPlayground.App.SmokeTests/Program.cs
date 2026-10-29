@@ -160,6 +160,18 @@ internal static class Program
                 "Answer generation must not run before a real semantic index exists.");
             Assert(smartSearch.FindName("AskDocumentButton") is Button,
                 "The Smart Search Lab must expose a separate Ask document action.");
+            Assert(smartSearch.FindName("AnswerModelSelector") is ComboBox modelSelector &&
+                   modelSelector.Style is not null &&
+                   searchModel.AnswerModelChoices.Count > 0 &&
+                   searchModel.SelectedAnswerModel.Name == OllamaAnswerProvider.DefaultModel,
+                "The model selector must start with the existing default and a dark readable style.");
+            Assert(smartSearch.FindName("RefreshAnswerModelsButton") is Button,
+                "The UI must allow refreshing the locally installed Ollama models.");
+            Assert(smartSearch.FindName("AnswerMetricsTextBlock") is TextBlock,
+                "The UI must provide a visible generation-performance panel.");
+            Assert(searchModel.ProcessorStatus.Contains("not checked", StringComparison.OrdinalIgnoreCase),
+                "CPU/GPU status must be unknown before Ollama provides runtime facts.");
+            Console.WriteLine("PASS local model picker and performance panel with no fake CPU/GPU detection");
             Assert(smartSearch.FindName("AnswerTextBlock") is TextBlock,
                 "The grounded answer must have a dedicated readable area.");
             Assert(smartSearch.FindName("RetrievedEvidenceExpander") is Expander,

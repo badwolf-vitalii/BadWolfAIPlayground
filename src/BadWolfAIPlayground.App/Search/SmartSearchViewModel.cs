@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
@@ -14,6 +15,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 {
     private readonly OllamaEmbeddingProvider _embeddings;
     private readonly OllamaAnswerProvider _answerModel;
+    private readonly OllamaRuntimeClient _ollamaRuntime;
     private readonly Dispatcher _dispatcher;
     private readonly SearchIndexCheckpointStore _checkpoints;
     private readonly RecentSearchFilesStore _recentFiles;
@@ -30,6 +32,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _compareCommand;
     private readonly RelayCommand _askDocumentCommand;
     private readonly RelayCommand _copyAnswerModelCommand;
+    private readonly RelayCommand _refreshAnswerModelsCommand;
     private readonly RelayCommand _cancelCommand;
     private readonly RelayCommand _copyCommand;
     private SemanticIndex? _index;
@@ -49,6 +52,10 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     private string _retrievalDetails = "Ask document to inspect the actual source excerpts it sends to the local model.";
     private string _documentPreview = "No text imported. A preview will appear here before indexing.";
     private bool _useExpandedSearch;
+    private AnswerModelChoice? _selectedAnswerModel;
+    private string _answerModelCatalogStatus = "Click Refresh installed models to list Ollama models on this PC.";
+    private string _processorStatus = "CPU/GPU status: not checked (only available for loaded models).";
+    private string _answerMetricsText = "Request statistics will appear after Ask document.";
     private double _indexProgress;
     private double _importProgress;
     private string _importLabel = "Select text files (up to 16 MiB each).";
@@ -66,11 +73,15 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
     public SmartSearchViewModel(OllamaEmbeddingProvider? embeddings = null,
         SearchIndexCheckpointStore? checkpoints = null, RecentSearchFilesStore? recentFiles = null,
-        OllamaAnswerProvider? answerModel = null)
+        OllamaAnswerProvider? answerModel = null, OllamaRuntimeClient? ollamaRuntime = null)
     {
         _dispatcher = Dispatcher.CurrentDispatcher;
         _embeddings = embeddings ?? new OllamaEmbeddingProvider();
         _answerModel = answerModel ?? new OllamaAnswerProvider();
+        _ollamaRuntime = ollamaRuntime ?? new OllamaRuntimeClient();
+        AnswerModelChoices.Add(new AnswerModelChoice(_answerModel.ModelName,
+            $"{_answerModel.ModelName} (not checked)"));
+        _selectedAnswerModel = AnswerModelChoices[0];
         _checkpoints = checkpoints ?? new SearchIndexCheckpointStore();
         _recentFiles = recentFiles ?? new RecentSearchFilesStore();
         _lastSelection = _recentFiles.Load();
@@ -86,7 +97,9 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _askDocumentCommand = new RelayCommand(async () => await AskDocumentAsync(),
             () => !IsBusy && HasIndex && !string.IsNullOrWhiteSpace(Query));
         _copyAnswerModelCommand = new RelayCommand(
-            () => Clipboard.SetText("ollama pull qwen3:4b-instruct"));
+            () => Clipboard.SetText($"ollama pull {_answerModel.ModelName}"));
+        _refreshAnswerModelsCommand = new RelayCommand(
+            async () => await RefreshAnswerModelsAsync(), () => !IsBusy);
         _cancelCommand = new RelayCommand(() => _cancellation?.Cancel(), () => IsBusy);
         _copyCommand = new RelayCommand(() => Clipboard.SetText("ollama pull embeddinggemma"));
     }
@@ -100,6 +113,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     public ICommand CompareCommand => _compareCommand;
     public ICommand AskDocumentCommand => _askDocumentCommand;
     public ICommand CopyAnswerModelCommand => _copyAnswerModelCommand;
+    public ICommand RefreshAnswerModelsCommand => _refreshAnswerModelsCommand;
     public ICommand CancelCommand => _cancelCommand;
     public ICommand CopyInstallCommand => _copyCommand;
 
@@ -108,6 +122,44 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
     public ObservableCollection<SearchResultRow> SemanticResults { get; } = [];
     public ObservableCollection<AnswerSourceRow> AnswerSources { get; } = [];
     public ObservableCollection<RetrievedPassageRow> RetrievedPassages { get; } = [];
+    public ObservableCollection<AnswerModelChoice> AnswerModelChoices { get; } = [];
+
+    public AnswerModelChoice SelectedAnswerModel
+    {
+        get => _selectedAnswerModel ?? AnswerModelChoices[0];
+        set
+        {
+            if (value is null || IsBusy || !SetProperty(ref _selectedAnswerModel, value))
+            {
+                return;
+            }
+
+            _answerModel.SelectModel(value.Name);
+            ProcessorStatus = "CPU/GPU: not checked for this model. Click Refresh or ask a question.";
+            AnswerMetricsText = "Request statistics will appear after Ask document.";
+            ResetAnswer();
+        }
+    }
+
+    public bool CanSelectAnswerModel => !IsBusy;
+
+    public string AnswerModelCatalogStatus
+    {
+        get => _answerModelCatalogStatus;
+        private set => SetProperty(ref _answerModelCatalogStatus, value);
+    }
+
+    public string ProcessorStatus
+    {
+        get => _processorStatus;
+        private set => SetProperty(ref _processorStatus, value);
+    }
+
+    public string AnswerMetricsText
+    {
+        get => _answerMetricsText;
+        private set => SetProperty(ref _answerMetricsText, value);
+    }
 
     public string ModelName => _embeddings.ModelName;
     public bool HasDocuments => _documents.Count > 0;
@@ -146,7 +198,9 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 _buildIndexCommand.NotifyCanExecuteChanged();
                 _compareCommand.NotifyCanExecuteChanged();
                 _askDocumentCommand.NotifyCanExecuteChanged();
+                _refreshAnswerModelsCommand.NotifyCanExecuteChanged();
                 _cancelCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(CanSelectAnswerModel));
             }
         }
     }
@@ -217,7 +271,7 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         RetrievedPassages.Clear();
         RetrievalDetails = "Ask document to inspect the exact excerpts sent to the local model.";
         AnswerText = "No answer yet. Ask document to get a sourced answer (requires a local instruction model).";
-        AnswerStatus = "Answers require qwen3:4b-instruct, installed separately from EmbeddingGemma.";
+        AnswerStatus = $"Answer model: {_answerModel.ModelName}. This is separate from EmbeddingGemma.";
     }
 
     public double IndexProgress
@@ -535,6 +589,71 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         });
     }
 
+    /// <summary>Fetch the actually installed Ollama models and runtime processor status.</summary>
+    public async Task RefreshAnswerModelsAsync()
+    {
+        if (IsBusy || _disposed)
+        {
+            return;
+        }
+
+        AnswerModelCatalogStatus = "Reading locally installed Ollama models...";
+        OperationOutcome result = await RunOperationAsync(async token =>
+        {
+            IReadOnlyList<LocalOllamaModel> allModels =
+                await _ollamaRuntime.ListInstalledAsync(token);
+            LocalOllamaModel[] chatModels = allModels
+                .Where(model => !IsKnownEmbeddingOnlyModel(model.Name))
+                .ToArray();
+
+            await DispatchAsync(() =>
+            {
+                string selectedName = _answerModel.ModelName;
+                AnswerModelChoices.Clear();
+                foreach (LocalOllamaModel model in chatModels)
+                {
+                    AnswerModelChoices.Add(new AnswerModelChoice(model.Name,
+                        $"{model.Name} — {model.Bytes / 1048576.0:0} MiB (installed)"));
+                }
+
+                // Preserve user's choice when it is installed. Otherwise keep
+                // a distinct missing-model entry instead of silently switching.
+                if (!AnswerModelChoices.Any(model =>
+                    string.Equals(model.Name, selectedName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AnswerModelChoices.Add(new AnswerModelChoice(selectedName,
+                        $"{selectedName} (not installed — use ollama pull)"));
+                }
+
+                _selectedAnswerModel = AnswerModelChoices.First(model =>
+                    string.Equals(model.Name, selectedName, StringComparison.OrdinalIgnoreCase));
+                OnPropertyChanged(nameof(SelectedAnswerModel));
+                AnswerModelCatalogStatus = chatModels.Length == 0
+                    ? "No locally installed answer models detected. Install a suggested CPU model, then refresh."
+                    : $"{chatModels.Length} answer-model candidate(s) detected. " +
+                      "Only installed models can be used; smaller models may be faster but less accurate.";
+            });
+
+            OllamaExecutionInfo status = await _ollamaRuntime.GetExecutionAsync(
+                _answerModel.ModelName, token);
+            await DispatchAsync(() => ProcessorStatus = status.Display);
+        });
+
+        if (!result.Succeeded)
+        {
+            await DispatchAsync(() => AnswerModelCatalogStatus = result.Cancelled
+                ? "Model refresh was cancelled."
+                : $"Cannot list local Ollama models: {result.ErrorMessage}");
+        }
+    }
+
+    private static bool IsKnownEmbeddingOnlyModel(string name)
+    {
+        string baseName = name.Split(':')[0].ToLowerInvariant();
+        return baseName.Contains("embed", StringComparison.Ordinal) ||
+               baseName is "all-minilm" or "nomic-embed-text" or "bge-m3" or "mxbai-embed-large";
+    }
+
     private async Task AskDocumentAsync()
     {
         SemanticIndex? index = _index;
@@ -546,6 +665,8 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
 
         string question = Query.Trim();
         bool expandQueries = UseExpandedSearch;
+        var elapsed = Stopwatch.StartNew();
+        AnswerMetricsText = $"Running {_answerModel.ModelName} — collecting local timings...";
         AnswerSources.Clear();
         RetrievedPassages.Clear();
         RetrievalDetails = "Searching the selected files for source passages...";
@@ -559,9 +680,28 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
             GroundedAnswer answer = await GroundedQuestionAnswering.AskAsync(
                 index, _embeddings, _answerModel, question, token, expandQueries);
 
+            // /api/ps reports memory placement for loaded models. Failure to
+            // read this optional telemetry must never invalidate a valid answer.
+            OllamaExecutionInfo? execution = null;
+            try
+            {
+                execution = await _ollamaRuntime.GetExecutionAsync(
+                    _answerModel.ModelName, token);
+            }
+            catch (Exception exception) when (exception is HttpRequestException or
+                InvalidDataException or TaskCanceledException)
+            {
+                // The answer remains valid; the processor indicator is unknown.
+            }
+
+            OllamaChatMetrics? raw = _answerModel.LastResponseMetrics;
             await DispatchAsync(() =>
             {
                 AnswerText = answer.Text;
+                ProcessorStatus = execution?.Display ??
+                    "CPU/GPU status unavailable; Ollama /api/ps could not be read.";
+                AnswerMetricsText = FormatAnswerMetrics(answer, raw, _answerModel.ModelName,
+                    elapsed.Elapsed);
                 foreach (EvidencePassage candidate in answer.Candidates)
                 {
                     RetrievedPassages.Add(new RetrievedPassageRow(
@@ -608,12 +748,30 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
                 AnswerStatus = outcome.Cancelled
                     ? "You can ask the document again."
                     : $"Could not generate a local answer: {outcome.ErrorMessage}";
+                AnswerMetricsText = $"Elapsed {elapsed.Elapsed.TotalSeconds:0.00}s. " +
+                    "Detailed token statistics unavailable because the request did not finish.";
             });
         }
 
         // An Ask document failure belongs to the answer panel, not to the
         // unrelated Compare results status shown higher on the page.
         await DispatchAsync(() => StatusText = previousSearchStatus);
+    }
+
+    private static string FormatAnswerMetrics(GroundedAnswer answer, OllamaChatMetrics? metrics,
+        string model, TimeSpan elapsed)
+    {
+        string outputTokens = metrics?.OutputTokens?.ToString() ?? "n/a";
+        string inputTokens = metrics?.PromptTokens?.ToString() ?? "n/a";
+        string speed = metrics?.TokensPerSecond is double rate
+            ? $"{rate:0.0} tokens/s" : "n/a";
+        string load = metrics?.LoadSeconds is double seconds
+            ? $"{seconds:0.00}s" : "n/a";
+        return $"Model: {model} | Search: {answer.RetrievalDuration.TotalSeconds:0.00}s " +
+               $"| Generate: {answer.GenerationDuration.TotalSeconds:0.00}s " +
+               $"| Total: {elapsed.TotalSeconds:0.00}s | Input: {inputTokens} tokens " +
+               $"| Output: {outputTokens} tokens | Speed: {speed} | Model load: {load}. " +
+               "Speed is Ollama output tokens / eval_duration, not the end-to-end rate.";
     }
 
     private async Task<OperationOutcome> RunOperationAsync(Func<CancellationToken, Task> operation)
@@ -692,9 +850,11 @@ public sealed class SmartSearchViewModel : ObservableObject, IDisposable
         _cancellation?.Cancel();
         _embeddings.Dispose();
         _answerModel.Dispose();
+        _ollamaRuntime.Dispose();
     }
 }
 
+public sealed record AnswerModelChoice(string Name, string DisplayName);
 public sealed record AnswerSourceRow(string Title, string Quote);
 public sealed record RetrievedPassageRow(string Title, string Excerpt, string SourcePath);
 

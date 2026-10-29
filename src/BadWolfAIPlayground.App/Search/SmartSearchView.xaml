@@ -192,13 +192,35 @@
                     <TextBlock Text="Generate a local answer to the question above, using retrieved passages as evidence. The answer must include checkable quotes from the selected files."
                                Style="{StaticResource MutedText}" FontSize="11" TextWrapping="Wrap"
                                Margin="0,6,0,11" />
-                    <TextBlock Text="ONE-TIME ANSWER MODEL SETUP (separate from EmbeddingGemma)"
-                               Foreground="#8ABCE5" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,5" />
-                    <Border Background="#0B1526" BorderBrush="#34516D" BorderThickness="1"
-                            CornerRadius="7" Padding="12,9" Margin="0,0,0,10">
-                        <TextBlock Text="ollama pull qwen3:4b-instruct"
-                                   FontFamily="Consolas" FontSize="12" Foreground="#C7E6FF" />
-                    </Border>
+                    <TextBlock Text="LOCAL ANSWER MODEL (separate from the EmbeddingGemma search model)"
+                               Foreground="#8ABCE5" FontSize="10" FontWeight="SemiBold" Margin="0,0,0,6" />
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <ComboBox x:Name="AnswerModelSelector" Grid.Column="0"
+                                  ItemsSource="{Binding AnswerModelChoices}"
+                                  SelectedItem="{Binding SelectedAnswerModel, Mode=TwoWay}"
+                                  DisplayMemberPath="DisplayName"
+                                  IsEnabled="{Binding CanSelectAnswerModel}"
+                                  Style="{StaticResource DarkComboBox}" MinWidth="250"
+                                  ToolTip="Select a locally installed model. This never changes the already indexed document embeddings." />
+                        <Button x:Name="RefreshAnswerModelsButton" Grid.Column="1"
+                                Content="Refresh installed models"
+                                Command="{Binding RefreshAnswerModelsCommand}"
+                                Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" />
+                    </Grid>
+                    <TextBlock Text="{Binding AnswerModelCatalogStatus}" Foreground="#AAC9E1"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,7" />
+                    <TextBlock Text="{Binding ProcessorStatus}" Foreground="#8FD8C5"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,9" />
+                    <TextBlock Text="CPU-friendly optional models (install in PowerShell, then Refresh):"
+                               Style="{StaticResource MutedText}" FontSize="10" TextWrapping="Wrap" Margin="0,0,0,4" />
+                    <TextBlock Text="ollama pull qwen2.5:0.5b-instruct     (~398 MB; fastest, less accurate)"
+                               Foreground="#C6DDF1" FontFamily="Consolas" FontSize="11" Margin="0,0,0,3" />
+                    <TextBlock Text="ollama pull qwen2.5:1.5b-instruct     (~986 MB; better CPU balance)"
+                               Foreground="#C6DDF1" FontFamily="Consolas" FontSize="11" Margin="0,0,0,9" />
                     <CheckBox x:Name="DeepSearchToggle"
                               Content="Deep query expansion (slower; an extra Qwen call)"
                               IsChecked="{Binding UseExpandedSearch, Mode=TwoWay}"
@@ -208,12 +230,22 @@
                         <Button x:Name="AskDocumentButton" Content="Ask document"
                                 Command="{Binding AskDocumentCommand}"
                                 Style="{StaticResource PrimaryButton}" Margin="0,0,8,7" />
-                        <Button Content="Copy answer-model command"
+                        <Button Content="Copy selected model install command"
                                 Command="{Binding CopyAnswerModelCommand}"
                                 Style="{StaticResource SecondaryButton}" Margin="0,0,0,7" />
                     </WrapPanel>
                     <TextBlock Text="{Binding AnswerStatus}" Foreground="#A5C7DF"
-                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10" />
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8" />
+                    <Border Background="#0C2337" BorderBrush="#36556E"
+                            BorderThickness="1" CornerRadius="7" Padding="11"
+                            Margin="0,0,0,10">
+                        <StackPanel>
+                            <TextBlock Text="REQUEST PERFORMANCE" Foreground="#91D8E9"
+                                       FontSize="10" FontWeight="SemiBold" Margin="0,0,0,5" />
+                            <TextBlock x:Name="AnswerMetricsTextBlock" Text="{Binding AnswerMetricsText}"
+                                       Foreground="#D1E7F9" FontSize="11" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Border>
                     <Border Background="#0B1728" BorderBrush="#28526A" BorderThickness="1"
                             CornerRadius="9" Padding="15" Margin="0,0,0,11">
                         <TextBlock x:Name="AnswerTextBlock" Text="{Binding AnswerText}"
