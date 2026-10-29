@@ -132,8 +132,25 @@
                             <TextBlock Text="{Binding SourceFilesSummary}"
                                        Foreground="#B2CEDF" TextWrapping="Wrap"
                                        FontSize="11" Margin="0,0,0,9"/>
-                            <ScrollViewer MaxHeight="195" VerticalScrollBarVisibility="Auto">
+                            <WrapPanel Margin="0,0,0,10">
+                                <Button x:Name="EnableAllAnomalyLogsButton"
+                                        Content="Include all"
+                                        Command="{Binding SelectAllFilesCommand}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,8,6"/>
+                                <Button x:Name="DisableAllAnomalyLogsButton"
+                                        Content="Exclude all"
+                                        Command="{Binding SelectNoFilesCommand}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,8,6"/>
+                                <TextBlock Text="Changes update the chart and findings automatically."
+                                           Foreground="#8CB9D5" FontSize="10"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Margin="0,0,0,6"/>
+                            </WrapPanel>
+                            <ScrollViewer MaxHeight="230" VerticalScrollBarVisibility="Auto">
                                 <ItemsControl x:Name="AnomalySourceFiles"
+                                              IsEnabled="{Binding CanEditFiles}"
                                               ItemsSource="{Binding SourceFiles}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -141,11 +158,20 @@
                                                     BorderThickness="0,0,0,1" Padding="4,7">
                                                 <Grid>
                                                     <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
                                                         <ColumnDefinition Width="4*"/>
                                                         <ColumnDefinition Width="1.5*"/>
                                                         <ColumnDefinition Width="1*"/>
+                                                        <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0">
+                                                    <CheckBox Grid.Column="0"
+                                                              Content="Include"
+                                                              IsChecked="{Binding Included, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                              Foreground="#B1D6E8"
+                                                              VerticalAlignment="Center"
+                                                              Margin="0,0,12,0"
+                                                              ToolTip="Exclude/include this log from all anomaly calculations"/>
+                                                    <StackPanel Grid.Column="1">
                                                         <TextBlock Text="{Binding RelativePath}"
                                                                    FontFamily="Consolas" FontSize="10"
                                                                    Foreground="#C9E3F7"
@@ -153,7 +179,7 @@
                                                         <TextBlock Text="{Binding Component}"
                                                                    Foreground="#83AFCE" FontSize="10"/>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Column="1" Margin="5,0,3,0">
+                                                    <StackPanel Grid.Column="2" Margin="5,0,3,0">
                                                         <TextBlock Text="DATED / WARN+"
                                                                    Foreground="#8EACC7" FontSize="9"/>
                                                         <StackPanel Orientation="Horizontal">
@@ -165,12 +191,19 @@
                                                                        FontSize="11" Foreground="#EBA88E"/>
                                                         </StackPanel>
                                                     </StackPanel>
-                                                    <StackPanel Grid.Column="2">
+                                                    <StackPanel Grid.Column="3">
                                                         <TextBlock Text="SKIPPED"
                                                                    Foreground="#8EACC7" FontSize="9"/>
                                                         <TextBlock Text="{Binding SkippedLines}"
                                                                    FontSize="11" Foreground="#C3DCEF"/>
                                                     </StackPanel>
+                                                    <Button Grid.Column="4" Content="Open"
+                                                            Style="{StaticResource SecondaryButton}"
+                                                            Command="{Binding DataContext.OpenLogFileCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                            CommandParameter="{Binding}"
+                                                            ToolTip="Open original file in Notepad++"
+                                                            VerticalAlignment="Center"
+                                                            Margin="10,0,0,0"/>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
@@ -223,7 +256,18 @@
                                FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <TextBlock Text="These are observations and investigation leads, not confirmed diagnoses."
                                Style="{StaticResource MutedText}" FontSize="11"
-                               TextWrapping="Wrap" Margin="0,0,0,13"/>
+                               TextWrapping="Wrap" Margin="0,0,0,7"/>
+                    <WrapPanel Margin="0,0,0,11">
+                        <Button x:Name="LocateNotepadPlusPlusButton"
+                                Content="Locate Notepad++"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ChooseNotepadCommand}"
+                                Margin="0,0,9,6"/>
+                        <TextBlock Text="{Binding EditorStatus}"
+                                   Foreground="#9BC6DA" FontSize="10"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" Margin="0,0,0,6"/>
+                    </WrapPanel>
                     <ItemsControl x:Name="AnomalyFindings" ItemsSource="{Binding Findings}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -248,7 +292,13 @@
                                         </Border>
                                         <TextBlock Text="{Binding SourceHint}"
                                                    Foreground="#A6D8B9" FontSize="10"
-                                                   TextWrapping="Wrap" Margin="0,9,0,0"/>
+                                                   TextWrapping="Wrap" Margin="0,9,0,9"/>
+                                        <Button Content="Open in Notepad++"
+                                                Style="{StaticResource SecondaryButton}"
+                                                HorizontalAlignment="Left"
+                                                Command="{Binding DataContext.OpenFindingCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="Open the original log at this exact source line"/>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>
