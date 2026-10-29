@@ -647,6 +647,59 @@ static async Task TestCitationRelevance()
         question, modelAnswer, [], [unrelatedName]) is null,
         "An unrelated occurrence of the right name must not prove the fox's identity.");
 
+    SearchChunk intro = new("farbovanii-lis.txt", null, 1,
+        "Жив собі в однім лісі Лис Микита. Далі почалися його пригоди.");
+    SearchChunk later = new("farbovanii-lis.txt", null, 2,
+        "Лис Микита набрав відваги, розбігся і одним духом скочив через пліт на вулицю.");
+
+    // A later paragraph arrived in Qwen's prompt; the first sentence
+    // never reached Qwen. For equally relevant name evidence, preserve the
+    // original document order instead of giving the prompt chunk a bonus.
+    VerifiedCitation? introQuote = AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer,
+        [new EvidencePassage(1, later, 0.9)],
+        [intro, later]);
+    Assert(introQuote is { LocatedInSource: true, Id: 0 } &&
+           introQuote.Chunk == intro &&
+           introQuote.Quote.StartsWith("Жив собі в однім лісі Лис Микита",
+               StringComparison.Ordinal),
+        "The first sentence naming the fox must beat an equally relevant " +
+        "later source sentence, even if Qwen only saw the later chunk.");
+
+    // More frequent name matches in other chunks can crowd the first
+    // occurrence out of a top-24 keyword shortlist. The early source
+    // anchor must still be considered and win an equal-relevance tie.
+    SearchChunk[] crowded =
+    [
+        intro,
+        .. Enumerable.Range(2, 29).Select(number => new SearchChunk(
+            "farbovanii-lis.txt", null, number,
+            string.Join(" ", Enumerable.Repeat(
+                "Лис Микита біг через стежку.", 3))))
+    ];
+    VerifiedCitation? firstOfMany = AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer,
+        [new EvidencePassage(1, crowded[^1], 0.95)],
+        crowded);
+    Assert(firstOfMany is { LocatedInSource: true } &&
+           firstOfMany.Chunk == intro,
+        "A first-chapter name mention must not disappear simply because " +
+        "24 later chunks mention the same name more often.");
+
+    // Source order must be only a tiebreaker, not override genuinely better
+    // query-specific evidence later in the same document.
+    SearchChunk explicitName = new("farbovanii-lis.txt", null, 3,
+        "Усім розповідали, що лиса звали Микита.");
+    VerifiedCitation? stronger = AnswerEvidenceValidator.LocateSupportingQuote(
+        question, modelAnswer, [],
+        [intro, explicitName]);
+    Assert(stronger is { LocatedInSource: true } &&
+           stronger.Chunk == explicitName,
+        "A later sentence matching the subject, name and wording " +
+        "of the question should outrank a less specific introduction.");
+
+
+
     SearchChunk[] chunks =
     [
         new("fox.txt", null, 1, related + " " + unrelated),

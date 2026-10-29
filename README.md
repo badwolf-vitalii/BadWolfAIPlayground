@@ -314,3 +314,25 @@ The tests reproduce the unrelated fox citation, name recovery in the
 same and later chunks, an unsupported answer and an unrelated
 same-name mention. Measure any real CPU improvement on the same
 local book/model; correctness and throughput are not guaranteed by CI.
+
+
+### Source quote ordering: prefer an introduction on equal relevance
+
+For the question **"Як звали лиса?"**, *Farbovanyi Lys* introduces the
+hero in its very first sentence: **"Жив собі в однім лісі Лис Микита..."**
+The local evidence locator previously preferred a later quote from
+chunk 2 because submitted Qwen passages received an extra ranking
+bonus. The quote was genuine, but the introductory sentence was just
+as relevant and easier for a reader to verify.
+
+Local quote selection now ranks first by textual evidence relevance
+(question-term and distinctive answer-term coverage). **When scores
+are equal, it uses the original chunk and sentence order**, not which
+excerpt happened to be sent to Qwen. It also considers the earliest
+chunk mentioning the answer even if its one occurrence is crowded out
+of the top-24 keyword hits by many later repeated names. More
+specific later evidence may still win. This is a deterministic local
+change; it does not trigger additional Qwen calls or invalidate
+existing embeddings. Automated regression tests cover equal-scoring
+introductory and later quotes, a crowded long book, and a more
+relevant later sentence.

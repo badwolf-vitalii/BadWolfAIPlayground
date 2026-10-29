@@ -127,18 +127,45 @@ public static partial class AnswerEvidenceValidator
             return null;
         }
 
-        var candidates = new List<(SearchChunk Chunk, int Id, int Priority)>();
+        var candidates = new List<(SearchChunk Chunk, int Id)>();
         var seen = new HashSet<SearchChunk>();
+        var sourcePositions = new Dictionary<SearchChunk, int>();
+        for (int i = 0; i < indexedChunks.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sourcePositions.TryAdd(indexedChunks[i], i);
+        }
+
         foreach (EvidencePassage passage in submitted)
         {
             if (seen.Add(passage.Chunk))
             {
-                candidates.Add((passage.Chunk, passage.Id, 2));
+                candidates.Add((passage.Chunk, passage.Id));
             }
         }
 
-        // Read local imported text: no new embeddings, no network call,
-        // and no request to Qwen. Scan at most 24 additional chunks.
+        // Ranking by number of occurrences could otherwise exclude the
+        // introductory mention in a long book. Include the FIRST chunk
+        // containing the proposed answer before the keyword-ranked candidates.
+        // This is a local word scan, not another embedding or Qwen call.
+        foreach (SearchChunk chunk in indexedChunks)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Words().Matches(chunk.Content).Any(word =>
+                answerTerms.Any(term =>
+                    Equivalent(word.Value.ToLowerInvariant(), term.Normalized))))
+            {
+                if (seen.Add(chunk))
+                {
+                    candidates.Add((chunk, 0));
+                }
+                break;
+            }
+        }
+
+        // Also consider high-coverage lexical hits for more specific passages.
+        // Source order resolves ties *after* evidence relevance, never model
+        // retrieval priority.
         string lookup = string.Join(" ", answerTerms.Select(term => term.Original));
         IReadOnlyList<SearchHit> matches = KeywordSearch.Find(
             indexedChunks, lookup, limit: 24, cancellationToken: cancellationToken);
@@ -146,13 +173,15 @@ public static partial class AnswerEvidenceValidator
         {
             if (seen.Add(hit.Chunk))
             {
-                candidates.Add((hit.Chunk, 0, 0));
+                candidates.Add((hit.Chunk, 0));
             }
         }
 
         VerifiedCitation? best = null;
         int bestScore = -1;
-        foreach ((SearchChunk chunk, int id, int priority) in candidates)
+        int bestSourcePosition = int.MaxValue;
+        int bestSentencePosition = int.MaxValue;
+        foreach ((SearchChunk chunk, int id) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
             foreach (Match match in Sentences().Matches(chunk.Content))
@@ -199,11 +228,22 @@ public static partial class AnswerEvidenceValidator
 
                 int answerOverlap = answerTerms.Count(term => quoteWords.Any(word =>
                     Equivalent(word, term.Normalized)));
-                int score = questionOverlap * 10 + answerOverlap * 5 + priority;
-                if (score > bestScore)
+                int score = questionOverlap * 10 + answerOverlap * 5;
+                int sourcePosition = sourcePositions.GetValueOrDefault(chunk, int.MaxValue);
+                // When two sentences corroborate the answer equally well,
+                // prefer the first appearance in the *original document*.
+                // A later sentence still wins if it actually matches more
+                // of the question/answer, preserving evidence relevance.
+                if (score > bestScore ||
+                    (score == bestScore &&
+                     (sourcePosition < bestSourcePosition ||
+                      (sourcePosition == bestSourcePosition &&
+                       match.Index < bestSentencePosition))))
                 {
                     best = citation;
                     bestScore = score;
+                    bestSourcePosition = sourcePosition;
+                    bestSentencePosition = match.Index;
                 }
             }
         }

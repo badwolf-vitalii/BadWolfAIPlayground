@@ -304,3 +304,25 @@ citation rejection. It cannot fully prove semantic entailment.
 Regression tests reproduce the user's false negative, local
 one-call recovery, an answer absent from the book, an unrelated
 same-name match, and a fact located after the clipped prompt excerpt.
+
+
+### Deterministic source order as citation ranking tiebreaker
+
+`AnswerEvidenceValidator.LocateSupportingQuote` previously used
+`questionOverlap*10 + answerOverlap*5 + submittedPriority`.
+The `submittedPriority` bonus could favor a later passage sent to
+the local language model over the introductory sentence of the same
+original book, despite identical evidence coverage.
+
+The scorer now uses textual overlap alone for relevance, and resolves
+equal-score citations by their index in `SemanticIndex.Chunks` and
+then by the sentence's offset within that chunk. Thus the earliest
+sufficiently supporting source sentence is preferred on a tie.
+A bounded local scan also retains the first chunk mentioning the
+proposed distinctive answer terms, preventing top-24 frequency-based
+retrieval from hiding an introductory mention. This happens only
+after the ordinary answer model has produced a genuine but
+irrelevant quote; it adds no additional Qwen or embedding call.
+More relevant later evidence remains preferred to weaker early
+mentions. Test coverage includes the user's exact fox-name
+introductory sentence and the later chunk-2 citation.
