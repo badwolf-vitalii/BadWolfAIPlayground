@@ -14,9 +14,13 @@ namespace BadWolfAIPlayground.App.Anomaly;
 public sealed class AnomalyViewModel : ObservableObject, IDisposable
 {
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
-    private readonly RelayCommand _demo, _open, _run, _cancel;
+    private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource;
     private CancellationTokenSource? _active;
     private LogParseResult? _loaded;
+    private AnomalyReport? _lastReport;
+    private LogSourceContextIndex? _sourceIndex;
+    private string _sourceContextStatus =
+        "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
     private string _source = "No file selected";
     private string _status = "Load a generated example or select a local LOG/TXT file.";
     private string _summary = "No analysis yet.";
@@ -33,6 +37,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _open = new RelayCommand(async () => await ChooseFileAsync(), () => !Busy);
         _run = new RelayCommand(async () => await AnalyzeAsync(), () => !Busy && _loaded is not null);
         _cancel = new RelayCommand(() => _active?.Cancel(), () => Busy);
+        _chooseSource = new RelayCommand(async () => await ChooseSourceAsync(), () => !Busy);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
@@ -41,6 +46,12 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand ChooseFileCommand => _open;
     public ICommand AnalyzeCommand => _run;
     public ICommand CancelCommand => _cancel;
+    public ICommand ChooseSourceCommand => _chooseSource;
+    public string SourceContextStatus
+    {
+        get => _sourceContextStatus;
+        private set => SetProperty(ref _sourceContextStatus, value);
+    }
     public string SourceName { get => _source; private set => SetProperty(ref _source, value); }
     public string StatusText { get => _status; private set => SetProperty(ref _status, value); }
     public string Summary { get => _summary; private set => SetProperty(ref _summary, value); }
@@ -73,6 +84,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _open.NotifyCanExecuteChanged();
                 _run.NotifyCanExecuteChanged();
                 _cancel.NotifyCanExecuteChanged();
+                _chooseSource.NotifyCanExecuteChanged();
             }
         }
     }
@@ -132,6 +144,45 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         await _dispatcher.InvokeAsync(() => Apply(analyzed));
     });
 
+    public Task LoadSourceContextAsync(string folder) => ExecuteAsync(async token =>
+    {
+        LogSourceContextIndex index = await Task.Run(() =>
+            LogSourceContextIndex.Build(folder, token), token);
+        token.ThrowIfCancellationRequested();
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _sourceIndex = index;
+            SourceContextStatus =
+                $"Local C# context loaded: {index.TemplateCount:N0} logging templates " +
+                $"from {index.FilesScanned:N0} source files. " +
+                "Matches are heuristic; the source stays on this PC.";
+            if (_lastReport is not null)
+            {
+                Apply(_lastReport);
+            }
+        });
+    });
+
+    private async Task ChooseSourceAsync()
+    {
+        if (Busy || _disposed)
+        {
+            return;
+        }
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose the Visual Studio solution in your local source checkout",
+            Filter = "Visual Studio solution (*.sln)|*.sln",
+            Multiselect = false,
+            CheckFileExists = true
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            string root = Path.GetDirectoryName(dialog.FileName)!;
+            await LoadSourceContextAsync(root);
+        }
+    }
+
     private async Task ChooseFileAsync()
     {
         if (Busy || _disposed)
@@ -189,6 +240,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     private void Apply(AnomalyReport report)
     {
+        _lastReport = report;
         Findings.Clear();
         Timeline.Clear();
         int maximum = Math.Max(1, report.PeakProblemCount);
@@ -201,12 +253,46 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
         foreach (AnomalyFinding item in report.Findings)
         {
+            LogSourceMatch? source = _sourceIndex?.FindBest(item.Evidence);
+            string sourceHint = source is null
+                ? _sourceIndex is null
+                    ? "Source context not loaded (optional)."
+                    : "No straightforward C# logging template match."
+                : "Possible log origin: " + source.Description;
+
+            // Some log helpers emit an explicit caller file and line in
+            // the DEBUG entry immediately before an ERROR message.
+            if (_loaded is not null)
+            {
+                LogEvent? problem = _loaded.Events.FirstOrDefault(e =>
+                    e.LineNumber == item.SourceLine);
+                if (problem is not null)
+                {
+                    LogEvent? caller = _loaded.Events
+                        .Where(e => e.LineNumber < item.SourceLine &&
+                                    e.LineNumber >= item.SourceLine - 3 &&
+                                    (problem.Timestamp - e.Timestamp).Duration() <=
+                                        TimeSpan.FromSeconds(3))
+                        .OrderByDescending(e => e.LineNumber)
+                        .FirstOrDefault(e =>
+                            LogSourceContextIndex.TryReadCallerLocation(e.Message) is not null);
+                    string? callerLocation = caller is null ? null :
+                        LogSourceContextIndex.TryReadCallerLocation(caller.Message);
+                    if (callerLocation is not null)
+                    {
+                        sourceHint = $"Nearby logged caller: {callerLocation} " +
+                            "(DEBUG metadata, verify correlation). " + sourceHint;
+                    }
+                }
+            }
+
             Findings.Add(new AnomalyFindingRow(
                 item.Kind == AnomalyKind.ErrorBurst ? "BURST" : "RARE ERROR",
                 item.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
                 item.Title,
                 item.Explanation,
-                $"Log line {item.SourceLine}: {item.Evidence}"));
+                $"Log line {item.SourceLine}: {item.Evidence}",
+                sourceHint));
         }
 
         EventCount = report.Source.Events.Count;
@@ -241,4 +327,5 @@ public sealed record AnomalyBucketRow(
 }
 
 public sealed record AnomalyFindingRow(
-    string Kind, string Time, string Title, string Explanation, string Evidence);
+    string Kind, string Time, string Title, string Explanation,
+    string Evidence, string SourceHint);

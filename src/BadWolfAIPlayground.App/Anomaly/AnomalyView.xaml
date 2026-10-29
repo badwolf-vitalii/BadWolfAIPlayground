@@ -45,9 +45,17 @@
                             <Button x:Name="SelectAnomalyLogButton" Content="Select local LOG / TXT"
                                     Style="{StaticResource SecondaryButton}"
                                     Command="{Binding ChooseFileCommand}" Margin="0,0,8,7"/>
+                            <Button x:Name="ChooseAnomalySourceButton"
+                                    Content="Select local C# solution (optional)"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding ChooseSourceCommand}"
+                                    Margin="0,0,8,7"/>
                             <Button Content="Cancel" Style="{StaticResource SecondaryButton}"
                                     Command="{Binding CancelCommand}" Margin="0,0,0,7"/>
                         </WrapPanel>
+                        <TextBlock Text="{Binding SourceContextStatus}"
+                                   Foreground="#8FD1BC" FontSize="10"
+                                   TextWrapping="Wrap" Margin="0,0,0,9"/>
                         <TextBlock Text="{Binding SourceName}" Foreground="#77C5F6"
                                    FontWeight="SemiBold" FontSize="11" TextWrapping="Wrap"/>
                         <TextBlock Text="{Binding StatusText}" Foreground="#B8D2E6"
@@ -172,6 +180,9 @@
                                                        Foreground="#87D5EE" FontFamily="Consolas"
                                                        TextWrapping="Wrap"/>
                                         </Border>
+                                        <TextBlock Text="{Binding SourceHint}"
+                                                   Foreground="#A6D8B9" FontSize="10"
+                                                   TextWrapping="Wrap" Margin="0,9,0,0"/>
                                     </StackPanel>
                                 </Border>
                             </DataTemplate>

@@ -371,3 +371,29 @@ change; it does not trigger additional Qwen calls or invalidate
 existing embeddings. Automated regression tests cover equal-scoring
 introductory and later quotes, a crowded long book, and a more
 relevant later sentence.
+
+
+#### Optional local source-code context for application logs
+
+You do **not** need to know the codebase to use the anomaly detector.
+After opening a log, optionally click **Select local C# solution**
+and choose a `.sln` file from a local checkout of a project.
+The app scans only the local `.cs` files below that solution folder
+(up to 4,000 files, with bounded memory/size), never downloads or
+publishes the repository, and indexes simple logging statements
+such as `logger.Error("...")`, `logger.Debug($"...{id}...")`
+and `Helper.SimpleLogE(logger, "...")`.
+When a finding's actual message matches a literal or interpolated
+logging template, its card displays **Possible log origin:
+relative/path/File.cs:line**. These are helpful call-site candidates,
+not proof that a specific code path ran. Complex expressions and
+logger wrappers may be unmatched.
+
+Some applications also emit a DEBUG message with the caller's
+`File.cs: line 123` immediately before an error; the lab recognizes
+this as a nearby caller hint (without claiming it caused the error).
+Source context is optional, in-memory, and never used to infer
+unknown business rules or generate an unsupported diagnosis.
+This generic scanner contains **no company source, logging strings,
+secrets or production logs**. Always keep private source in a private
+checkout, and never commit your source data to this public repo.

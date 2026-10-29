@@ -355,3 +355,29 @@ smoke test additionally opens the third experiment, executes the
 demo, verifies actual finding cards and reanalyzes the same sample
 with a changed sensitivity. Without actual work log samples, the
 supported format and any root-cause interpretation remain provisional.
+
+
+### Optional source-aware log triage
+
+`LogSourceContextIndex` scans a locally chosen solution directory
+for elementary C# logging statements, supports simple interpolated
+templates with bounded variable spans, and records relative source
+file paths and line numbers. It intentionally does not require a
+Roslyn dependency, cloud access, cloning or persisted embeddings.
+A matched source location is labeled as a *possible* source, not
+proof of execution; no source code or matched message is transferred
+to the public repository. File size, file count, total bytes,
+template count and regex timeouts are bounded; generated build
+folders are excluded.
+
+The optional WPF **Select local C# solution** action builds this
+in-memory index on a worker thread and annotates evidence cards
+with possible source locations when the logged message matches.
+A nearby `C:\...\File.cs: line 123` DEBUG line can also supply
+caller evidence if it was emitted within three physical lines and
+three seconds of the finding. Neither matching scheme establishes
+causation. Deterministic tests use only synthetic C# statements
+and exercise exact, interpolated and irrelevant messages as well as
+the WPF source-selection flow. The ability to understand business
+rules still requires human-authored documentation or explicit
+source-level investigation, not just a message-template match.

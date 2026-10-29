@@ -380,6 +380,7 @@ internal static class Program
             AnomalyViewModel analyzer = anomalyView.AnalysisModel;
             Assert(anomalyView.Visibility == Visibility.Visible &&
                    smartSearch.Visibility == Visibility.Collapsed &&
+                   anomalyView.FindName("ChooseAnomalySourceButton") is Button &&
                    anomalyView.FindName("UseAnomalyDemoButton") is Button &&
                    anomalyView.FindName("SelectAnomalyLogButton") is Button &&
                    anomalyView.FindName("AnomalySensitivitySlider") is Slider &&
@@ -394,6 +395,31 @@ internal static class Program
                    analyzer.Findings.Any(f => f.Kind == "BURST") &&
                    analyzer.Findings.Any(f => f.Kind == "RARE ERROR"),
                 "A real WPF demo must show the expected spike and rare error.");
+            // The same generic scanner can be fed local, non-proprietary
+            // source. It never needs to fetch a private repository in CI.
+            string contextDir = Path.Combine(Path.GetTempPath(),
+                "BadWolfAIPlayground-AnomalyContext-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(contextDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(contextDir, "DemoWorker.cs"),
+                    "class DemoWorker { void Run(int id) { " +
+                    "logger.Error($\"Retry timeout on connection {id}\"); } }");
+                Task sourceLoad = analyzer.LoadSourceContextAsync(contextDir);
+                PumpUntil(() => sourceLoad.IsCompleted, TimeSpan.FromSeconds(20));
+                sourceLoad.GetAwaiter().GetResult();
+                Assert(analyzer.SourceContextStatus.Contains("logging templates",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       analyzer.Findings.Any(f =>
+                           f.Kind == "BURST" &&
+                           f.SourceHint.Contains("DemoWorker.cs", StringComparison.Ordinal)),
+                    "Optional source context must connect a demo error to its local C# statement.");
+            }
+            finally
+            {
+                Directory.Delete(contextDir, recursive: true);
+            }
+
             double before = analyzer.Sensitivity;
             analyzer.Sensitivity = 4.5;
             Task reanalysis = analyzer.AnalyzeAsync();

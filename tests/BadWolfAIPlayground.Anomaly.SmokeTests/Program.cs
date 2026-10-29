@@ -8,7 +8,8 @@ var checks = new (string Name, Action Execute)[]
     ("Message template normalization groups changing IDs", NormalizedErrors),
     ("Insufficient history stays explicit", ShortLog),
     ("Cancellation and invalid options", FailSafely),
-    ("Sensitivity controls actual threshold", Sensitivity)
+    ("Sensitivity controls actual threshold", Sensitivity),
+    ("Optional offline C# log-template source context", SourceContext)
 };
 
 int failed = 0;
@@ -123,6 +124,53 @@ static void Sensitivity()
            low.Findings.Any(f => f.Kind == AnomalyKind.ErrorBurst),
         "Sensitivity must affect the actual threshold.");
 }
+
+static void SourceContext()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-CSharpContext-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        File.WriteAllText(Path.Combine(root, "Worker.cs"),
+            """
+            class Worker
+            {
+                void Start(int connectionId)
+                {
+                    logger.Info("Service initialization started");
+                    Helper.SimpleLogE(logger, $"Retry timeout on connection {connectionId}");
+                    logger.Warn($"Card {connectionId} could not be read");
+                    logger.Debug("OK");
+                }
+            }
+            """);
+        Directory.CreateDirectory(Path.Combine(root, "obj"));
+        File.WriteAllText(Path.Combine(root, "obj", "Generated.cs"),
+            "logger.Error(\"Skip generated artifacts\");");
+
+        LogSourceContextIndex context = LogSourceContextIndex.Build(root);
+        Ensure(context.FilesScanned == 1 && context.TemplateCount >= 3,
+            "Scan C# logging statements and ignore generated obj files.");
+        LogSourceMatch? exact = context.FindBest("Service initialization started");
+        LogSourceMatch? variable = context.FindBest("Retry timeout on connection 9024");
+        LogSourceMatch? missing = context.FindBest("Other unrelated message");
+        Ensure(exact is { Exact: true } && exact.RelativePath == "Worker.cs" &&
+               exact.LineNumber > 0 && variable is { Exact: false } &&
+               variable.CodeTemplate.Contains("{connectionId}", StringComparison.Ordinal) &&
+               missing is null, "Map exact/interpolated messages back to source without guessing.");
+        Ensure(LogSourceContextIndex.TryReadCallerLocation(
+            @"C:\dev\project\Source.cs: line 123") == "Source.cs:123",
+            "Use explicit DEBUG file:line caller metadata where present.");
+        Ensure(LogSourceContextIndex.TryReadCallerLocation("Unrelated error") is null,
+            "Never fabricate a source location from an unrelated message.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
 static void Ensure(bool expression, string message)
 {
     if (!expression) throw new InvalidOperationException(message);
