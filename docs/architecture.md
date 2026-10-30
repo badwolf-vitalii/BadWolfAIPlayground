@@ -652,3 +652,23 @@ inside a bounded-height region. Synthetic .NET and WPF regressions
 check grouping, preserved severity and file/line attribution, rare
 errors not hidden by bursts, dynamic reanalysis and no access to
 non-imported sources. No proprietary log text enters the repo.
+
+
+### Non-transactional card reads are not missing VTS links
+
+`OperationTimelineGroup.Kind` differentiates `VtsTransaction`,
+`StandaloneCardRead` and `UnlinkedFlow`. The analyzer recognizes
+`CardInfoReadAndChecks` as a standalone read/check operation when
+there is no explicit transaction association and no other named
+operation in that flow. WPF shows **Card reading/checks** instead
+of incorrectly reporting **VTS link unknown**. Any explicit
+transaction association still takes precedence.
+
+The terminal `event=end` proves an instrumented method ended.
+`status=completed` with `result=unknown` does not establish a
+successful card read or a technical failure. Logged duration
+and physical source line are retained. Without `event=end`,
+the outcome remains observed, not completed. An unknown or
+mixed-operation flow is never presumed standalone solely because
+its `transaction_id` is absent. Deterministic engine and WPF
+tests cover the production record shape with synthetic IDs.

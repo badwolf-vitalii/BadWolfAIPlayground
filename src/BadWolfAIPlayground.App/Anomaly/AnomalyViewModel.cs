@@ -725,9 +725,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
         foreach (OperationTimelineGroup group in operations.Groups)
         {
-            string name = group.TransactionId.Length > 0
-                ? "VTS transaction " + group.TransactionId
-                : "Unlinked flow " + (group.FlowIds.FirstOrDefault() ?? "unknown");
+            string name = group.Kind switch
+            {
+                OperationTimelineGroupKind.VtsTransaction =>
+                    "VTS transaction " + group.TransactionId,
+                OperationTimelineGroupKind.StandaloneCardRead =>
+                    "Card reading/checks | flow " +
+                    (group.FlowIds.FirstOrDefault() ?? "unknown"),
+                _ => "Unlinked flow " +
+                     (group.FlowIds.FirstOrDefault() ?? "unknown")
+            };
             string period = group.StartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture) +
                 " - " + group.EndedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             string flows = group.FlowIds.Count == 0 ? "No flow_id present" :

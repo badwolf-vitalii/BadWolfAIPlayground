@@ -628,3 +628,22 @@ Grouping is deterministic, entirely local, and recomputed after file
 Include/Exclude changes. No ignored profiler or otherwise excluded
 log source is counted as evidence. Real work logs and private code
 remain on the user's machine.
+
+
+#### Standalone card reads versus VTS transactions
+
+The structured `TOM_OP v=1` operation `CardInfoReadAndChecks` is a
+standalone card read/check flow. `transaction_id=-` is expected
+and does not indicate a missing or failed VTS transaction.
+Operation lifecycle explicitly labels this known independent flow
+**Card reading/checks**, rather than **Unlinked flow**.
+
+An `event=end status=completed result=unknown` means that the logged
+method finished but does not establish whether the card was read
+successfully. Its precise duration, `flow_id`, source file and line
+remain available. An explicit `result=true` or `result=false` can
+be reported, while an absent `event=end` cannot imply completion.
+
+Other unrecognized flow types remain **Unlinked flow** until their
+purpose is supported by evidence. A flow with other named operations
+is never automatically classified as an independent card read.

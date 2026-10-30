@@ -522,6 +522,34 @@ internal static class Program
                     row.Outcome == "Cancelled by operator"),
                 "Lifecycle results must render a real WPF expander.");
 
+            // A standalone card read is not required to have a VTS link.
+            Task standaloneRead = analyzer.ImportTextAsync(
+                "Synthetic standalone card read",
+                "2026-10-30 18:17:01.7750 INFO TOM_OP v=1 event=end " +
+                "operation=CardInfoReadAndChecks " +
+                "operation_id=e52290a2566c4d4a881a114bca3ef3dc " +
+                "status=completed result=unknown duration_ms=4057 " +
+                "transaction_id=- flow_id=6a7b1ae187644c80b9160c9003eb22cc");
+            PumpUntil(() => standaloneRead.IsCompleted, TimeSpan.FromSeconds(20));
+            standaloneRead.GetAwaiter().GetResult();
+            Assert(analyzer.OperationGroupCount == 1 &&
+                   analyzer.OperationGroups.Single().Heading.StartsWith(
+                       "Card reading/checks | flow ", StringComparison.Ordinal) &&
+                   analyzer.OperationGroups.Single().Outcome ==
+                       "Card reading/checks finished; result unconfirmed" &&
+                   analyzer.OperationGroups.Single().Explanation.Contains(
+                       "No VTS transaction is expected", StringComparison.Ordinal) &&
+                   analyzer.OperationGroups.Single().Events.Single().Description.Contains(
+                       "4057 ms", StringComparison.Ordinal),
+                "Reading/checking a card must not appear as a missing VTS transaction " +
+                "or a confirmed successful read.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                   expander.DataContext is AnomalyOperationGroupRow group &&
+                   group.Heading.StartsWith("Card reading/checks | flow ",
+                       StringComparison.Ordinal)),
+                "The WPF timeline must visibly label independent card reading.");
+
             // Old archives must not make WPF throw away structured operations
             // solely because the statistical timeline spans over a year.
             Task longArchive = analyzer.ImportTextAsync("Synthetic multi-year archive",
