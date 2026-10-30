@@ -62,7 +62,7 @@ public sealed class SourceInvestigationIndex
 
     private sealed record LoggingSite(
         SourceInvestigationCandidate Candidate, Regex Matcher,
-        int LiteralLength);
+        int LiteralLength, string FixedPrefix, string FixedSuffix);
     private sealed record FileRecord(string RelativePath, int LineCount, long Bytes);
 
     private static readonly HashSet<string> LoggingNames = new(
@@ -175,9 +175,16 @@ public sealed class SourceInvestigationIndex
                 SourceEvidenceKind kind = Placeholder.IsMatch(template)
                     ? SourceEvidenceKind.FormattedLoggingTemplate
                     : SourceEvidenceKind.ExactLoggingLiteral;
+                MatchCollection placeholders = Placeholder.Matches(template);
+                string prefix = placeholders.Count == 0 ? template :
+                    template[..placeholders[0].Index];
+                Match? last = placeholders.Count == 0 ? null :
+                    placeholders[placeholders.Count - 1];
+                string suffix = last is null ? template :
+                    template[(last.Index + last.Length)..];
                 sites.Add(new LoggingSite(
                     CreateCandidate(invocation, containing, relative, kind,
-                        cancellationToken), matcher!, literalLength));
+                        cancellationToken), matcher!, literalLength, prefix, suffix));
             }
         }
 
@@ -193,6 +200,15 @@ public sealed class SourceInvestigationIndex
         foreach (LoggingSite site in _sites)
         {
             token.ThrowIfCancellationRequested();
+            // Reject most unmatched templates with cheap deterministic
+            // string checks before evaluating bounded regular expressions.
+            if ((site.FixedPrefix.Length > 0 &&
+                 !message.StartsWith(site.FixedPrefix,
+                     StringComparison.OrdinalIgnoreCase)) ||
+                (site.FixedSuffix.Length > 0 &&
+                 !message.EndsWith(site.FixedSuffix,
+                     StringComparison.OrdinalIgnoreCase)))
+                continue;
             try
             {
                 if (site.Matcher.IsMatch(message))
