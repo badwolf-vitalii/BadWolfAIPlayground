@@ -589,3 +589,42 @@ exception list and Operation lifecycle timeline, and cannot be
 re-enabled through Include/Exclude until a smaller copy is imported.
 No input is silently truncated or sampled, no files are modified,
 and no work logs are uploaded.
+
+### Grouped anomaly evidence and recurring printer messages
+
+Anomaly Detection Lab now makes an important distinction between an
+individual WARN/ERROR/FATAL log event, a statistical **burst window**,
+and an actual diagnosed incident. A single repetitive `Purge() FAILED`
+message can produce many flagged time windows; these must not be called
+independent root causes.
+
+**Consolidated findings** group statistically flagged windows that have
+the same normalized *representative* log message. Each group shows the
+number of flagged windows, their first and last times, peak WARN/ERROR
+rate, and the original source file and line of the strongest example.
+Total problem events across these windows are clearly **not** presented
+as counts of that exact representative message. Some of the 24 display
+slots remain available for distinct rare-error patterns instead of
+being completely consumed by frequent printer cleanup messages.
+Findings scroll within a bounded-height area.
+
+The compact **Recurring warning / error patterns** panel independently
+counts actual recognized warning/error/fatal messages in the selected,
+deduplicated logs. It groups by explicit severity and normalized message
+(variable numbers and IDs are replaced), displays the top 12 by
+occurrence count, their first/last timestamps, number of source files,
+and offers an **Open example in Notepad++** action pointing to an exact
+original line. Distinct normalized patterns are **not automatically
+distinct hardware faults or root causes**.
+
+The **Exception / stack trace details** section reports the unchanged
+total event count but groups visually similar contexts by severity,
+normalized dated message and first continuation line. Each item shows
+the number of similarly formatted events, date range and latest
+original example. Later stack frames may differ, so these groups do
+not claim the entire exceptions are identical.
+
+Grouping is deterministic, entirely local, and recomputed after file
+Include/Exclude changes. No ignored profiler or otherwise excluded
+log source is counted as evidence. Real work logs and private code
+remain on the user's machine.

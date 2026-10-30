@@ -618,3 +618,37 @@ operation timeline retain their original timestamps and source lines.
 A deterministic small-budget fixture verifies whole-file exclusion,
 path/line preservation, skip warnings and byte accounting; a
 separate multi-year fixture verifies coarse bounded buckets.
+
+### Consolidating repetitive log evidence without asserting causes
+
+`AnomalyDetector` now reports the count of flagged statistical buckets
+separately from consolidated finding rows. Bursts are grouped by
+`NormalizePattern(representativeEvidence)` with explicit
+`AffectedWindows`, `FirstWindow` and `LastWindow` metadata, while the
+sample line is preserved for Notepad++ source navigation. The sum of
+bucket-level WARN/ERROR/FATAL events is not the number of occurrences
+of the representative message. Ranking reserves capacity for rare
+errors, instead of allowing one noisy component to dominate all 24
+cards.
+
+From the same already-deduplicated `LogParseResult`, the detector
+builds up to 12 `LogMessagePattern` summaries. A key consists of
+`(LogSeverity, NormalizePattern(message))`; the summary tracks actual
+occurrences, first/last timestamps, distinct source paths and a
+recent original example with physical source line. The full pattern
+count is retained even when only the top 12 rows are visible. This
+pattern model does not infer hardware failure or business causality.
+
+The WPF ViewModel also independently groups dated events carrying
+multiline exception context. Its display key combines severity,
+normalized dated message and normalized first continuation line.
+These are only similar context signatures: stack-frame tails can
+differ. `ExceptionCount` remains the original count; display rows
+carry `Occurrences`, `FirstSeen` and `LastSeen`, along with an
+unchanged authorized local source path/line for opening the sample.
+
+The pattern panel uses collapsed WPF expanders; findings scroll
+inside a bounded-height region. Synthetic .NET and WPF regressions
+check grouping, preserved severity and file/line attribution, rare
+errors not hidden by bursts, dynamic reanalysis and no access to
+non-imported sources. No proprietary log text enters the repo.
