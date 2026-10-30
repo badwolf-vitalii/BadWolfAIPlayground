@@ -438,6 +438,53 @@ literals, unmatched evidence, stack references, source navigation
 and the live investigate-on-selection UI lifecycle.
 
 
+
+### Discoverable collapsed evidence and full-log investigation search
+
+The default Source-aware section is intentionally a **bounded
+statistical summary**, not a full-text search index. The ViewModel
+now formats each collapsed `AnomalyInvestigationRow` with a short
+message excerpt (without trailing operation/exception metadata)
+and separate time, category, original filename:line, explicit
+operation ID, and number of C# candidates. It does not disguise
+`0 candidate(s)` as a failed operation.
+
+`SourceInvestigationAnalyzer.Search` performs an on-demand,
+case-insensitive scan over **every retained event** in the current
+`LogParseResult` (including DEBUG and INFO). It matches message
+text, captured continuation, source filename and mirror-target
+aliases. This is separate from `AnomalyDetector`'s bounded
+pattern/finding selection, so an older uncommon IOException
+can be found even when it is absent from the top patterns
+and four displayed exception cases. A query is 3–256 characters.
+The scan counts all matching events but retains at most **40
+recent operation/file-line groups**, preferring error messages
+as their representative when several levels share an exact ID.
+A bounded second pass gathers linked records only for those
+visible exact `operation_id` values. File line numbers are
+never inferred from textual proximity.
+
+`AnomalyViewModel.SearchInvestigationsAsync` runs the scan on
+a background task with cancellation and safely replaces the
+visible investigation cards. The source context is optional;
+search-only cases still display original log evidence and
+Notepad++ navigation. `ClearInvestigationSearch` restores the
+cached ordinary investigation summary without reloading logs.
+The current query is recomputed from the selected report when
+Include/Exclude, file import, source loading or sensitivity
+reanalysis changes the evidence, preventing stale cross-file
+links. A skipped/partially analyzed file cannot be searched
+until it has actually been imported; search counts do not
+pretend to cover missing bytes/lines. No network or LLM call
+is used.
+
+Synthetic engine and Windows WPF tests validate exact
+operation_id queries, free-text IOException and component
+filename search, App/WebClient mirror aliases, unrelated
+same-timestamp IDs, no-code operation, input length and
+cancellation, informative collapsed headers, live search
+binding and clearing, and Include/Exclude refresh.
+
 ### Cross-component exception correlation (explicit operation_id only)
 
 `SourceInvestigationAnalyzer` gathers explicit `operation_id` values

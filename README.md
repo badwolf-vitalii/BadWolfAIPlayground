@@ -478,6 +478,53 @@ That will be an optional later step once reliable, inspectable source
 references are available.
 
 
+
+#### Find a specific error in all imported logs
+
+The collapsed cards now show a **recognizable message/operation
+preview** rather than repeating generic titles such as
+"Rare error message pattern". A second line shows the original log
+file and physical line, observation time (when available), operation
+ID and number of candidate C# locations. The full original message
+and evidence remain available on expansion.
+
+To find a particular incident, use the **Search all logs** box at
+the top of section **9 — Source-aware log investigation**. Enter
+at least three characters and click **Search all logs** or press
+Enter. Search accepts any case-insensitive substring of the
+message, captured exception continuation, original log filename,
+mirrored filename, or explicit `operation_id`. Examples:
+
+- `41d14983730d4ac6b1c491fc232b77de` — one explicitly identified
+  operation, including ERROR and related DEBUG lines
+- `Unable to read data from the transport connection` — search
+  errors by their actual text rather than statistical ranking
+- `WebClient_2026-10-30.log` — show records associated with that
+  component, including original mirror provenance
+
+**Search examines all currently included, parsed events**, not
+just the 12 top patterns, 8 recent TOM_OP groups or 4 exception
+findings shown by the ordinary summary. It also examines INFO
+and DEBUG events. Search is available **without** choosing a C#
+solution; loading one additionally supplies verified source
+candidates and safe C# navigation. Results are grouped by exact
+`operation_id` when present (otherwise by original source
+filename/line). The UI reports the total number of matching log
+events and displays **up to 40** recent operation/line groups,
+with the highest-severity matching message representing each
+operation and bounded linked evidence below it. Click **Clear
+search** to restore the regular anomaly/operation overview.
+
+The active query is recomputed when the user includes/excludes
+files, reloads logs, changes the source checkout or reanalyzes
+with another sensitivity. Only **retained, parsed events** from
+imported files are searchable; unparsed/omitted file contents
+are not implicitly scanned. Search has a 3–256 character query
+range, supports cancellation, runs off the WPF UI thread when
+submitted, and never writes local logs/source to a service,
+repository or persistence layer. A result is evidence, not a
+confirmed anomaly or diagnosis.
+
 #### Cross-log investigation by operation_id
 
 When an error in `App_*.log` contains an explicit `operation_id`,
