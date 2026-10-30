@@ -11,7 +11,9 @@ namespace BadWolfAIPlayground.Anomaly;
 /// </summary>
 public static partial class LogFolderImporter
 {
+    // Maximum files actually parsed in one bounded report, not the scan limit.
     public const int MaxFiles = 512;
+    public const int MaxDiscoveredFiles = 50_000;
     public const long MaxFileBytes = 16L * 1024 * 1024;
     public const long MaxTotalBytes = 256L * 1024 * 1024;
     public const int MaxCombinedEvents = 500_000;
@@ -30,7 +32,7 @@ public static partial class LogFolderImporter
         }
 
         string root = Path.GetFullPath(folder);
-        var candidates = new List<(string Path, string Relative, long Size)>();
+        var candidates = new List<(string Path, string Relative, long Size, DateTime LastWriteUtc)>();
         var skippedFiles = new List<LogFolderSkippedFile>();
         var options = new EnumerationOptions
         {
@@ -49,14 +51,17 @@ public static partial class LogFolderImporter
                 continue; // Do not read .zip, binaries, arbitrary work files.
             }
 
-            if (candidates.Count == MaxFiles)
+            // Metadata scanning can cover far more than one safe analysis batch.
+            // Preserve the finite enumeration guard against unbounded folders.
+            if (candidates.Count == MaxDiscoveredFiles)
             {
                 throw new InvalidDataException(
-                    $"Logs folder contains more than {MaxFiles} supported files. " +
-                    "Choose a smaller log collection.");
+                    $"Logs folder contains more than {MaxDiscoveredFiles:N0} supported files. " +
+                    "Select a narrower directory to avoid excessive metadata scanning.");
             }
             var info = new FileInfo(fullPath);
-            candidates.Add((fullPath, Path.GetRelativePath(root, fullPath), info.Length));
+            candidates.Add((fullPath, Path.GetRelativePath(root, fullPath),
+                info.Length, info.LastWriteTimeUtc));
         }
 
         if (candidates.Count == 0)
@@ -67,7 +72,7 @@ public static partial class LogFolderImporter
 
         // A high-volume profiler should not hide every other operation log.
         // Exclude only by a known resource limit and always report its path.
-        var eligible = new List<(string Path, string Relative, long Size)>();
+        var eligible = new List<(string Path, string Relative, long Size, DateTime LastWriteUtc)>();
         foreach (var entry in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -83,16 +88,27 @@ public static partial class LogFolderImporter
             }
         }
 
-        // Reserve the total in-memory budget for as many eligible files as
-        // possible, in size+path order. Re-sort selected files by path for
-        // deterministic original NLog provenance and file counts.
+        // Prefer explicit operation traces, then current root/component logs,
+        // then archived old/ logs; favor recently modified files within
+        // each class. The selection never relies on enumeration order.
+        // Keep the original byte and file-count safety limits, but report
+        // excluded files instead of failing the entire Logs folder.
         long totalBytes = 0;
-        var entries = new List<(string Path, string Relative, long Size)>();
-        foreach (var entry in eligible.OrderBy(e => e.Size)
+        var entries = new List<(string Path, string Relative, long Size, DateTime LastWriteUtc)>();
+        foreach (var entry in eligible.OrderBy(e => SelectionPriority(e.Relative))
+                     .ThenByDescending(e => e.LastWriteUtc)
+                     .ThenBy(e => e.Size)
                      .ThenBy(e => e.Relative, StringComparer.OrdinalIgnoreCase))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (entry.Size > MaxTotalBytes - totalBytes)
+            if (entries.Count == MaxFiles)
+            {
+                skippedFiles.Add(new LogFolderSkippedFile(
+                    entry.Relative, entry.Size,
+                    $"Excluded by the {MaxFiles} analyzed-file limit; " +
+                    "higher-priority or more recent logs were selected."));
+            }
+            else if (entry.Size > MaxTotalBytes - totalBytes)
             {
                 skippedFiles.Add(new LogFolderSkippedFile(
                     entry.Relative, entry.Size,
@@ -125,7 +141,7 @@ public static partial class LogFolderImporter
         for (int i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            (string full, string relative, _) = entries[i];
+            (string full, string relative, _, _) = entries[i];
             progress?.Report(new LogFolderProgress(i + 1, entries.Count, relative));
 
             string content = ReadBoundedText(full, relative, cancellationToken);
@@ -303,6 +319,24 @@ public static partial class LogFolderImporter
                 "or convert a copy to UTF-8.", ex);
         }
         return builder.ToString();
+    }
+
+    // This is a deterministic import preference, not a diagnosis.
+    // Give TOM_OP operation logs priority even when they live in old/.
+    // Otherwise prefer current/root logs to archived copies.
+    private static int SelectionPriority(string relativePath)
+    {
+        string filename = Path.GetFileName(relativePath);
+        if (filename.StartsWith("Operations", StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        string? parent = Path.GetDirectoryName(relativePath);
+        if (string.IsNullOrEmpty(parent))
+            return 1;
+
+        return parent.Replace('\\', '/').Split('/').Any(directory =>
+            directory.Equals("old", StringComparison.OrdinalIgnoreCase))
+            ? 3 : 2;
     }
 
     private static string ComponentName(string relativePath)

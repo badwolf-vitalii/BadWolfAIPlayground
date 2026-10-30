@@ -12,6 +12,7 @@ var checks = new (string Name, Action Execute)[]
     ("Optional offline C# log-template source context", SourceContext),
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
+    ("Over 512 discovered files preserves recent Operations and lists omissions", FolderFileCount),
     ("File selection recomputes events and duplicate provenance", FolderSelection),
     ("Multiline exception context is bounded and does not invent events", MultilineContext),
     ("Findings retain original exception evidence", FindingExceptionContext),
@@ -361,6 +362,67 @@ static void FolderGuards()
     }
 }
 
+
+
+static void FolderFileCount()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-LargeArchive-" + Guid.NewGuid().ToString("N"));
+    string old = Path.Combine(root, "old");
+    Directory.CreateDirectory(old);
+    try
+    {
+        Ensure(LogFolderImporter.MaxDiscoveredFiles > LogFolderImporter.MaxFiles,
+            "Discovery and analysis caps must not be conflated.");
+
+        // Old archives vastly outnumber the analyzed-file budget. Keep
+        // the tiny current TOM_OP trace even if its modification time is
+        // older than the archived files.
+        for (int i = 0; i < LogFolderImporter.MaxFiles + 16; i++)
+        {
+            File.WriteAllText(Path.Combine(old, $"Reader_{i:0000}.log"),
+                $"2026-10-29 09:00:00 INFO archive reader {i}" + Environment.NewLine);
+        }
+
+        string operations = Path.Combine(root, "Operations_2026-10-30(5).log");
+        File.WriteAllText(operations,
+            "2026-10-30 18:21:31 INFO TOM_OP v=1 event=step " +
+            "step=card_issuing_cancelled session_id=s1 transaction_id=2854 " +
+            "flow_id=f1 reason=user category=issuing" + Environment.NewLine);
+        File.SetLastWriteTimeUtc(operations, new DateTime(2021, 1, 1, 0, 0, 0,
+            DateTimeKind.Utc));
+        File.WriteAllText(Path.Combine(root, "App_2026-10-30.log"),
+            "2026-10-30 18:21:32 INFO App running" + Environment.NewLine);
+
+        LogFolderImportResult result = LogFolderImporter.Import(root);
+        int discovered = LogFolderImporter.MaxFiles + 16 + 2;
+        Ensure(result.Files.Count == LogFolderImporter.MaxFiles &&
+               result.SkippedFiles.Count == discovered - LogFolderImporter.MaxFiles &&
+               result.Files.Any(f => f.RelativePath == "Operations_2026-10-30(5).log") &&
+               result.Files.Any(f => f.RelativePath == "App_2026-10-30.log") &&
+               result.SkippedFiles.All(f => f.Reason.Contains(
+                   "analyzed-file limit", StringComparison.Ordinal)) &&
+               result.SkippedFiles.All(f => f.RelativePath.StartsWith(
+                   "old" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) &&
+               result.Combined.Events.Any(e => e.Message.Contains(
+                   "card_issuing_cancelled", StringComparison.Ordinal)) &&
+               OperationTimelineAnalyzer.Analyze(result.Combined).Groups.Any(g =>
+                   g.TransactionId == "2854" &&
+                   g.Outcome == "Cancelled by operator"),
+            "A large old/ archive must not block the current Operations log " +
+            "or hide exact count-limit exclusions.");
+
+        var skipped = result.SkippedFiles[0].RelativePath;
+        bool rejected = false;
+        try { LogFolderImporter.SelectFiles(result, [skipped]); }
+        catch (ArgumentException) { rejected = true; }
+        Ensure(rejected, "Excluded archive files must not be selectable as parsed logs.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
 
 static void FolderSelection()
 {
