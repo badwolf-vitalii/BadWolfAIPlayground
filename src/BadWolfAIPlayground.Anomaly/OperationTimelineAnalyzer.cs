@@ -122,11 +122,15 @@ public static class OperationTimelineAnalyzer
             string transaction = transactions.GetValueOrDefault(pair.Key) ?? "";
             string[] flowIds = items.Where(e => Known(e.FlowId))
                 .Select(e => e.FlowId).Distinct(StringComparer.Ordinal).ToArray();
-            (string outcome, string reason) = Classify(items, transaction);
+            OperationTimelineGroupKind kind = DetermineKind(items, transaction);
+            (string outcome, string reason) = Classify(items, transaction, kind);
             results.Add(new OperationTimelineGroup(
                 items[0].SessionId, transaction, flowIds,
                 items[0].Timestamp, items[^1].Timestamp, outcome, reason,
-                items.Count, items.TakeLast(MaxDisplayedEventsPerGroup).ToArray()));
+                items.Count, items.TakeLast(MaxDisplayedEventsPerGroup).ToArray())
+            {
+                Kind = kind
+            });
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -136,9 +140,64 @@ public static class OperationTimelineAnalyzer
                 .Take(MaxDisplayedGroups).ToArray());
     }
 
-    private static (string Outcome, string Explanation) Classify(
+    private static OperationTimelineGroupKind DetermineKind(
         IReadOnlyList<OperationTimelineEvent> events, string transactionId)
     {
+        if (transactionId.Length != 0)
+            return OperationTimelineGroupKind.VtsTransaction;
+
+        // CardInfoReadAndChecks is an independent read/check flow, not a
+        // missing VTS transaction. Reject mixed named operations or any
+        // explicit transaction evidence before assigning this kind.
+        if (events.Any(entry => entry.Operation == "CardInfoReadAndChecks") &&
+            events.All(entry =>
+                (entry.Operation.Length == 0 ||
+                 entry.Operation == "CardInfoReadAndChecks") &&
+                !Known(entry.TransactionId)))
+        {
+            return OperationTimelineGroupKind.StandaloneCardRead;
+        }
+
+        return OperationTimelineGroupKind.UnlinkedFlow;
+    }
+
+    private static (string Outcome, string Explanation) Classify(
+        IReadOnlyList<OperationTimelineEvent> events, string transactionId,
+        OperationTimelineGroupKind kind)
+    {
+        if (kind == OperationTimelineGroupKind.StandaloneCardRead)
+        {
+            OperationTimelineEvent? end = events.LastOrDefault(entry =>
+                entry.EventKind == "end" &&
+                entry.Operation == "CardInfoReadAndChecks");
+            if (end is null)
+                return ("Card reading/checks observed",
+                    "This is a standalone card read/check flow. No VTS " +
+                    "transaction is expected. No completion event was " +
+                    "recorded in the selected logs.");
+            if (end.Result == "false" ||
+                end.Status is "failed" or "faulted" or "error")
+                return ("Card reading/checks reported failure",
+                    "An explicit failure was reported by CardInfoReadAndChecks. " +
+                    "This is not a VTS link failure.");
+            if (end.Result == "true")
+                return ("Card reading/checks reported success",
+                    "CardInfoReadAndChecks explicitly reported result=true. " +
+                    "No VTS transaction is required.");
+
+            string timing = end.DurationMs.HasValue
+                ? " Duration: " +
+                  end.DurationMs.Value.ToString(CultureInfo.InvariantCulture) +
+                  " ms."
+                : "";
+            return ("Card reading/checks finished; result unconfirmed",
+                "CardInfoReadAndChecks ended without a confirmed read result. " +
+                "status=completed denotes completion of the logged operation; " +
+                "result=unknown does not establish read success or failure. " +
+                "No VTS transaction is expected for this standalone flow." +
+                timing);
+        }
+
         bool HasEnd(string operation, string result) => events.Any(e =>
             e.EventKind == "end" && e.Operation == operation &&
             e.Result == result);
@@ -317,10 +376,22 @@ public sealed record OperationTimelineEvent(
     }
 }
 
+/// <summary>VTS correlation versus documented independent operations.</summary>
+public enum OperationTimelineGroupKind
+{
+    VtsTransaction,
+    StandaloneCardRead,
+    UnlinkedFlow
+}
+
 public sealed record OperationTimelineGroup(
     string SessionId, string TransactionId, IReadOnlyList<string> FlowIds,
     DateTimeOffset StartedAt, DateTimeOffset EndedAt, string Outcome,
-    string Explanation, int EventCount, IReadOnlyList<OperationTimelineEvent> Events);
+    string Explanation, int EventCount, IReadOnlyList<OperationTimelineEvent> Events)
+{
+    public OperationTimelineGroupKind Kind { get; init; } =
+        OperationTimelineGroupKind.UnlinkedFlow;
+}
 
 public sealed record OperationTimelineReport(
     int StructuredEvents, int UnlinkedEvents, int GroupCount,

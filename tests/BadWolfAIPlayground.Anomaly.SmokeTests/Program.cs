@@ -20,7 +20,8 @@ var checks = new (string Name, Action Execute)[]
     ("File selection recomputes events and duplicate provenance", FolderSelection),
     ("Multiline exception context is bounded and does not invent events", MultilineContext),
     ("Findings retain original exception evidence", FindingExceptionContext),
-    ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline)
+    ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline),
+    ("Standalone card reads do not require VTS", StandaloneCardRead)
 };
 
 int failed = 0;
@@ -830,6 +831,77 @@ static void StructuredOperationTimeline()
     try { OperationTimelineAnalyzer.Analyze(parsed, cancelled.Token); }
     catch (OperationCanceledException) { stopped = true; }
     Ensure(stopped, "Lifecycle analysis must support cancellation.");
+}
+
+
+static void StandaloneCardRead()
+{
+    const string path = "Operations_2026-10-30.log";
+    const string flow = "6a7b1ae187644c80b9160c9003eb22cc";
+    const string line =
+        "2026-10-30 18:17:01.7750 INFO TOM_OP v=1 event=end " +
+        "operation=CardInfoReadAndChecks " +
+        "operation_id=e52290a2566c4d4a881a114bca3ef3dc " +
+        "status=completed result=unknown duration_ms=4057 " +
+        "transaction_id=- flow_id=" + flow;
+
+    OperationTimelineReport report = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line, sourceFile: path));
+    Ensure(report.StructuredEvents == 1 && report.UnlinkedEvents == 0 &&
+           report.GroupCount == 1 && report.Groups.Count == 1,
+        "Independent read must be visible without a VTS transaction.");
+    OperationTimelineGroup cardRead = report.Groups.Single();
+    Ensure(cardRead.Kind == OperationTimelineGroupKind.StandaloneCardRead &&
+           cardRead.TransactionId.Length == 0 &&
+           cardRead.FlowIds.Single() == flow &&
+           cardRead.Outcome == "Card reading/checks finished; result unconfirmed" &&
+           cardRead.Explanation.Contains("No VTS transaction is expected",
+               StringComparison.Ordinal) &&
+           cardRead.Explanation.Contains("result=unknown", StringComparison.Ordinal) &&
+           cardRead.Events[0].DurationMs == 4057 &&
+           cardRead.Events[0].SourceFile == path &&
+           cardRead.Events[0].SourceLine == 1,
+        "status=completed must not be interpreted as proven read success or missing VTS.");
+
+    OperationTimelineReport pending = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line.Replace("event=end", "event=start",
+            StringComparison.Ordinal), sourceFile: path));
+    Ensure(pending.Groups.Single().Kind == OperationTimelineGroupKind.StandaloneCardRead &&
+           pending.Groups.Single().Outcome == "Card reading/checks observed",
+        "Without end event, completion must not be invented.");
+
+    OperationTimelineReport succeeded = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line.Replace("result=unknown", "result=true",
+            StringComparison.Ordinal), sourceFile: path));
+    Ensure(succeeded.Groups.Single().Outcome == "Card reading/checks reported success",
+        "Only explicit success may establish a positive read result.");
+
+    OperationTimelineReport failed = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line.Replace("result=unknown", "result=false",
+            StringComparison.Ordinal), sourceFile: path));
+    Ensure(failed.Groups.Single().Outcome == "Card reading/checks reported failure",
+        "Explicit read failure is not VTS link failure.");
+
+    OperationTimelineReport transaction = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line.Replace("transaction_id=-", "transaction_id=2854",
+            StringComparison.Ordinal), sourceFile: path));
+    Ensure(transaction.Groups.Single().Kind == OperationTimelineGroupKind.VtsTransaction,
+        "Explicit VTS ID takes precedence.");
+
+    OperationTimelineReport unknown = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line.Replace("CardInfoReadAndChecks", "UnknownOperation",
+            StringComparison.Ordinal), sourceFile: path));
+    Ensure(unknown.Groups.Single().Kind == OperationTimelineGroupKind.UnlinkedFlow &&
+           unknown.Groups.Single().Outcome == "Flow observed; VTS link unknown",
+        "Unknown flow operations must not be silently presumed standalone.");
+
+    OperationTimelineReport mixed = OperationTimelineAnalyzer.Analyze(
+        LogParser.Parse(line + "\n" +
+            "2026-10-30 18:17:02 INFO TOM_OP v=1 event=start " +
+            "operation=PrintReceipt transaction_id=- flow_id=" + flow,
+            sourceFile: path));
+    Ensure(mixed.Groups.Single().Kind == OperationTimelineGroupKind.UnlinkedFlow,
+        "Mixed named operations must not be labeled a standalone card read.");
 }
 
 static void Ensure(bool expression, string message)
