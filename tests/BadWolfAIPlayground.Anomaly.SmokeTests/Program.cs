@@ -13,6 +13,8 @@ var checks = new (string Name, Action Execute)[]
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
     ("Over 512 discovered files preserves recent Operations and lists omissions", FolderFileCount),
+    ("Raw event overflow retains complete high-priority operations", FolderEventBudget),
+    ("Multi-year Logs archives use a bounded coarse timeline", MultiYearTimeline),
     ("File selection recomputes events and duplicate provenance", FolderSelection),
     ("Multiline exception context is bounded and does not invent events", MultilineContext),
     ("Findings retain original exception evidence", FindingExceptionContext),
@@ -422,6 +424,101 @@ static void FolderFileCount()
     {
         Directory.Delete(root, recursive: true);
     }
+}
+
+
+static void FolderEventBudget()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-EventBudget-" + Guid.NewGuid().ToString("N"));
+    string old = Path.Combine(root, "old");
+    Directory.CreateDirectory(old);
+    try
+    {
+        // Include one file that would exceed the remaining budget. Its
+        // rows must never be partially included, but later smaller files
+        // may still fit the remaining budget.
+        File.WriteAllText(Path.Combine(old, "A_2026-10-28.log"),
+            "2026-10-28 15:00:00 INFO first old event\n" +
+            "2026-10-28 15:00:01 ERROR second old event\n");
+        File.WriteAllText(Path.Combine(old, "B_2026-10-29.log"),
+            "2026-10-29 15:00:00 INFO first event in B\n" +
+            "2026-10-29 15:00:01 ERROR second event in B\n");
+        File.WriteAllText(Path.Combine(old, "C_2026-10-30.log"),
+            "2026-10-30 15:00:00 WARN C event\n");
+        File.WriteAllText(Path.Combine(root, "Operations_2026-10-30(5).log"),
+            "2026-10-30 18:21:31 INFO TOM_OP v=1 event=step " +
+            "step=card_issuing_cancelled session_id=s1 transaction_id=2854 " +
+            "flow_id=card-flow reason=user category=issuing\n");
+        File.WriteAllText(Path.Combine(root, "App_2026-10-30.log"),
+            "2026-10-30 15:00:00 INFO current app\n");
+        // Force deterministically ranked archives (B newer than A and C).
+        File.SetLastWriteTimeUtc(Path.Combine(old, "B_2026-10-29.log"),
+            new DateTime(2026, 10, 29, 14, 0, 0, DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(Path.Combine(old, "A_2026-10-28.log"),
+            new DateTime(2026, 10, 28, 14, 0, 0, DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(Path.Combine(old, "C_2026-10-30.log"),
+            new DateTime(2026, 10, 27, 14, 0, 0, DateTimeKind.Utc));
+
+        LogFolderImportResult partial = LogFolderImporter.Import(
+            root, maxImportedEvents: 4);
+        Ensure(partial.Combined.Events.Count == 4 &&
+               partial.RawEvents.Count == 4 &&
+               partial.Files.Count == 3 &&
+               partial.SkippedFiles.Count == 2 &&
+               partial.SkippedFiles.All(f => f.Reason.Contains(
+                   "raw-event analysis budget", StringComparison.Ordinal)) &&
+               partial.Files.Any(f => f.RelativePath == "Operations_2026-10-30(5).log") &&
+               partial.Files.Any(f => f.RelativePath == "App_2026-10-30.log") &&
+               partial.Files.Any(f => f.RelativePath.EndsWith("B_2026-10-29.log",
+                   StringComparison.OrdinalIgnoreCase)) &&
+               !partial.Files.Any(f => f.RelativePath.EndsWith("A_2026-10-28.log",
+                   StringComparison.OrdinalIgnoreCase)) &&
+               !partial.Files.Any(f => f.RelativePath.EndsWith("C_2026-10-30.log",
+                   StringComparison.OrdinalIgnoreCase)) &&
+               partial.RawEvents.Any(e => e.SourceFile == "Operations_2026-10-30(5).log" &&
+                   e.LineNumber == 1) &&
+               partial.TotalBytes == partial.Files.Sum(f =>
+                   new FileInfo(Path.Combine(root, f.RelativePath)).Length) &&
+               OperationTimelineAnalyzer.Analyze(partial.Combined).Groups.Any(g =>
+                   g.TransactionId == "2854" && g.Outcome == "Cancelled by operator"),
+            "Event-budget admission must preserve whole files, VTS provenance, " +
+            "accurate retained bytes and explicit omissions.");
+        bool rejected = false;
+        try { LogFolderImporter.SelectFiles(partial, [
+            partial.SkippedFiles[0].RelativePath]); }
+        catch (ArgumentException) { rejected = true; }
+        Ensure(rejected, "Event-budget-excluded files must never be selectable.");
+        rejected = false;
+        try { LogFolderImporter.Import(root, maxImportedEvents:
+            LogFolderImporter.MaxCombinedEvents + 1); }
+        catch (ArgumentOutOfRangeException) { rejected = true; }
+        Ensure(rejected, "Caller must not bypass the hard event safety budget.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+static void MultiYearTimeline()
+{
+    const string trace =
+        "2023-09-01 09:00:00 ERROR old archive failure\n" +
+        "2026-10-30 09:00:00 INFO TOM_OP v=1 event=step step=card_preview_ready " +
+        "session_id=s1 transaction_id=2854 flow_id=f1\n";
+    LogParseResult parsed = LogParser.Parse(trace);
+    AnomalyReport report = AnomalyDetector.Analyze(parsed);
+    Ensure(report.Buckets.Count > 0 &&
+           report.Buckets.Count <= AnomalyDetector.MaxTimelineBuckets &&
+           report.BucketMinutes > 120 &&
+           report.Source.Events.Count == 2 &&
+           report.TotalProblems == 1,
+        "Multi-year archives must be analyzed using coarse bounded buckets " +
+        "without discarding original events or creating fake findings.");
+    Ensure(OperationTimelineAnalyzer.Analyze(parsed).Groups.Any(
+            group => group.TransactionId == "2854"),
+        "A long statistical window must not discard actual transaction evidence.");
 }
 
 static void FolderSelection()

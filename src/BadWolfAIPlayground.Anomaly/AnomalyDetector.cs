@@ -36,12 +36,9 @@ public static partial class AnomalyDetector
 
         long first = events[0].Timestamp.ToUnixTimeSeconds();
         long last = events[^1].Timestamp.ToUnixTimeSeconds();
-        if (last - first > 366L * 24 * 3600)
-        {
-            throw new InvalidDataException(
-                "This log covers over 366 days. Select a shorter time range for a meaningful baseline.");
-        }
-
+        // A large imported old/ archive can span multiple years. Refuse
+        // to discard operation evidence just because the statistical
+        // timeline needs coarse time buckets. UI discloses the resolution.
         // Widen buckets for long logs to keep UI and memory bounded.
         int minutes = Math.Max(options.PreferredBucketMinutes,
             (int)Math.Ceiling((last - first + 1.0) / (60 * (MaxTimelineBuckets - 1))));
@@ -49,8 +46,9 @@ public static partial class AnomalyDetector
         long firstBucket = first / seconds * seconds;
         long lastBucket = last / seconds * seconds;
         int bucketCount = checked((int)((lastBucket - firstBucket) / seconds + 1));
-        if (bucketCount > MaxTimelineBuckets + 1)
+        while (bucketCount > MaxTimelineBuckets)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             minutes++;
             seconds = (long)minutes * 60;
             firstBucket = first / seconds * seconds;

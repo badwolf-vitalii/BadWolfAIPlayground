@@ -21,8 +21,19 @@ public static partial class LogFolderImporter
 
     public static LogFolderImportResult Import(
         string folder, CancellationToken cancellationToken = default,
-        IProgress<LogFolderProgress>? progress = null)
+        IProgress<LogFolderProgress>? progress = null,
+        int? maxImportedEvents = null)
     {
+        // A conservative raw-event cap also protects the distinct-event
+        // cap even if a folder contains no mirrored NLog targets.
+        int eventBudget = Math.Min(MaxRawEvents, MaxCombinedEvents);
+        if (maxImportedEvents.HasValue)
+        {
+            if (maxImportedEvents.Value < 1 || maxImportedEvents.Value > eventBudget)
+                throw new ArgumentOutOfRangeException(nameof(maxImportedEvents),
+                    $"Event budget must be between 1 and {eventBudget:N0}.");
+            eventBudget = maxImportedEvents.Value;
+        }
         ArgumentException.ThrowIfNullOrWhiteSpace(folder);
         cancellationToken.ThrowIfCancellationRequested();
         if (!Directory.Exists(folder))
@@ -130,37 +141,60 @@ public static partial class LogFolderImporter
                 $"{skippedFiles.Count} files could not be analyzed.");
         }
 
-        entries.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(
-            a.Relative, b.Relative));
-
-        var files = new List<LogFolderFile>(entries.Count);
-        // Retain parsed, original per-file events in memory. Filtering needs
-        // these raw rows: merely hiding a deduplicated App/Sale event would
-        // discard the remaining copy even when its log is still enabled.
-        var originalEvents = new List<LogEvent>();
+        // Parse in priority order: sorting by path here would exhaust the
+        // event budget on old components before reaching Operations logs.
+        // Re-sort only the accepted per-file batches for stable provenance.
+        var accepted = new List<(LogFolderFile File, IReadOnlyList<LogEvent> Events)>();
+        int admittedEvents = 0;
+        long analyzedBytes = 0;
         for (int i = 0; i < entries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            (string full, string relative, _, _) = entries[i];
-            progress?.Report(new LogFolderProgress(i + 1, entries.Count, relative));
+            (string full, string relative, long size, _) = entries[i];
+            if (admittedEvents >= eventBudget)
+            {
+                skippedFiles.Add(new LogFolderSkippedFile(relative, size,
+                    $"Excluded because the {eventBudget:N0} raw-event analysis budget " +
+                    "was already reached; this file was not read."));
+                continue;
+            }
 
+            progress?.Report(new LogFolderProgress(i + 1, entries.Count, relative));
             string content = ReadBoundedText(full, relative, cancellationToken);
             LogParseResult parsed = LogParser.Parse(content, cancellationToken, relative);
+            int remaining = eventBudget - admittedEvents;
+            if (parsed.Events.Count > remaining)
+            {
+                // Never take only the beginning of a transaction or a source
+                // file. No events from this source enter any report.
+                skippedFiles.Add(new LogFolderSkippedFile(relative, size,
+                    $"Excluded by the {eventBudget:N0} raw-event analysis budget: " +
+                    $"{parsed.Events.Count:N0} dated events, {remaining:N0} remaining. " +
+                    "The entire file was excluded; no transaction was truncated."));
+                continue;
+            }
+
             int problems = parsed.Events.Count(e => e.Severity >= LogSeverity.Warning);
-            files.Add(new LogFolderFile(relative, ComponentName(relative),
+            accepted.Add((new LogFolderFile(relative, ComponentName(relative),
                 parsed.Events.Count, problems, parsed.SkippedLines,
                 parsed.ContinuationLines)
             {
                 TotalLines = parsed.TotalLines
-            });
+            }, parsed.Events));
+            admittedEvents += parsed.Events.Count;
+            analyzedBytes += size;
+        }
 
-            if (originalEvents.Count + parsed.Events.Count > MaxRawEvents)
-            {
-                throw new InvalidDataException(
-                    $"More than {MaxRawEvents:N0} raw log events found. " +
-                    "Choose a smaller log folder.");
-            }
-            originalEvents.AddRange(parsed.Events);
+        // Preserve the existing original source order and per-file mirror
+        // deduplication semantics after resource-aware admission.
+        var files = new List<LogFolderFile>(accepted.Count);
+        var originalEvents = new List<LogEvent>(admittedEvents);
+        foreach (var batch in accepted.OrderBy(entry => entry.File.RelativePath,
+                     StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add(batch.File);
+            originalEvents.AddRange(batch.Events);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -170,7 +204,7 @@ public static partial class LogFolderImporter
             cancellationToken);
 
         return new LogFolderImportResult(
-            selected.Combined, files, selected.DuplicateCopies, totalBytes)
+            selected.Combined, files, selected.DuplicateCopies, analyzedBytes)
         {
             RawEvents = originalEvents,
             SkippedFiles = skippedFiles
