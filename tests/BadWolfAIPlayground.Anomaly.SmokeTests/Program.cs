@@ -471,7 +471,9 @@ static void CrossLogCallerEvidence()
         SourceInvestigationReport Investigate(LogParseResult parsed)
         {
             LogEvent original = parsed.Events.First(e =>
-                e.SourceFile == appName && e.Severity == LogSeverity.Error);
+                e.Severity == LogSeverity.Error &&
+                e.Message.Contains("Unable to read data",
+                    StringComparison.Ordinal));
             AnomalyReport normal = AnomalyDetector.Analyze(parsed);
             var finding = new AnomalyFinding(
                 AnomalyKind.RareErrorPattern, original.Timestamp,
@@ -488,8 +490,9 @@ static void CrossLogCallerEvidence()
         SourceInvestigationReport report = Investigate(import.Combined);
         SourceInvestigationCase matched = report.Cases.Single(c =>
             c.Category == "STACK / FINDING");
-        Ensure(matched.OperationId == operationId &&
-               matched.RelatedEventCount >= 3 &&
+        Ensure(import.DuplicateCopies == 1 &&
+               matched.OperationId == operationId &&
+               matched.RelatedEventCount == 2 &&
                matched.RelatedEvents.Any(e => e.SourceFile == webName &&
                    e.Severity == LogSeverity.Debug && e.SourceLine == 1) &&
                matched.Candidates.Any(c =>
