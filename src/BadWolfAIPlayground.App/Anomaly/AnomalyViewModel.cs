@@ -236,8 +236,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     });
 
     /// <summary>
-    /// Loads every supported NLog text file from one selected Logs folder,
-    /// including nested archives. All-or-nothing, cancellable, offline.
+    /// Scans one Logs folder including nested archives, then imports only
+    /// files inside safe resource budgets. Exclusions are shown explicitly;
+    /// failures preserve the previously displayed report.
     /// </summary>
     public Task ImportFolderAsync(string folder) => ExecuteAsync(async token =>
     {
@@ -278,9 +279,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             Preview = imported.SkippedFiles.Count == 0
                 ? "All eligible .log/.txt files, including old/, were analyzed locally. " +
                   "Findings retain the original relative filename and physical line."
-                : "PARTIAL IMPORT: oversized or over-budget logs were NOT analyzed. " +
-                  "Only imported files contribute to results. The SKIPPED FILES " +
-                  "list identifies the missing data.";
+                : "PARTIAL IMPORT: files were excluded by per-file size, combined " +
+                  "size or file-count limits. Only imported files contribute to " +
+                  "results; see SKIPPED FILES for details.";
             foreach (LogFolderFile file in imported.Files
                 .OrderByDescending(f => f.ProblemEvents)
                 .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
@@ -301,8 +302,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             {
                 StatusText =
                     $"Partial import: {imported.Files.Count:N0} analyzed; " +
-                    $"{imported.SkippedFiles.Count:N0} skipped due to size limits. " +
-                    "See SKIPPED FILES — those files are NOT in the results.";
+                    $"{imported.SkippedFiles.Count:N0} skipped due to resource limits " +
+                    "(size or file count). See SKIPPED FILES for details.";
             }
             _run.NotifyCanExecuteChanged();
         });
@@ -348,7 +349,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             ? "No files skipped."
             : $"{skipped.Count:N0} files were NOT analyzed. " +
               "These sources have no events in charts, findings or operations. " +
-              "Use a smaller file if the content is needed.";
+              "Choose a narrower folder or smaller file copies to analyze them.";
         OnPropertyChanged(nameof(SkippedFilesVisibility));
     }
 

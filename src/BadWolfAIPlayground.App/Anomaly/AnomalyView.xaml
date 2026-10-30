@@ -79,18 +79,23 @@
                                 <TextBlock Text="{Binding SkippedFilesSummary}"
                                            Foreground="#F0D4C0" FontSize="11"
                                            TextWrapping="Wrap" Margin="0,0,0,6"/>
-                                <ScrollViewer MaxHeight="135" VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding SkippedSourceFiles}">
-                                        <ItemsControl.ItemTemplate>
+                                <ListBox x:Name="AnomalySkippedFileList"
+                                         ItemsSource="{Binding SkippedSourceFiles}"
+                                         MaxHeight="135" Background="Transparent"
+                                         BorderThickness="0"
+                                         ScrollViewer.CanContentScroll="True"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         VirtualizingStackPanel.IsVirtualizing="True"
+                                         VirtualizingStackPanel.VirtualizationMode="Recycling">
+                                    <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <TextBlock Text="{Binding Display}"
                                                            FontFamily="Consolas" FontSize="10"
                                                            Foreground="#DFCFBB" TextWrapping="Wrap"
                                                            Margin="0,4,0,4"/>
                                             </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
-                                </ScrollViewer>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
                             </StackPanel>
                         </Expander>
                         <Border Background="#0A192A" CornerRadius="7"
@@ -178,11 +183,16 @@
                                            VerticalAlignment="Center" TextWrapping="Wrap"
                                            Margin="0,0,0,6"/>
                             </WrapPanel>
-                            <ScrollViewer MaxHeight="230" VerticalScrollBarVisibility="Auto">
-                                <ItemsControl x:Name="AnomalySourceFiles"
-                                              IsEnabled="{Binding CanEditFiles}"
-                                              ItemsSource="{Binding SourceFiles}">
-                                    <ItemsControl.ItemTemplate>
+                            <ListBox x:Name="AnomalySourceFiles"
+                                     IsEnabled="{Binding CanEditFiles}"
+                                     ItemsSource="{Binding SourceFiles}"
+                                     MaxHeight="230" Background="Transparent"
+                                     BorderThickness="0"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     VirtualizingStackPanel.IsVirtualizing="True"
+                                     VirtualizingStackPanel.VirtualizationMode="Recycling">
+                                <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border BorderBrush="#29445D"
                                                     BorderThickness="0,0,0,1" Padding="4,7">
@@ -237,9 +247,8 @@
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                         </StackPanel>
                     </Expander>
                 </StackPanel>

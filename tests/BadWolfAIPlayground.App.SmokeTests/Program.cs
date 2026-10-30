@@ -389,6 +389,8 @@ internal static class Program
                    anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
                    anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
                    anomalyView.FindName("AnomalySkippedFilesExpander") is Expander &&
+                   anomalyView.FindName("AnomalySkippedFileList") is ListBox &&
+                   anomalyView.FindName("AnomalySourceFiles") is ListBox &&
                    anomalyView.FindName("AnomalyFilesExpander") is Expander &&
                    anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
                    anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
@@ -688,9 +690,14 @@ internal static class Program
                 var skippedPanel =
                     (Expander)anomalyView.FindName("AnomalySkippedFilesExpander");
                 anomalyView.UpdateLayout();
+                var skippedList = (ListBox)anomalyView.FindName("AnomalySkippedFileList");
+                var analyzedList = (ListBox)anomalyView.FindName("AnomalySourceFiles");
                 Assert(skippedPanel.Visibility == Visibility.Visible &&
-                       skippedPanel.IsExpanded,
-                    "Skipped data must be shown prominently, not hidden.");
+                       skippedPanel.IsExpanded &&
+                       skippedList.Items.Count == 1 &&
+                       VirtualizingStackPanel.GetIsVirtualizing(skippedList) &&
+                       VirtualizingStackPanel.GetIsVirtualizing(analyzedList),
+                    "Both file lists must remain visible and virtualized at large counts.");
                 bool excludedProfiler = false;
                 try { analyzer.ResolveLogLocation("WebClientProfiler_2026-10-29.log", 1); }
                 catch (InvalidOperationException) { excludedProfiler = true; }
