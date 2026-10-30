@@ -229,11 +229,10 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     public Task ImportFileAsync(string path) => ExecuteAsync(async token =>
     {
-        // Reuse the established bounded, binary-safe file loader.
-        // No imported log is persisted by this lab.
-        var imported = await LocalTextLoader.LoadAsync([path], token);
-        string text = imported[0].Content;
-        LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token, Path.GetFileName(path)), token);
+        // Log analysis streams file contents; Smart Search's 16 MiB
+        // document-indexing limits do not apply to log inspection.
+        LogParseResult parsed = await Task.Run(() =>
+            LogFolderImporter.ImportSingleFile(path, token), token);
         AnomalyReport result = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
         OperationTimelineReport operations = await Task.Run(() =>
@@ -247,7 +246,12 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             SourceName = Path.GetFileName(path);
             NotifyOpenCommands();
 
-            Preview = text[..Math.Min(text.Length, 650)];
+            Preview = parsed.Events.Count == 0
+                ? "No dated events recognized in this file."
+                : string.Join("\n", parsed.Events.Take(3).Select(entry =>
+                    entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss",
+                        CultureInfo.InvariantCulture) + " " +
+                    entry.Message[..Math.Min(entry.Message.Length, 160)]));
             Apply(result, operations);
             _run.NotifyCanExecuteChanged();
         });
@@ -258,7 +262,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     /// files inside safe resource budgets. Exclusions are shown explicitly;
     /// failures preserve the previously displayed report.
     /// </summary>
-    public Task ImportFolderAsync(string folder) => ExecuteAsync(async token =>
+    public Task ImportFolderAsync(string folder, int? maxImportedEvents = null) =>
+        ExecuteAsync(async token =>
     {
         StatusText = "Scanning local Logs folder...";
         bool showProgress = true;
@@ -271,7 +276,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             }
         });
         LogFolderImportResult imported = await Task.Run(() =>
-            LogFolderImporter.Import(folder, token, progress), token);
+            LogFolderImporter.Import(folder, token, progress,
+                maxImportedEvents), token);
         AnomalyReport report = await Task.Run(() =>
             AnomalyDetector.Analyze(imported.Combined,
                 new AnomalyOptions(Sensitivity), token), token);
@@ -297,9 +303,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             Preview = imported.SkippedFiles.Count == 0
                 ? "All eligible .log/.txt files, including old/, were analyzed locally. " +
                   "Findings retain the original relative filename and physical line."
-                : "PARTIAL IMPORT: files were excluded by per-file size, combined " +
-                  "size or file-count limits. Only imported files contribute to " +
-                  "results; see SKIPPED FILES for details.";
+                : "PARTIAL IMPORT: some files exceeded the retained-event " +
+                  "memory budget and were not included. Only imported files " +
+                  "contribute to the results; see SKIPPED FILES.";
             foreach (LogFolderFile file in imported.Files
                 .OrderByDescending(f => f.ProblemEvents)
                 .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
@@ -320,8 +326,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             {
                 StatusText =
                     $"Partial import: {imported.Files.Count:N0} analyzed; " +
-                    $"{imported.SkippedFiles.Count:N0} skipped due to resource limits " +
-                    "(size or file count). See SKIPPED FILES for details.";
+                    $"{imported.SkippedFiles.Count:N0} excluded by the retained-event " +
+                    "memory budget. See SKIPPED FILES for details.";
             }
             _run.NotifyCanExecuteChanged();
         });
@@ -367,7 +373,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             ? "No files skipped."
             : $"{skipped.Count:N0} files were NOT analyzed. " +
               "These sources have no events in charts, findings or operations. " +
-              "Choose a narrower folder or smaller file copies to analyze them.";
+              "Their complete original files remain available on disk. " +
+              "Select a narrower folder/date range for a separate analysis.";
         OnPropertyChanged(nameof(SkippedFilesVisibility));
     }
 

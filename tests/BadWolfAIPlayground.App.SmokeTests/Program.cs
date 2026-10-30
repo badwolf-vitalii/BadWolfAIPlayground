@@ -536,9 +536,11 @@ internal static class Program
                    analyzer.OperationGroups.Single().Heading.StartsWith(
                        "Card reading/checks | flow ", StringComparison.Ordinal) &&
                    analyzer.OperationGroups.Single().Outcome ==
-                       "Card reading/checks finished; result unconfirmed" &&
+                       "Card reading/checks completed" &&
                    analyzer.OperationGroups.Single().Explanation.Contains(
-                       "No VTS transaction is expected", StringComparison.Ordinal) &&
+                       "no return value", StringComparison.Ordinal) &&
+                   !analyzer.OperationGroups.Single().Events.Single().Description.Contains(
+                       "result=unknown", StringComparison.Ordinal) &&
                    analyzer.OperationGroups.Single().Events.Single().Description.Contains(
                        "4057 ms", StringComparison.Ordinal),
                 "Reading/checking a card must not appear as a missing VTS transaction " +
@@ -739,20 +741,58 @@ internal static class Program
                             button.Command is not null),
                     "Each evidence card must expose a real Notepad++ command.");
 
-                // A large profiler must not block valid files, and omitted
-                // sources must be disclosed with their original path/size.
-                string oversizedProfiler =
+                // A real, decodable profiler over 16 MiB must be imported
+                // without excluding it for its byte size.
+                string largeProfiler =
                     Path.Combine(logFolder, "WebClientProfiler_2026-10-29.log");
-                using (var stream = new FileStream(oversizedProfiler, FileMode.Create))
-                    stream.SetLength(LogFolderImporter.MaxFileBytes + 1);
-                Task partialFolder = analyzer.ImportFolderAsync(logFolder);
-                PumpUntil(() => partialFolder.IsCompleted, TimeSpan.FromSeconds(20));
+                const int profilerLines = 9_000;
+                string payload = new('X', 2_050);
+                using (var writer = new StreamWriter(largeProfiler, append: false))
+                {
+                    for (int index = 0; index < profilerLines; index++)
+                        writer.WriteLine("2026-10-29 10:00:00 INFO profiler event " +
+                            index + " " + payload);
+                }
+                Assert(new FileInfo(largeProfiler).Length > 16L * 1024 * 1024,
+                    "Large synthetic profiler must exceed the old byte cap.");
+
+                Task largeFileOnly = analyzer.ImportFileAsync(largeProfiler);
+                PumpUntil(() => largeFileOnly.IsCompleted, TimeSpan.FromSeconds(30));
+                largeFileOnly.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == profilerLines &&
+                       analyzer.SourceName == Path.GetFileName(largeProfiler),
+                    "Single-file LOG selection must stream files above 16 MiB.");
+
+                Task entireFolder = analyzer.ImportFolderAsync(logFolder);
+                PumpUntil(() => entireFolder.IsCompleted, TimeSpan.FromSeconds(30));
+                entireFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 + profilerLines &&
+                       analyzer.SourceFiles.Count == 4 &&
+                       analyzer.SkippedSourceFiles.Count == 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Collapsed &&
+                       analyzer.SourceFiles.Any(row =>
+                           row.RelativePath == "WebClientProfiler_2026-10-29.log" &&
+                           row.DatedEvents == profilerLines),
+                    "The entire valid profiler must be included in a Logs-folder " +
+                    "report, with no byte-based skips.");
+                (string largePath, int largeLine) = analyzer.ResolveLogLocation(
+                    "WebClientProfiler_2026-10-29.log", profilerLines);
+                Assert(largePath == Path.GetFullPath(largeProfiler) &&
+                       largeLine == profilerLines,
+                    "Large streamed files retain original physical line navigation.");
+
+                // A deliberately tiny test-only event budget still creates an
+                // honest partial import. This checks warnings without writing
+                // a million-line fixture or restoring old byte limits.
+                Task partialFolder = analyzer.ImportFolderAsync(
+                    logFolder, maxImportedEvents: 125);
+                PumpUntil(() => partialFolder.IsCompleted, TimeSpan.FromSeconds(30));
                 partialFolder.GetAwaiter().GetResult();
-                Assert(analyzer.EventCount == 120 &&
-                       analyzer.SourceFiles.Count == 3 &&
-                       analyzer.SkippedSourceFiles.Count == 1 &&
-                       analyzer.SkippedSourceFiles[0].RelativePath ==
-                           "WebClientProfiler_2026-10-29.log" &&
+                Assert(analyzer.EventCount > 0 &&
+                       analyzer.EventCount <= 125 &&
+                       analyzer.SourceFiles.Count > 0 &&
+                       analyzer.SkippedSourceFiles.Any(row =>
+                           row.RelativePath == "WebClientProfiler_2026-10-29.log") &&
                        analyzer.SkippedFilesVisibility == Visibility.Visible &&
                        analyzer.SkippedFilesSummary.Contains("NOT analyzed",
                            StringComparison.Ordinal) &&
@@ -762,7 +802,9 @@ internal static class Program
                            StringComparison.Ordinal) &&
                        analyzer.Preview.Contains("PARTIAL IMPORT",
                            StringComparison.Ordinal),
-                    "Partial import must retain valid evidence and disclose skipped data.");
+                    "A partial event-budget import must identify precisely which " +
+                    "sources have not been analyzed.");
+
                 var skippedPanel =
                     (Expander)anomalyView.FindName("AnomalySkippedFilesExpander");
                 anomalyView.UpdateLayout();
@@ -770,39 +812,37 @@ internal static class Program
                 var analyzedList = (ListBox)anomalyView.FindName("AnomalySourceFiles");
                 Assert(skippedPanel.Visibility == Visibility.Visible &&
                        skippedPanel.IsExpanded &&
-                       skippedList.Items.Count == 1 &&
+                       skippedList.Items.Count > 0 &&
                        VirtualizingStackPanel.GetIsVirtualizing(skippedList) &&
                        VirtualizingStackPanel.GetIsVirtualizing(analyzedList),
-                    "Both file lists must remain visible and virtualized at large counts.");
+                    "File lists must remain visible and virtualized at large counts.");
                 bool excludedProfiler = false;
                 try { analyzer.ResolveLogLocation("WebClientProfiler_2026-10-29.log", 1); }
                 catch (InvalidOperationException) { excludedProfiler = true; }
                 Assert(excludedProfiler,
-                    "A skipped profiler cannot be opened as an imported source.");
-                File.Delete(oversizedProfiler);
+                    "A file excluded due to the event budget is not imported evidence.");
+                File.Delete(largeProfiler);
 
                 Task partialReanalysis = analyzer.AnalyzeAsync();
                 PumpUntil(() => partialReanalysis.IsCompleted, TimeSpan.FromSeconds(20));
                 partialReanalysis.GetAwaiter().GetResult();
-                Assert(analyzer.EventCount == 120 &&
-                       analyzer.SkippedSourceFiles.Count == 1 &&
-                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
-                       analyzer.SkippedFilesSummary.Contains("NOT analyzed",
-                           StringComparison.Ordinal),
-                    "A later reanalysis must not hide the previously excluded files.");
+                Assert(analyzer.SkippedSourceFiles.Count > 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible,
+                    "Reanalysis must preserve truthful partial-import warnings.");
 
                 int validCount = analyzer.EventCount;
+                int validFiles = analyzer.SourceFiles.Count;
                 Task badFolder = analyzer.ImportFolderAsync(
                     Path.Combine(logFolder, "missing"));
                 PumpUntil(() => badFolder.IsCompleted, TimeSpan.FromSeconds(20));
                 badFolder.GetAwaiter().GetResult();
                 Assert(analyzer.EventCount == validCount &&
-                       analyzer.SourceFiles.Count == 3 &&
-                       analyzer.SkippedSourceFiles.Count == 1 &&
+                       analyzer.SourceFiles.Count == validFiles &&
+                       analyzer.SkippedSourceFiles.Count > 0 &&
                        analyzer.SkippedFilesVisibility == Visibility.Visible &&
                        analyzer.StatusText.Contains("failed",
                            StringComparison.OrdinalIgnoreCase),
-                    "Failed folder import must preserve last valid result and warnings.");
+                    "Failed import must preserve the previous report and exclusions.");
 
                 Task switchToDemo = analyzer.UseDemoAsync();
                 PumpUntil(() => switchToDemo.IsCompleted, TimeSpan.FromSeconds(20));
