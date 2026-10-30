@@ -14,7 +14,8 @@ var checks = new (string Name, Action Execute)[]
     ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
     ("File selection recomputes events and duplicate provenance", FolderSelection),
     ("Multiline exception context is bounded and does not invent events", MultilineContext),
-    ("Findings retain original exception evidence", FindingExceptionContext)
+    ("Findings retain original exception evidence", FindingExceptionContext),
+    ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline)
 };
 
 int failed = 0;
@@ -491,6 +492,70 @@ static void FindingExceptionContext()
            report.Source.Events.Count == 37 &&
            report.TotalProblems == 37,
         "Real exception details should reach a rare finding without adding dated events.");
+}
+
+
+static void StructuredOperationTimeline()
+{
+    const string source = "Operations_2026-10-30.log";
+    const string raw =
+        "2026-10-30 16:00:00 INFO TOM_OP v=1 event=step step=card_preview_ready session_id=s1 process_id=10 transaction_id=- flow_id=issue\n" +
+        "2026-10-30 16:00:10 INFO TOM_OP v=1 event=step step=card_issuing_cancelled session_id=s1 transaction_id=- flow_id=issue category=issuing reason=user\n" +
+        "2026-10-30 16:00:10 INFO TOM_OP v=1 event=step step=card_preview_decision session_id=s1 transaction_id=- flow_id=issue category=cancel\n" +
+        "2026-10-30 16:00:11 INFO TOM_OP v=1 event=end operation=TryOpenTransaction session_id=s1 transaction_id=2849 flow_id=issue result=true duration_ms=55\n" +
+        "2026-10-30 16:00:12 INFO TOM_OP v=1 event=step step=card_commit_status session_id=s1 transaction_id=2849 flow_id=issue category=GenericError success=false\n" +
+        "2026-10-30 16:00:12 INFO TOM_OP v=1 event=end operation=CardEmissionCommit session_id=s1 transaction_id=2849 flow_id=issue result=true duration_ms=140\n" +
+        "2026-10-30 16:00:13 INFO TOM_OP v=1 event=end operation=TryCloseEmptyTransaction session_id=s1 transaction_id=2849 result=true duration_ms=113\n" +
+        "2026-10-30 16:01:00 INFO TOM_OP v=1 event=step step=quick_reload_requested session_id=s1 transaction_id=- flow_id=sale\n" +
+        "2026-10-30 16:01:01 INFO TOM_OP v=1 event=end operation=TryOpenTransaction session_id=s1 transaction_id=2847 flow_id=sale result=true\n" +
+        "2026-10-30 16:01:02 INFO TOM_OP v=1 event=step step=undo_mode session_id=s1 transaction_id=2847 flow_id=undo category=Contract\n" +
+        "2026-10-30 16:01:03 INFO TOM_OP v=1 event=end operation=PrintReceipt session_id=s1 transaction_id=2847 flow_id=undo result=false duration_ms=1350\n" +
+        "2026-10-30 16:01:04 INFO TOM_OP v=1 event=end operation=VtsTransactionClose session_id=s1 transaction_id=2847 flow_id=sale result=true duration_ms=115\n" +
+        "2026-10-30 16:01:05 INFO TOM_OP v=1 event=step step=undo_receipt_print_result session_id=s1 transaction_id=- flow_id=undo success=false category=requested_2\n" +
+        "2026-10-30 16:02:00 INFO TOM_OP v=1 event=end operation=CardEmissionCommit session_id=s2 transaction_id=2849 result=true\n" +
+        "2026-10-30 16:02:02 INFO TOM_OP v=1 event=step step=quick_reload_requested session_id=s1 transaction_id=- flow_id=orphan\n" +
+        "2026-10-30 16:02:03 INFO TOM_OP v=1 event=dialog action=closed session_id=s1 transaction_id=- dialog=unkeyed response=Cancel\n";
+    LogParseResult parsed = LogParser.Parse(raw, sourceFile: source);
+    OperationTimelineReport report = OperationTimelineAnalyzer.Analyze(parsed);
+    Ensure(report.StructuredEvents == 16 && report.GroupCount == 4 &&
+           report.UnlinkedEvents == 1,
+        "Structured events must use explicit IDs; unrelated dialog cannot be inferred.");
+    OperationTimelineGroup issuing = report.Groups.Single(group =>
+        group.SessionId == "s1" && group.TransactionId == "2849");
+    Ensure(issuing.Outcome == "Cancelled by operator" &&
+           issuing.Explanation.Contains("GenericError was committed", StringComparison.Ordinal) &&
+           issuing.Explanation.Contains("Preview-to-decision: 10.0 s", StringComparison.Ordinal) &&
+           issuing.Events.Count == 7 &&
+           issuing.Events[0].SourceFile == source &&
+           issuing.Events[0].SourceLine == 1,
+        "User cancellation + VTS GenericError must not be reported as a technical failure.");
+    OperationTimelineGroup sale = report.Groups.Single(group =>
+        group.TransactionId == "2847");
+    Ensure(sale.Outcome == "VTS closed; printing incomplete" &&
+           sale.FlowIds.Contains("sale") && sale.FlowIds.Contains("undo") &&
+           sale.Events.Count == 6 &&
+           sale.Events.Any(entry => entry.Step == "quick_reload_requested") &&
+           sale.Events.Any(entry => entry.Step == "undo_receipt_print_result"),
+        "Different flows inside one real transaction must retain earlier and later steps.");
+    Ensure(report.Groups.Single(group => group.SessionId == "s2").EventCount == 1 &&
+           report.Groups.Single(group => group.TransactionId == "").FlowIds.Single() == "orphan",
+        "The same transaction number in a different session must not be merged.");
+    Ensure(issuing.Events.Any(e => e.Operation == "CardEmissionCommit" &&
+           e.Description.Contains("result=true", StringComparison.Ordinal)),
+        "Commit API acknowledgement must remain visible separately from card status.");
+
+    OperationTimelineReport unknown = OperationTimelineAnalyzer.Analyze(LogParser.Parse(
+        "2026-10-30 16:00:00 INFO TOM_OP v=2 event=start operation=Unknown " +
+        "session_id=x transaction_id=123"));
+    Ensure(unknown.StructuredEvents == 0 && unknown.GroupCount == 0,
+        "Unknown schema versions must be ignored, not interpreted as v1.");
+
+    using var cancelled = new CancellationTokenSource();
+    cancelled.Cancel();
+    bool stopped = false;
+    try { OperationTimelineAnalyzer.Analyze(parsed, cancelled.Token); }
+    catch (OperationCanceledException) { stopped = true; }
+    Ensure(stopped, "Lifecycle analysis must support cancellation.");
 }
 
 static void Ensure(bool expression, string message)
