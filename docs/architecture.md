@@ -385,18 +385,24 @@ source-level investigation, not just a message-template match.
 
 ### Importing a whole multi-component Logs directory
 
-`LogFolderImporter.Import` reads a user-selected folder
-recursively, including `old` archives, with cancellation and
-explicit count/byte/event caps. It accepts only plain `.log`/
-`.txt`, opens active files with shared read permissions,
-and rejects unreadable or binary inputs. Files exceeding the
-per-file or combined byte budgets are excluded *before reading*,
-with each original relative path, file size and exclusion reason
-preserved in `LogFolderSkippedFile` instead of silently losing events.
-WPF explicitly reports **PARTIAL IMPORT** for excluded files, including
-file-count exclusions. The imported and skipped file lists use
-virtualized WPF `ListBox` controls to avoid creating thousands
-of child elements for the entire archive.
+`LogFolderImporter.Import` discovers supported `.log` and `.txt` files
+recursively, including `old/`. The file content is read incrementally
+through a strict UTF-8/BOM-marked UTF-16 `StreamReader` into
+`LogParser.Parse(TextReader)`, with FileShare.ReadWrite|Delete for active
+logs. The source text is never collected into a giant string.
+The old 16 MiB per-file, 256 MiB combined, and 512 analyzed-file
+limits no longer apply. The parser preserves strict encoding, binary
+checks, bounded individual lines/context and physical line provenance.
+
+Source discovery remains bounded at 50,000 metadata entries, and
+up to 1,000,000 dated events can be retained in a single report.
+Candidates are analyzed in priority order (Operations first, then
+current/root files, non-archive and archived files). Files that
+cannot fit wholly in the remaining event budget are excluded with
+a visible reason and original relative path; no partial transaction
+is represented as a complete file. The skipped-file count is based
+on actual excluded sources. WPF virtualizes imported and skipped
+file lists and reports PARTIAL IMPORT only when data was excluded.
 
 Every `LogEvent` now stores `SourceFile` (relative to the
 chosen folder) and its physical `LineNumber`. Detection
@@ -445,8 +451,7 @@ events**, recomputing per-file totals and duplicate counts.
 This avoids incorrect counts and lost evidence when the
 primary component target of a previously deduplicated
 App/component pair is disabled. The import has a maximum
-of 1,000,000 raw parsed entries (in addition to the
-500,000 distinct-event analysis cap). Selection never
+of 1,000,000 retained dated events, both raw and distinct. Selection never
 causes a second disk read, copy of log text to a server,
 embedding operation, or Ollama request.
 
@@ -546,68 +551,29 @@ from the matching `operation_id` start record when that ID maps to
 exactly one session. This matches the observed TOM_OP wire format
 without ambiguous cross-session merging or timestamp heuristics.
 
-### Safe partial import for high-volume profiler logs
+### Large-source streaming and bounded evidence retention
 
-`LogFolderImporter.Import` scans up to 50,000 supported file
-metadata entries without reading content. It selects up to 512
-for one analysis, preferring `Operations*` logs, then current
-root-level files, other non-archived folders, then `old/` archives;
-within those classes the most recently modified files come first.
-Files over 16 MiB are excluded before reading. Candidates that
-exceed the 512 analyzed-file cap or combined 256 MiB byte budget
-are explicitly listed in `SkippedFiles`, never quietly truncated.
-Selected files are then read in path order for consistent provenance.
-Selected files are **parsed in preference order**, so archived
-component files cannot consume the event budget before
-`Operations`. A file is accepted only when its entire dated-event
-count fits the remaining conservative **500,000 raw-event budget**.
-This also guarantees the 500,000 distinct-event cap before mirror
-deduplication. If it does not fit, the **entire** source is disclosed
-in `SkippedFiles` and not included in any report. Only successfully
-admitted per-file batches are sorted back into stable path order;
-`TotalBytes` counts those actual admitted files. UTF-8/UTF-16
-decoding, cancellation and exact NLog mirror deduplication are unchanged.
+`LogParser.Parse(TextReader)` parses every physical line without
+buffering the complete original file. The same streamed parser is
+used for standalone LOG/TXT selection and recursive Logs-folder
+imports. Files above 16 MiB are ordinary inputs, not automatic
+exclusions; document indexing in Smart Search is unaffected.
 
-If every file is over the limit, the import fails rather than
-presenting invented coverage. Likewise, genuinely invalid encoded
-content still fails rather than silently replacing characters.
-A successful partial import contains a separate, visible
-`LogFolderImportResult.SkippedFiles` list and permanently
-visible warning until another valid file selection. Skipped
-files are absent from the import's selectable file list,
-Notepad++ navigation and all event-derived analytics.
+A 1,000,000-event in-memory budget bounds the events retained for
+deduplication, grouping, timelines and reversible Include/Exclude.
+If the remaining space is too small for an entire file, the parser
+stops at the limit; the importer discloses that source as excluded
+without retaining a partial file. The number of events in a skipped
+source beyond the bound is intentionally not claimed as known.
+Operations sources retain priority for correlation; admitted
+sources are sorted by path afterward to preserve mirror provenance.
 
-Engine and WPF smoke tests use sparse synthetic oversized
-profiler files and a valid small operation trace, verifying
-that the latter survives, the omissions are shown explicitly,
-and failed subsequent imports preserve the prior valid result.
-
-### Large archive file-count regression
-
-The former hard failure at the 513th discovered file is replaced
-by metadata discovery and resource-limited selection. A synthetic
-regression fixture creates more than 512 old component logs plus
-current `Operations_2026-10-30(5).log` and `App` logs.
-The Operations file deliberately has an old filesystem timestamp;
-its explicit priority must still retain the structured cancellation,
-with correct transaction outcome and original source line.
-Every excluded archive file is reported and cannot be enabled as
-if it had been imported. The 50,000 metadata-entry guard is separate
-from the 512 files actually analyzed at once.
-
-### Complete-file admission at the raw-event budget
-
-The original importer threw at >1,000,000 raw events and again at
->500,000 distinct events, discarding an otherwise useful batch of
-`Operations` traces. File selection now runs before merge:
-all `Operations` are parsed first within their size/file budgets,
-then current component logs, then archives. A complete source file
-is admitted if it fits the remaining conservative 500,000 raw-event
-budget. Otherwise the entire file is skipped and its original relative
-path, size and dated-event count are shown in the partial-import panel.
-No event sample is falsely presented as a complete transaction.
-For high-volume log sets, this prioritization intentionally favors
-recent explicit operation evidence over total historical coverage.
+Synthetic engine tests import a real >16 MiB UTF-8 log with 9,000
+dated entries, plus an operation trace. They also import more than
+512 archived logs without exclusions. Windows WPF smoke tests
+exercise both single-file and folder streaming and an intentionally
+small event budget to validate partial-import warnings, preserved
+state, Notepad++ physical-line links and failure behavior.
 
 The detector also supports multi-year archive spans by expanding
 the bucket interval to retain at most 720 buckets rather than
@@ -664,11 +630,12 @@ operation in that flow. WPF shows **Card reading/checks** instead
 of incorrectly reporting **VTS link unknown**. Any explicit
 transaction association still takes precedence.
 
-The terminal `event=end` proves an instrumented method ended.
-`status=completed` with `result=unknown` does not establish a
-successful card read or a technical failure. Logged duration
-and physical source line are retained. Without `event=end`,
-the outcome remains observed, not completed. An unknown or
+Because the card-insertion handler is void, `result=unknown` is an
+emitter placeholder for no method return value. `event=end` with
+`status=completed` means the independent card-read/check handler
+**completed**, with no VTS dependency. WPF hides the placeholder
+and preserves timing and source line. An absent end event is not
+assumed completed; explicitly logged failures remain reportable. An unknown or
 mixed-operation flow is never presumed standalone solely because
 its `transaction_id` is absent. Deterministic engine and WPF
 tests cover the production record shape with synthetic IDs.

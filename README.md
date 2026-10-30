@@ -417,40 +417,32 @@ while preserving both filenames as provenance. Distinct repeated
 messages in the same file are kept. Raw per-file counts include
 copies; aggregate counts exclude these exact cross-file copies.
 
-Folder import is **offline, cancellable and non-persistent**:
-active log files can be opened with shared read access; nothing is
-uploaded, embedded or committed, and absolute folder paths are not
-saved. Parsing errors and cancellation still preserve the last valid result.
-Size-limit exclusions are different: they produce an explicitly
-labelled partial result instead of letting one oversized profiler
-prevent analysis of all other logs. Skipped files contribute no
-evidence to statistics, findings or operation timelines.
+Folder import is **offline, cancellable and non-persistent**. The
+anomaly parser now reads UTF-8 / BOM-marked UTF-16 logs incrementally
+through a TextReader rather than loading the whole file as a string.
+**Anomaly Detection Lab no longer has a 16 MiB per-file limit,
+a 256 MiB combined byte limit, or a 512-file analysis cutoff.**
+Those older byte restrictions still apply separately to text indexing
+inside Smart Search Lab, not log analysis.
 
-Safety bounds are **50,000 discovered file metadata entries**, **512 analyzed
-files**, **16 MiB per file**, **256 MiB combined**, **1,000,000 raw events**
-and **500,000 distinct events**. To prevent the event ceilings from
-invalidating the entire import, files are admitted whole in priority order
-within a **conservative 500,000 raw-event budget** (which also guarantees
-no more than 500,000 distinct events). Files that would exceed the
-remaining event budget are excluded in full, with counts and filenames
-in **SKIPPED FILES**. No event is silently truncated and
-file/line provenance stays intact. The scanner no longer fails at file
-513: it prioritizes `Operations*.log` (including inside `old/`),
-then current root-level logs, other non-archive logs, and archived logs.
-Within each category recently modified files are preferred. Files
-excluded by the count or byte budget appear with their exact reason
-in **SKIPPED FILES — NOT ANALYZED**. Files above 16 MiB are never read.
-Results are explicitly marked **PARTIAL IMPORT**, not presented as
-complete coverage. Scans exceeding the separate 50,000-entry metadata
-guard or with no usable files fail clearly. UTF-8 and
-BOM-marked UTF-16 are supported; use single-file import or
-convert a copy for legacy code pages. Binary data, ZIP archives
-and unsupported file types are not processed. If selected logs span more than 366 days, the detector uses up to
-720 coarser time buckets instead of rejecting the operation timeline.
-For multi-day buckets the UI displays dates, warns that statistical
-spikes have lower temporal resolution, and still retains original
-transaction timestamps. The demo and tests use only synthetic logs.
+The remaining limits concern *retained in-memory evidence*, not input
+file size: scan at most **50,000 file metadata entries** and retain
+at most **1,000,000 dated events** in a report. Source priority is
+Operations logs, current/root components, other components, then
+archived old/ logs, with recent files preferred within a class.
+Files that cannot fit wholly in the remaining event budget are
+explicitly listed as **SKIPPED FILES — NOT ANALYZED**, without
+misrepresenting a partial transaction as a complete source.
+Raw event totals and per-file provenance are based only on admitted
+files. If parsing reached the limit mid-file, the skip reason reports
+a lower bound, not a fabricated full event count.
 
+Strict decoding, binary-data checks, a maximum individual line length,
+bounded stack context, source-file/line navigation, cancellation and
+mirror deduplication remain. Failed/canceled imports preserve the
+last successful report. No work logs are uploaded or stored by this lab.
+For multi-year archives, statistics use coarser time buckets while
+individual structured operations retain their original timestamps.
 
 **Deduplication safeguard:** two unrelated components are *not*
 assumed to be copies simply because they emitted identical text at
@@ -569,26 +561,19 @@ matching, unique `operation_id` from an explicitly session-scoped
 start/step event. End records with no unique match are kept separate;
 time proximity is never treated as proof.
 
-#### Oversized profiler files during Logs-folder import
+#### Large LOG/TXT files use streaming
 
-An individual `WebClientProfiler_*.log` can exceed the safe 16 MiB
-per-file memory limit while nearby `Operations_*.log` and component
-logs remain small. **Select Logs folder** now analyzes every
-eligible file it can fit within the established budgets rather than
-aborting the entire import because of that profiler.
+A `WebClientProfiler_2026-10-30.log` of 35.7 MiB no longer gets
+excluded simply because it exceeds 16 MiB. Both **Select Logs folder**
+and **Select local LOG / TXT** parse file content line by line, retaining
+bounded dated events rather than accumulating the entire source text.
+Original physical line numbers remain available for Notepad++.
 
-If files were excluded, a prominent expanded **SKIPPED FILES —
-NOT ANALYZED** panel lists their relative filenames, original sizes
-and exact reasons. This includes files excluded by the
-512-analyzed-file limit or remaining event budget. The import is labelled
-**PARTIAL IMPORT**. The imported
-and excluded lists use WPF item virtualization to remain scrollable
-even for hundreds or thousands of discovered log files.
-Skipped files contribute *zero* events to the charts, findings,
-exception list and Operation lifecycle timeline, and cannot be
-re-enabled through Include/Exclude until a smaller copy is imported.
-No input is silently truncated or sampled, no files are modified,
-and no work logs are uploaded.
+**SKIPPED FILES** now means a real retained-event budget was exceeded.
+The list identifies affected sources without claiming they were
+analyzed. Choose a more focused folder/date range to analyze excluded
+files independently. Input is never silently truncated or uploaded.
+Invalid encodings and binary data still produce explicit errors.
 
 ### Grouped anomaly evidence and recurring printer messages
 
@@ -638,11 +623,13 @@ and does not indicate a missing or failed VTS transaction.
 Operation lifecycle explicitly labels this known independent flow
 **Card reading/checks**, rather than **Unlinked flow**.
 
-An `event=end status=completed result=unknown` means that the logged
-method finished but does not establish whether the card was read
-successfully. Its precise duration, `flow_id`, source file and line
-remain available. An explicit `result=true` or `result=false` can
-be reported, while an absent `event=end` cannot imply completion.
+Because `CardInsertedCore` / `CardInfoReadAndChecks` is void, the emitter's
+`result=unknown` is simply a **no-return-value placeholder**, not a
+failure or an uncertain card read. For `event=end status=completed`,
+the analyzer reports **Card reading/checks completed**, suppressing
+that placeholder in the event details. Duration, `flow_id`, source and
+physical line remain visible. Explicit logged failures are still
+reported, while a missing end event never implies completion.
 
 Other unrecognized flow types remain **Unlinked flow** until their
 purpose is supported by evidence. A flow with other named operations
