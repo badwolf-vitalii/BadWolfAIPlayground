@@ -19,6 +19,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource, _chooseFolder;
     private readonly RelayCommand _selectAll, _selectNone, _chooseEditor;
+    private readonly RelayCommand _findInvestigation, _clearInvestigationSearch;
     private readonly ParameterRelayCommand<AnomalyFindingRow> _openFinding;
     private readonly ParameterRelayCommand<AnomalyPatternRow> _openPattern;
     private readonly ParameterRelayCommand<AnomalyExceptionRow> _openException;
@@ -43,7 +44,11 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private string _sourceContextStatus =
         "Optional: select a local Visual Studio solution for source-aware log investigation.";
     private string _investigationSummary =
-        "Select a local C# solution and logs to inspect candidate source methods.";
+        "Load logs to inspect selected evidence. You can search all imported events without C# source.";
+    private string _investigationSearchText = "";
+    private string _activeInvestigationQuery = "";
+    private IReadOnlyList<AnomalyInvestigationRow> _defaultInvestigationRows = [];
+    private string _defaultInvestigationSummary = "";
     private string _source = "No file selected";
     private string _filesSummary = "Choose a Logs folder to inspect all components.";
     private string _skippedSummary = "No files skipped.";
@@ -75,6 +80,14 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _selectNone = new RelayCommand(async () => await SelectAllFilesAsync(false),
             () => CanEditFiles);
         _chooseEditor = new RelayCommand(ChooseNotepadPlusPlus);
+        _findInvestigation = new RelayCommand(async () =>
+            await SearchInvestigationsAsync(),
+            () => !Busy && _loaded is not null &&
+                  InvestigationSearchText.Trim().Length >= 3);
+        _clearInvestigationSearch = new RelayCommand(
+            ClearInvestigationSearch,
+            () => !Busy && (_activeInvestigationQuery.Length > 0 ||
+                             InvestigationSearchText.Length > 0));
         _openFinding = new ParameterRelayCommand<AnomalyFindingRow>(
             item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
@@ -123,6 +136,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand OpenCSharpSourceCommand => _openCSharpSource;
     public ICommand OpenInvestigationLogCommand => _openInvestigationLog;
     public ICommand OpenRelatedLogCommand => _openRelatedLog;
+    public ICommand SearchInvestigationsCommand => _findInvestigation;
+    public ICommand ClearInvestigationSearchCommand => _clearInvestigationSearch;
     public bool CanEditFiles => !Busy && _folderImport is not null;
     public string EditorStatus
     {
@@ -141,6 +156,18 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         get => _investigationSummary;
         private set => SetProperty(ref _investigationSummary, value);
+    }
+    public string InvestigationSearchText
+    {
+        get => _investigationSearchText;
+        set
+        {
+            if (SetProperty(ref _investigationSearchText, value ?? ""))
+            {
+                _findInvestigation.NotifyCanExecuteChanged();
+                _clearInvestigationSearch.NotifyCanExecuteChanged();
+            }
+        }
     }
     public (string FullPath, int Line) ResolveCSharpLocation(
         SourceInvestigationCandidate candidate)
@@ -229,6 +256,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _chooseFolder.NotifyCanExecuteChanged();
                 _selectAll.NotifyCanExecuteChanged();
                 _selectNone.NotifyCanExecuteChanged();
+                _findInvestigation.NotifyCanExecuteChanged();
+                _clearInvestigationSearch.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditFiles));
             }
         }
@@ -776,6 +805,83 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
     }
 
+
+    /// <summary>
+    /// Searches all currently enabled parsed log events, not only the
+    /// top statistical findings. The source index is optional.
+    /// </summary>
+    public Task SearchInvestigationsAsync() => ExecuteAsync(async token =>
+    {
+        LogParseResult? parsed = _lastReport?.Source ?? _loaded;
+        if (parsed is null)
+            return;
+        string query = InvestigationSearchText.Trim();
+        if (query.Length < 3)
+        {
+            StatusText = "Enter at least 3 characters to search local log evidence.";
+            return;
+        }
+        SourceInvestigationIndex? source = _investigationIndex;
+        SourceInvestigationSearchResult result = await Task.Run(
+            () => SourceInvestigationAnalyzer.Search(parsed, source, query, token), token);
+        token.ThrowIfCancellationRequested();
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _activeInvestigationQuery = query;
+            ShowInvestigationSearch(result, query);
+            _clearInvestigationSearch.NotifyCanExecuteChanged();
+            StatusText = $"Searched {parsed.Events.Count:N0} currently included log events locally.";
+        });
+    });
+
+    public void ClearInvestigationSearch()
+    {
+        if (Busy)
+            return;
+        _activeInvestigationQuery = "";
+        InvestigationSearchText = "";
+        Investigations.Clear();
+        foreach (AnomalyInvestigationRow row in _defaultInvestigationRows)
+            Investigations.Add(row);
+        InvestigationSummary = _defaultInvestigationSummary.Length > 0
+            ? _defaultInvestigationSummary
+            : "Load logs to inspect source-aware evidence.";
+        _clearInvestigationSearch.NotifyCanExecuteChanged();
+    }
+
+    private void ShowInvestigationSearch(
+        SourceInvestigationSearchResult result, string query)
+    {
+        Investigations.Clear();
+        foreach (SourceInvestigationCase item in result.Cases)
+            Investigations.Add(ToInvestigationRow(item));
+        InvestigationSummary =
+            $"Search \"{query}\": {result.MatchingEventCount:N0} matching " +
+            $"event(s), {result.DisplayedGroups:N0} displayed operation/line " +
+            $"group(s) (maximum {SourceInvestigationAnalyzer.MaxSearchGroups}). " +
+            "Includes DEBUG/INFO and events outside the top anomalies; " +
+            "only currently included imported logs are searched.";
+    }
+
+    private static AnomalyInvestigationRow ToInvestigationRow(
+        SourceInvestigationCase item) =>
+        new(item.Category, item.Title, item.Evidence, item.Assessment,
+            item.LogFile, item.LogLine,
+            item.Candidates.Select(candidate =>
+                new AnomalySourceCandidateRow(candidate)).ToArray())
+        {
+            OperationId = item.OperationId,
+            ObservedAt = item.ObservedAt,
+            RelatedEventCount = item.RelatedEventCount,
+            RelatedLogs = item.RelatedEvents.Select(entry =>
+                new AnomalyRelatedLogRow(
+                    entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
+                        CultureInfo.InvariantCulture),
+                    entry.Severity.ToString().ToUpperInvariant(),
+                    entry.Message, entry.SourceFile, entry.SourceLine))
+                .ToArray()
+        };
+
     private void Apply(AnomalyReport report, OperationTimelineReport operations)
     {
         _lastReport = report;
@@ -993,30 +1099,23 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 SourceInvestigationAnalyzer.Analyze(
                     report, operations, _investigationIndex);
             foreach (SourceInvestigationCase item in investigation.Cases)
-            {
-                Investigations.Add(new AnomalyInvestigationRow(
-                    item.Category, item.Title, item.Evidence, item.Assessment,
-                    item.LogFile, item.LogLine,
-                    item.Candidates.Select(candidate =>
-                        new AnomalySourceCandidateRow(candidate)).ToArray())
-                {
-                    OperationId = item.OperationId,
-                    RelatedEventCount = item.RelatedEventCount,
-                    RelatedLogs = item.RelatedEvents.Select(entry =>
-                        new AnomalyRelatedLogRow(
-                            entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
-                                CultureInfo.InvariantCulture),
-                            entry.Severity.ToString().ToUpperInvariant(),
-                            entry.Message, entry.SourceFile, entry.SourceLine))
-                        .ToArray()
-                });
-            }
+                Investigations.Add(ToInvestigationRow(item));
             InvestigationSummary =
                 $"Investigated {investigation.Total:N0} selected log/operation " +
                 $"evidence items: {investigation.Linked:N0} with C# candidates, " +
                 $"{investigation.Unmatched:N0} unmatched, " +
                 $"{investigation.Ambiguous:N0} ambiguous. " +
                 "Links are syntax or stack evidence, not proof of root cause.";
+        }
+
+        _defaultInvestigationRows = Investigations.ToArray();
+        _defaultInvestigationSummary = InvestigationSummary;
+        if (_activeInvestigationQuery.Length >= 3)
+        {
+            SourceInvestigationSearchResult search =
+                SourceInvestigationAnalyzer.Search(report.Source,
+                    _investigationIndex, _activeInvestigationQuery);
+            ShowInvestigationSearch(search, _activeInvestigationQuery);
         }
 
         EventCount = report.Source.Events.Count;
@@ -1084,8 +1183,30 @@ public sealed record AnomalyInvestigationRow(
 {
     public string LogLocation => string.IsNullOrEmpty(LogFile)
         ? $"Log line {LogLine}" : $"{LogFile}:{LogLine}";
-    public string Heading => Category + " | " + Title +
-        $" | {Candidates.Count:N0} candidate(s)";
+    public string Heading =>
+        Category + "  |  " + CompactHeadline(
+            Category == "TOM_OP METHOD" ? Title : Evidence, 146);
+    public string DetailLine =>
+        (ObservedAt.HasValue
+            ? ObservedAt.Value.ToString("yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture) + "  |  "
+            : "") +
+        Title + "  |  " + LogLocation +
+        (OperationId.Length > 0 ? "  |  operation_id=" + OperationId : "") +
+        $"  |  {Candidates.Count:N0} C# candidate(s)";
+    public DateTimeOffset? ObservedAt { get; init; }
+    private static string CompactHeadline(string value, int limit)
+    {
+        string text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        int metadata = text.IndexOf(" | operation_id=",
+            StringComparison.OrdinalIgnoreCase);
+        if (metadata < 0)
+            metadata = text.IndexOf(" | exception_",
+                StringComparison.OrdinalIgnoreCase);
+        if (metadata >= 0)
+            text = text[..metadata];
+        return text.Length <= limit ? text : text[..limit].TrimEnd() + "...";
+    }
     public string OperationId { get; init; } = "";
     public int RelatedEventCount { get; init; }
     public IReadOnlyList<AnomalyRelatedLogRow> RelatedLogs { get; init; } = [];
