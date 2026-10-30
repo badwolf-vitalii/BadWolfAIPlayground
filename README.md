@@ -399,6 +399,50 @@ secrets or production logs**. Always keep private source in a private
 checkout, and never commit your source data to this public repo.
 
 
+
+### Source-aware log investigation (next stage)
+
+After **Select Logs folder** or **Select local LOG / TXT**, optionally
+choose **Select local C# solution** from an existing checkout. The
+original lightweight logging-template hints remain available; a new
+**Source-aware log investigation** panel additionally uses Roslyn's
+C# syntax parser to index method declarations, literal logging
+statements, interpolated and structured logging templates, enclosing
+`if`/`catch` context and direct method invocations.
+
+The panel investigates up to 12 recurring WARN/ERROR/FATAL patterns,
+8 recent structured TOM_OP groups and 4 findings with exception
+context. Each item retains an original log file and physical line
+and offers up to 5 matching C# candidate locations, source snippets,
+method/type names and static condition/call hints. Both the log
+evidence and a candidate source location can be opened separately
+in Notepad++ at the original line. C# source navigation is restricted
+to indexed files within the user-selected checkout.
+
+**Evidence is not causality.** An exact literal match identifies a
+possible logging statement, not proof that it executed in a specific
+incident. A TOM_OP operation name matching a declared method is a
+weaker hint, not a reconstructed call stack. An explicit stack frame
+contains runtime source evidence, but must still be checked against
+the deployed binary and current checkout. Duplicate matching sites
+are marked **ambiguous**, and missing matches remain **unmatched**.
+No root causes, transaction relationships, code branches or call
+paths are invented.
+
+Source parsing is local and syntax-only: there is **no compilation
+or execution** of selected source, no automatic repository download,
+no AI/cloud request and no persistence of indexed code. The source
+scanner skips generated directories and bounds source files to
+4,000, individual input C# files to 1 MiB, combined indexed source
+to 48 MiB, 20,000 logging sites and 40,000 methods. The result and
+all source snippets exist only in this program's memory. Source
+relationships are recomputed when log file filters or the selected
+source checkout change.
+
+This stage intentionally does **not** ask Ollama to interpret evidence.
+That will be an optional later step once reliable, inspectable source
+references are available.
+
 ### Analyze a complete Logs folder (v0.3.0)
 
 Select **Logs folder** inside Anomaly Detection Lab to discover

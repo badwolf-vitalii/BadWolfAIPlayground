@@ -362,8 +362,10 @@ supported format and any root-cause interpretation remain provisional.
 `LogSourceContextIndex` scans a locally chosen solution directory
 for elementary C# logging statements, supports simple interpolated
 templates with bounded variable spans, and records relative source
-file paths and line numbers. It intentionally does not require a
-Roslyn dependency, cloud access, cloning or persisted embeddings.
+file paths and line numbers. That legacy index is still a simple
+regex matcher; the new independent `SourceInvestigationIndex` adds
+Roslyn syntax parsing. Neither index requires cloud access, cloning
+or persisted embeddings.
 A matched source location is labeled as a *possible* source, not
 proof of execution; no source code or matched message is transferred
 to the public repository. File size, file count, total bytes,
@@ -382,6 +384,58 @@ the WPF source-selection flow. The ability to understand business
 rules still requires human-authored documentation or explicit
 source-level investigation, not just a message-template match.
 
+
+
+### Roslyn-powered source investigation (offline)
+
+The optional **Source-aware log investigation** panel uses
+`SourceInvestigationIndex` in addition to the existing lightweight
+`LogSourceContextIndex`. The index scans only an explicitly selected
+local C# solution directory, ignores common generated/build folders
+and directory reparse points, and parses syntax without compiling,
+loading assemblies or executing any source code. The independent
+.NET 8 Anomaly library has a `Microsoft.CodeAnalysis.CSharp` 4.14.0
+dependency for syntax extraction. Indexing has bounded scanned
+files/bytes, logging-site and method counts and cancellation support.
+
+Logging invocations are parsed as C# syntax, rather than inferred
+by matching arbitrary source text. Recognized direct logger and
+logging-helper methods with literal/interpolated/structured format
+strings become anchored message patterns. An index entry records
+the specific source line, enclosing method and type, a short snippet,
+enclosing `if`/`catch` expressions and directly named invocations
+within the containing method. **Calls and conditions are static
+observations only**, not an evaluated runtime path.
+
+`SourceInvestigationAnalyzer` builds bounded investigation cases
+from the selected, already-deduplicated log report: top recurring
+error patterns, explicitly named TOM_OP operations and exception
+stack traces. Candidates are ranked by evidence category: an exact
+logging literal, a format/interpolation match, a declared operation
+method name, or an explicit stack-frame line that exists in the
+selected checkout. A name match is never promoted into a proven
+runtime invocation. Multiple matching sources remain visible
+and **ambiguous**; no match remains **unmatched**. The scanner never
+correlates events merely by time proximity or guesses business rules.
+
+`AnomalyViewModel` stores the index in memory only and rebuilds
+source cards on regular reanalysis, Include/Exclude filtering and
+source selection. Source-opening commands call
+`SourceInvestigationIndex.ResolveSourceLocation`, which requires
+the requested file/line to be in the indexed file whitelist, checks
+the canonical full path is beneath the chosen checkout, rejects
+reparse-point files and confirms the file still exists. The original
+log location uses the independent Logs-folder allowlist. Both are
+passed as structured Notepad++ arguments, never concatenated into
+shell commands.
+
+This is deterministic groundwork for a *later* optional local LLM
+explanation feature. No user logs or private C# files are bundled,
+committed, transmitted to a server or shared with Ollama.
+Synthetic engine and real Windows WPF smoke tests cover exact
+and formatted logging sites, method declarations, ambiguous
+literals, unmatched evidence, stack references, source navigation
+and the live investigate-on-selection UI lifecycle.
 
 ### Importing a whole multi-component Logs directory
 
