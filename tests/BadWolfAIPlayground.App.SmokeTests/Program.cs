@@ -387,6 +387,7 @@ internal static class Program
                    anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
                    anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
+                   anomalyView.FindName("AnomalyPatterns") is ItemsControl &&
                    anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
                    anomalyView.FindName("AnomalySkippedFilesExpander") is Expander &&
                    anomalyView.FindName("AnomalySkippedFileList") is ListBox &&
@@ -402,6 +403,11 @@ internal static class Program
             Task demoAnalysis = analyzer.UseDemoAsync();
             PumpUntil(() => demoAnalysis.IsCompleted, TimeSpan.FromSeconds(20));
             demoAnalysis.GetAwaiter().GetResult();
+            Assert(analyzer.PatternCount > 0 &&
+                   analyzer.Patterns.Count > 0 &&
+                   analyzer.PatternSummary.Contains("normalized", StringComparison.Ordinal) &&
+                   !analyzer.OpenPatternCommand.CanExecute(analyzer.Patterns[0]),
+                "Demo grouping must stay local without pretending source file exists.");
             Assert(analyzer.FindingCount >= 2 && analyzer.EventCount >= 200 &&
                    analyzer.Timeline.Count == 36 &&
                    analyzer.Findings.Any(f => f.Kind == "BURST") &&
@@ -466,6 +472,31 @@ internal static class Program
                    analyzer.ExceptionSummary.Contains("not necessarily statistical anomalies",
                        StringComparison.Ordinal),
                 "The independent exception list must not depend on anomaly thresholds.");
+
+            // Repetitions must not consume every visible exception slot.
+            var repeatedException = new StringBuilder();
+            for (int index = 0; index < 25; index++)
+            {
+                repeatedException.AppendLine(
+                    $"2026-10-29 09:00:{index:00} ERROR Printer queue access denied");
+                repeatedException.AppendLine(
+                    "System.Printing.PrintQueueException: Access is denied");
+                repeatedException.AppendLine("   at Example.Printer.Purge()");
+            }
+            Task duplicatedStacks = analyzer.ImportTextAsync(
+                "Repeated synthetic printer failures", repeatedException.ToString());
+            PumpUntil(() => duplicatedStacks.IsCompleted, TimeSpan.FromSeconds(20));
+            duplicatedStacks.GetAwaiter().GetResult();
+            Assert(analyzer.ExceptionCount == 25 &&
+                   analyzer.ExceptionEntries.Count == 1 &&
+                   analyzer.ExceptionEntries[0].Occurrences == 25 &&
+                   analyzer.ExceptionEntries[0].SourceLine > 1 &&
+                   analyzer.ExceptionSummary.Contains(
+                       "1 normalized message/first-line groups", StringComparison.Ordinal) &&
+                   analyzer.Patterns.Any(item => item.Heading.Contains(
+                       "25 occurrences", StringComparison.Ordinal)),
+                "Repeated printer stacks and error patterns must be grouped " +
+                "while retaining original counts and provenance.");
 
             // Structured cancellation must be visible even when every event
             // is INFO and there are no statistical findings.
@@ -553,6 +584,8 @@ internal static class Program
                 folderTask.GetAwaiter().GetResult();
                 Assert(analyzer.SourceFiles.Count == 3 &&
                        analyzer.DuplicateCopies == 12 &&
+                       analyzer.Patterns.Count > 0 &&
+                       analyzer.OpenPatternCommand.CanExecute(analyzer.Patterns[0]) &&
                        analyzer.EventCount == 120 &&
                        analyzer.ProblemCount == 48 &&
                        analyzer.ExceptionCount == 1 &&

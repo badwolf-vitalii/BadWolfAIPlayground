@@ -410,11 +410,60 @@
                 </StackPanel>
             </Border>
 
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="7  Recurring warning / error patterns"
+                               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding PatternSummary}" FontSize="11"
+                               Foreground="#9BC6DA" TextWrapping="Wrap" Margin="0,0,0,11"/>
+                    <ScrollViewer MaxHeight="370" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyPatterns" ItemsSource="{Binding Patterns}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander BorderBrush="#314D68" BorderThickness="1"
+                                              Background="#0C1C30" Foreground="#D3E6F5"
+                                              Margin="0,0,0,7" Padding="7">
+                                        <Expander.Header>
+                                            <TextBlock Text="{Binding Heading}" FontSize="11"
+                                                       FontFamily="Consolas" Foreground="#93CEE9"
+                                                       TextWrapping="Wrap"/>
+                                        </Expander.Header>
+                                        <StackPanel Margin="3,7,3,3">
+                                            <TextBlock Text="{Binding Summary}" FontSize="11"
+                                                       Foreground="#C4D6E5" TextWrapping="Wrap"/>
+                                            <Border Background="#081625" CornerRadius="5"
+                                                    Padding="8" Margin="0,8,0,7">
+                                                <TextBlock Text="{Binding Message}"
+                                                           Foreground="#D6E6F2" FontFamily="Consolas"
+                                                           FontSize="10" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <TextBlock Text="{Binding Location}"
+                                                       Foreground="#87D5EE" FontFamily="Consolas"
+                                                       FontSize="10" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding SourceHint}"
+                                                       Foreground="#A6D8B9" FontSize="10"
+                                                       TextWrapping="Wrap" Margin="0,5,0,8"/>
+                                            <Button Content="Open example in Notepad++"
+                                                    HorizontalAlignment="Left"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding DataContext.OpenPatternCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Open original source line for this example"/>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="7  Findings with source evidence" FontSize="16"
+                    <TextBlock Text="8  Consolidated findings with source evidence" FontSize="16"
                                FontWeight="SemiBold" Margin="0,0,0,8"/>
-                    <TextBlock Text="These are observations and investigation leads, not confirmed diagnoses."
+                    <TextBlock Text="Similar burst windows are grouped by normalized representative evidence. The example may not be the cause. These are investigation leads, not confirmed diagnoses."
                                Style="{StaticResource MutedText}" FontSize="11"
                                TextWrapping="Wrap" Margin="0,0,0,7"/>
                     <WrapPanel Margin="0,0,0,11">
@@ -428,6 +477,7 @@
                                    VerticalAlignment="Center"
                                    TextWrapping="Wrap" Margin="0,0,0,6"/>
                     </WrapPanel>
+                    <ScrollViewer MaxHeight="650" VerticalScrollBarVisibility="Auto">
                     <ItemsControl x:Name="AnomalyFindings" ItemsSource="{Binding Findings}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -478,6 +528,7 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    </ScrollViewer>
                 </StackPanel>
             </Border>
         </StackPanel>
