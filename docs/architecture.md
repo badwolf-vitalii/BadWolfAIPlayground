@@ -389,8 +389,11 @@ source-level investigation, not just a message-template match.
 recursively, including `old` archives, with cancellation and
 explicit count/byte/event caps. It accepts only plain `.log`/
 `.txt`, opens active files with shared read permissions,
-and rejects unreadable/binary/oversized files rather than
-inventing or silently losing events.
+and rejects unreadable or binary inputs. Files exceeding the
+per-file or combined byte budgets are excluded *before reading*,
+with each original relative path, file size and exclusion reason
+preserved in `LogFolderSkippedFile` instead of silently losing events.
+WPF explicitly reports **PARTIAL IMPORT** when there are exclusions.
 
 Every `LogEvent` now stores `SourceFile` (relative to the
 chosen folder) and its physical `LineNumber`. Detection
@@ -539,3 +542,28 @@ A second exact-ID pass resolves missing `session_id` on end records
 from the matching `operation_id` start record when that ID maps to
 exactly one session. This matches the observed TOM_OP wire format
 without ambiguous cross-session merging or timestamp heuristics.
+
+### Safe partial import for high-volume profiler logs
+
+`LogFolderImporter.Import` first enumerates up to 512 eligible
+extensions with size metadata. Files over 16 MiB are never read;
+they are added to `SkippedFiles`. If total eligible file sizes
+exceed 256 MiB, smaller files are selected within that budget in
+deterministic size/path order, then actually read in original
+path order. Existing UTF-8/UTF-16 decoding, per-file event and
+combined event limits, cancellation and exact NLog mirror
+deduplication still apply to the selected contents.
+
+If every file is over the limit, the import fails rather than
+presenting invented coverage. Likewise, genuinely invalid encoded
+content still fails rather than silently replacing characters.
+A successful partial import contains a separate, visible
+`LogFolderImportResult.SkippedFiles` list and permanently
+visible warning until another valid file selection. Skipped
+files are absent from the import's selectable file list,
+Notepad++ navigation and all event-derived analytics.
+
+Engine and WPF smoke tests use sparse synthetic oversized
+profiler files and a valid small operation trace, verifying
+that the latter survives, the omissions are shown explicitly,
+and failed subsequent imports preserve the prior valid result.

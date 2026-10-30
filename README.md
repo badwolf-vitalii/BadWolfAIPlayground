@@ -419,12 +419,20 @@ copies; aggregate counts exclude these exact cross-file copies.
 Folder import is **offline, cancellable and non-persistent**:
 active log files can be opened with shared read access; nothing is
 uploaded, embedded or committed, and absolute folder paths are not
-saved. Import is all-or-nothing: errors and cancellation preserve
-the last valid result.
+saved. Parsing errors and cancellation still preserve the last valid result.
+Size-limit exclusions are different: they produce an explicitly
+labelled partial result instead of letting one oversized profiler
+prevent analysis of all other logs. Skipped files contribute no
+evidence to statistics, findings or operation timelines.
 
-Safety bounds are **512 files**, **16 MiB per file**, **256 MiB
-combined**, and **500,000 distinct events**. Oversized sets yield
-a clear error rather than silently truncated findings. UTF-8 and
+Safety bounds are **512 discovered files**, **16 MiB per file**, **256 MiB
+combined**, and **500,000 distinct events**. Oversized individual files
+are **excluded from analysis with a prominent SKIPPED FILES list**.
+If the total byte budget is exceeded, the importer selects a
+deterministic subset of smaller eligible files and identifies every
+excluded file. Results are explicitly marked **PARTIAL IMPORT**,
+never presented as complete coverage. A folder with no usable files
+fails clearly. UTF-8 and
 BOM-marked UTF-16 are supported; use single-file import or
 convert a copy for legacy code pages. Binary data, ZIP archives
 and unsupported file types are not processed. The detector's
@@ -548,3 +556,20 @@ record. The analyzer resolves the missing session only through a
 matching, unique `operation_id` from an explicitly session-scoped
 start/step event. End records with no unique match are kept separate;
 time proximity is never treated as proof.
+
+#### Oversized profiler files during Logs-folder import
+
+An individual `WebClientProfiler_*.log` can exceed the safe 16 MiB
+per-file memory limit while nearby `Operations_*.log` and component
+logs remain small. **Select Logs folder** now analyzes every
+eligible file it can fit within the established budgets rather than
+aborting the entire import because of that profiler.
+
+If files were excluded, a prominent expanded **SKIPPED FILES —
+NOT ANALYZED** panel lists their relative filenames, original sizes
+and exact reasons. The import is labelled **PARTIAL IMPORT**.
+Skipped files contribute *zero* events to the charts, findings,
+exception list and Operation lifecycle timeline, and cannot be
+re-enabled through Include/Exclude until a smaller copy is imported.
+No input is silently truncated or sampled, no files are modified,
+and no work logs are uploaded.
