@@ -149,8 +149,7 @@ public static partial class SourceInvestigationAnalyzer
                 $"{item.Severity}: {item.Occurrences:N0} occurrences",
                 item.SampleMessage, item.SampleSourceFile, item.SampleLine,
                 candidates, "A matching literal/template is a possible " +
-                    "logging statement, not the incident's cause.", id, linked)
-            { ObservedAt = item.FirstSeen });
+                    "logging statement, not the incident's cause.", id, linked) with { ObservedAt = item.FirstSeen });
         }
 
         foreach (OperationTimelineGroup group in operations.Groups.Take(MaxOperationCases))
@@ -177,7 +176,7 @@ public static partial class SourceInvestigationAnalyzer
                     string.Join(", ", named.Select(e => e.Operation)),
                 group.Outcome, original.SourceFile, original.SourceLine, candidates,
                 "Exact method-name equality does not prove a runtime call.",
-                operationId, linked) { ObservedAt = original.Timestamp });
+                operationId, linked) with { ObservedAt = original.Timestamp });
         }
 
         // Exceptions without C# frames can still have a separate DEBUG record
@@ -197,8 +196,7 @@ public static partial class SourceInvestigationAnalyzer
                 finding.Evidence, finding.SourceFile, finding.SourceLine,
                 candidates, "A stack frame may locate a throwing function, " +
                     "while a DEBUG caller location identifies where an " +
-                    "exception was logged; neither alone proves cause.", id, linked)
-            { ObservedAt = finding.Timestamp });
+                    "exception was logged; neither alone proves cause.", id, linked) with { ObservedAt = finding.Timestamp });
         }
 
         return new SourceInvestigationReport(cases,
