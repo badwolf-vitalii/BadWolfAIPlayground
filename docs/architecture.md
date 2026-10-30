@@ -437,6 +437,44 @@ and formatted logging sites, method declarations, ambiguous
 literals, unmatched evidence, stack references, source navigation
 and the live investigate-on-selection UI lifecycle.
 
+
+### Cross-component exception correlation (explicit operation_id only)
+
+`SourceInvestigationAnalyzer` gathers explicit `operation_id` values
+from the bounded, currently visible error pattern, stack/finding
+and TOM_OP evidence. It scans the **selected, deduplicated**
+`AnomalyReport.Source.Events` once for exact matching IDs, recording
+the total matching event count and bounded per-ID samples and caller
+DEBUG messages. Correlation does not use timestamps, message
+similarity, session guessing or files omitted by import/Include/Exclude.
+An App/WebClient mirrored NLog error is still counted once according
+to existing mirror-deduplication rules. The WPF section lists
+related log file/line references and opens them only through
+`AnomalyViewModel.ResolveLogLocation`.
+
+`SourceInvestigationIndex.FindLoggedCallerLocations` parses
+logger-emitted Windows/Unix `<absolute .cs path>: line <n>` hints,
+matching **only full relative source-path suffixes** from files
+explicitly indexed in the selected C# tree; the given physical line
+must exist. A split `.xaml.cs` path fragment is repaired only when
+the resulting normalized complete suffix independently matches an
+indexed file. Method names can be shown only if a Roslyn method
+declaration **contains** that line. The original logged absolute
+path is never accepted as a file-opening target. The candidate is
+clearly labelled a verified **logger-reported location**, distinct
+from a stack-frame location or a mere static logging template.
+
+A shared ID is evidence of **correlation**, not proof of causation;
+a C# logger/catch location is not necessarily where a socket,
+HTTP, SSL or transport error originated. The UI keeps this warning
+and the original source references visible. Regression tests use
+synthetic App/WebClient messages with the same operation ID,
+an unrelated same-timestamp event with a different ID, an archived
+checkout path and a split XAML filename. They verify exact C# line
+resolution, bounded evidence, mirror deduplication, and reanalysis
+after disabling/re-enabling WebClient. No customer source or logs are
+checked in.
+
 ### Importing a whole multi-component Logs directory
 
 `LogFolderImporter.Import` discovers supported `.log` and `.txt` files

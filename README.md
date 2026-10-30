@@ -477,6 +477,48 @@ This stage intentionally does **not** ask Ollama to interpret evidence.
 That will be an optional later step once reliable, inspectable source
 references are available.
 
+
+#### Cross-log investigation by operation_id
+
+When an error in `App_*.log` contains an explicit `operation_id`,
+the source-aware analyzer searches **only the currently included,
+deduplicated imported logs** for records with that **exact identifier**.
+It can therefore display a linked DEBUG caller entry in
+`WebClient_*.log`, even when the two files contain different message
+text. Timestamp proximity is **never** sufficient to join records.
+
+For example, an `App` `IOException` containing
+`operation_id=41d14983730d4ac6b1c491fc232b77de` may correspond to
+a `WebClient` DEBUG entry reporting
+`src/AFCS.TOM.UCUILib/Views/UCCardInfoView.xaml.cs: line 1840`.
+The panel shows the shared ID, original log filenames/physical lines,
+severity, a bounded excerpt and the number of included matching events.
+Each related line has its own **Open linked log line** navigation. The
+source candidate opens the verified C# file/line from the selected
+checkout (not the arbitrary absolute path embedded in a log).
+
+Logger-reported C# locations are matched against the **full relative
+path suffix** of files indexed from the explicitly selected checkout.
+An observed malformed `UCCardInfoView\\.xaml.cs` segment is normalized
+to `UCCardInfoView.xaml.cs` **only if** the resulting suffix exists
+among indexed C# files at the given physical line. A filename-only
+coincidence, unindexed checkout, out-of-range line, or unknown ID never
+creates a source navigation link. Source paths and evidence from
+disabled/skipped log files cannot appear in refreshed investigations.
+
+**Interpretation:** same `operation_id` means the logger connected
+these records to the same instrumented operation; a reported C#
+line identifies a place where an exception was **logged**, not
+necessarily the network operation that failed. For socket/TLS/HTTP
+`IOException` cases, the program does not guess whether cancellation,
+client disconnect, timeout or some other cause initiated the failure.
+Use original stack frames, code and runtime context for further diagnosis.
+
+The correlation scan is single-pass over retained events and keeps
+only bounded examples and caller locations for the visible
+investigation IDs. It cannot join files missing from the current
+report and never uploads or persists code or logs.
+
 ### Analyze a complete Logs folder (v0.3.0)
 
 Select **Logs folder** inside Anomaly Detection Lab to discover
