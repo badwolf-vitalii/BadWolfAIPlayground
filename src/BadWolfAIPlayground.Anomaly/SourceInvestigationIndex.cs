@@ -16,6 +16,7 @@ public enum SourceEvidenceKind
     ExactLoggingLiteral,
     FormattedLoggingTemplate,
     ExplicitStackFrame,
+    LoggedCallerLocation,
     OperationMethodName
 }
 
@@ -31,6 +32,8 @@ public sealed record SourceInvestigationCandidate(
         SourceEvidenceKind.ExactLoggingLiteral => "Exact logging literal",
         SourceEvidenceKind.FormattedLoggingTemplate => "Formatted logging template",
         SourceEvidenceKind.ExplicitStackFrame => "Stack frame location (runtime evidence)",
+        SourceEvidenceKind.LoggedCallerLocation =>
+            "Logger-reported C# file/line (verified against checkout)",
         _ => "Method name only (static hint)"
     };
 }
@@ -54,6 +57,7 @@ public sealed class SourceInvestigationIndex
     private readonly IReadOnlyList<LoggingSite> _sites;
     private readonly IReadOnlyList<SourceInvestigationCandidate> _methods;
     private readonly Dictionary<string, FileRecord> _files;
+    private readonly IReadOnlyList<MethodRange> _ranges;
     private readonly Dictionary<string, SourceInvestigationCandidate[]> _methodsByName;
 
     public int FilesScanned => _files.Count;
@@ -64,6 +68,8 @@ public sealed class SourceInvestigationIndex
         SourceInvestigationCandidate Candidate, Regex Matcher,
         int LiteralLength, string FixedPrefix, string FixedSuffix);
     private sealed record FileRecord(string RelativePath, int LineCount, long Bytes);
+    private sealed record MethodRange(
+        string RelativePath, int FirstLine, int LastLine, string Type, string Method);
 
     private static readonly HashSet<string> LoggingNames = new(
         StringComparer.OrdinalIgnoreCase)
@@ -81,16 +87,23 @@ public sealed class SourceInvestigationIndex
         @"\bin\s+(?<path>(?:[a-zA-Z]:\\|/)?[^\r\n:]+?\.cs)\s*:\s*line\s+(?<line>\d+)",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
+    // Logger helper emits "C:\\checkout\\src\\View.xaml.cs: line 1840".
+    // This may be on a separate DEBUG line from the exception it describes.
+    private static readonly Regex LoggerCaller = new(
+        @"(?<path>(?:[A-Za-z]:[\\/]|/)[^|\r\n]*?\.cs)\s*:\s*line\s*(?<line>\d{1,7})(?=$|\s|\|)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
 
     private SourceInvestigationIndex(
         string root, IReadOnlyList<LoggingSite> sites,
         IReadOnlyList<SourceInvestigationCandidate> methods,
-        Dictionary<string, FileRecord> files)
+        Dictionary<string, FileRecord> files, IReadOnlyList<MethodRange> ranges)
     {
         _root = root;
         _sites = sites;
         _methods = methods;
         _files = files;
+        _ranges = ranges;
         _methodsByName = methods.GroupBy(method => method.MethodName,
             StringComparer.Ordinal).ToDictionary(group => group.Key,
             group => group.OrderBy(m => m.RelativePath, StringComparer.OrdinalIgnoreCase)
@@ -106,6 +119,7 @@ public sealed class SourceInvestigationIndex
         string root = Path.GetFullPath(rootFolder);
         var sites = new List<LoggingSite>();
         var methods = new List<SourceInvestigationCandidate>();
+        var ranges = new List<MethodRange>();
         var files = new Dictionary<string, FileRecord>(StringComparer.OrdinalIgnoreCase);
         long usedBytes = 0;
         var options = new EnumerationOptions
@@ -153,8 +167,13 @@ public sealed class SourceInvestigationIndex
                 string method = GetMethodName(node);
                 if (string.IsNullOrEmpty(method))
                     continue;
-                methods.Add(CreateCandidate(node, node, relative,
-                    SourceEvidenceKind.OperationMethodName, cancellationToken));
+                SourceInvestigationCandidate methodSite =
+                    CreateCandidate(node, node, relative,
+                        SourceEvidenceKind.OperationMethodName, cancellationToken);
+                methods.Add(methodSite);
+                int lastLine = node.GetLocation().GetLineSpan().EndLinePosition.Line + 1;
+                ranges.Add(new MethodRange(relative, methodSite.LineNumber,
+                    lastLine, methodSite.TypeName, methodSite.MethodName));
             }
 
             foreach (InvocationExpressionSyntax invocation in syntax.DescendantNodes()
@@ -188,7 +207,7 @@ public sealed class SourceInvestigationIndex
             }
         }
 
-        return new SourceInvestigationIndex(root, sites, methods, files);
+        return new SourceInvestigationIndex(root, sites, methods, files, ranges);
     }
 
     public IReadOnlyList<SourceInvestigationCandidate> FindLogSites(
@@ -234,6 +253,75 @@ public sealed class SourceInvestigationIndex
         return _methodsByName.TryGetValue(operationName, out var found)
             ? found.Take(Math.Clamp(limit, 1, MaxCandidates)).ToArray()
             : [];
+    }
+
+
+    /// <summary>
+    /// Resolve an explicit logger-reported C# path/line only against files
+    /// indexed from the selected local checkout. The machine/checkout root
+    /// may differ from the one that produced the log; the complete relative
+    /// source path must match as a suffix. Never open an arbitrary log path.
+    /// </summary>
+    public IReadOnlyList<SourceInvestigationCandidate> FindLoggedCallerLocations(
+        string message, int limit = MaxCandidates,
+        CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        var matches = new List<SourceInvestigationCandidate>();
+        foreach (Match match in LoggerCaller.Matches(message).Cast<Match>())
+        {
+            token.ThrowIfCancellationRequested();
+            if (!int.TryParse(match.Groups["line"].Value,
+                    NumberStyles.None, CultureInfo.InvariantCulture, out int line) ||
+                line < 1)
+                continue;
+
+            string original = match.Groups["path"].Value.Replace('\\', '/');
+            string normalized = original;
+            // Some logger formatting splits "UCCardInfoView.xaml.cs" into
+            // "UCCardInfoView/.xaml.cs". Repair ONLY if an indexed relative
+            // path independently confirms the resulting full suffix.
+            bool splitXaml = normalized.EndsWith("/.xaml.cs",
+                StringComparison.OrdinalIgnoreCase);
+            if (splitXaml)
+                normalized = normalized[..(normalized.Length - "/.xaml.cs".Length)] +
+                    ".xaml.cs";
+
+            foreach (FileRecord file in _files.Values.OrderBy(
+                         value => value.RelativePath, StringComparer.OrdinalIgnoreCase))
+            {
+                token.ThrowIfCancellationRequested();
+                string relative = file.RelativePath.Replace('\\', '/');
+                if (!normalized.EndsWith("/" + relative,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    line > file.LineCount)
+                    continue;
+
+                MethodRange? method = _ranges
+                    .Where(range => string.Equals(range.RelativePath,
+                        file.RelativePath, StringComparison.OrdinalIgnoreCase) &&
+                        line >= range.FirstLine && line <= range.LastLine)
+                    .OrderBy(range => range.LastLine - range.FirstLine)
+                    .FirstOrDefault();
+
+                matches.Add(new SourceInvestigationCandidate(
+                    file.RelativePath, line, method?.Type ?? "",
+                    method?.Method ?? "<logger caller>",
+                    SourceEvidenceKind.LoggedCallerLocation,
+                    ReadLineExcerpt(file.RelativePath, line),
+                    splitXaml
+                        ? "Logger path contained a split .xaml.cs segment; " +
+                          "reconstructed suffix matches this indexed file. " +
+                          "Verify the deployed revision and actual source line."
+                        : "Logger reported this source file and line; its " +
+                          "relative path matches the selected checkout. " +
+                          "Verify the deployed revision.",
+                    "A logging/catch site is not proof of the network failure's cause."));
+                if (matches.Count >= Math.Clamp(limit, 1, MaxCandidates))
+                    return matches;
+            }
+        }
+        return matches;
     }
 
     /// <summary>
