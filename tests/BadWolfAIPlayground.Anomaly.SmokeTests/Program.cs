@@ -544,7 +544,7 @@ static void FolderEventBudget()
                partial.Files.Count == 3 &&
                partial.SkippedFiles.Count == 2 &&
                partial.SkippedFiles.All(f => f.Reason.Contains(
-                   "raw-event analysis budget", StringComparison.Ordinal)) &&
+                   "retained-event budget", StringComparison.Ordinal)) &&
                partial.Files.Any(f => f.RelativePath == "Operations_2026-10-30(5).log") &&
                partial.Files.Any(f => f.RelativePath == "App_2026-10-30.log") &&
                partial.Files.Any(f => f.RelativePath.EndsWith("B_2026-10-29.log",
@@ -843,8 +843,8 @@ static void StandaloneCardRead()
            cardRead.TransactionId.Length == 0 &&
            cardRead.FlowIds.Single() == flow &&
            cardRead.Outcome == "Card reading/checks completed" &&
-           cardRead.Explanation.Contains("no return value", StringComparison.Ordinal) &&
-           cardRead.Explanation.Contains("No VTS transaction is required",
+           cardRead.Explanation.Contains("not return a value", StringComparison.Ordinal) &&
+           cardRead.Explanation.Contains("no VTS transaction is required",
                StringComparison.Ordinal) &&
            !cardRead.Events[0].Description.Contains("result=unknown",
                StringComparison.Ordinal) &&

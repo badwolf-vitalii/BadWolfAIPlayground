@@ -191,10 +191,9 @@ public static class OperationTimelineAnalyzer
                   " ms."
                 : "";
             return ("Card reading/checks completed",
-                "CardInfoReadAndChecks completed. The void handler has no return " +
-                "value: result=unknown is an instrumentation placeholder, not " +
-                "an error or an unresolved card-read result. " +
-                "No VTS transaction is required." + timing);
+                "The standalone card-read/check handler completed. It does " +
+                "not return a value, and no VTS transaction is required." +
+                timing);
         }
 
         bool HasEnd(string operation, string result) => events.Any(e =>

@@ -538,7 +538,7 @@ internal static class Program
                    analyzer.OperationGroups.Single().Outcome ==
                        "Card reading/checks completed" &&
                    analyzer.OperationGroups.Single().Explanation.Contains(
-                       "no return value", StringComparison.Ordinal) &&
+                       "not return a value", StringComparison.Ordinal) &&
                    !analyzer.OperationGroups.Single().Events.Single().Description.Contains(
                        "result=unknown", StringComparison.Ordinal) &&
                    analyzer.OperationGroups.Single().Events.Single().Description.Contains(
