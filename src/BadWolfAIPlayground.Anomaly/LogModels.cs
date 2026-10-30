@@ -32,7 +32,22 @@ public sealed record AnomalyFinding(
     public IReadOnlyList<string> AlsoInFiles { get; init; } = [];
     public string Continuation { get; init; } = "";
     public bool ContinuationTruncated { get; init; }
+
+    // Number and bounds of statistically flagged buckets grouped by
+    // normalized representative evidence; not repeated-message counts.
+    public int AffectedWindows { get; init; } = 1;
+    public DateTimeOffset FirstWindow { get; init; }
+    public DateTimeOffset LastWindow { get; init; }
 }
+
+/// <summary>
+/// Approximate recurring message pattern in already deduplicated WARN/ERROR/FATAL
+/// entries. The sample is traceable evidence, not an inferred root cause.
+/// </summary>
+public sealed record LogMessagePattern(
+    LogSeverity Severity, string SampleMessage, int Occurrences,
+    DateTimeOffset FirstSeen, DateTimeOffset LastSeen,
+    int SourceFileCount, string SampleSourceFile, int SampleLine);
 
 public sealed record AnomalyReport(
     LogParseResult Source, IReadOnlyList<LogTimeBucket> Buckets,
@@ -41,4 +56,7 @@ public sealed record AnomalyReport(
     int TotalProblems)
 {
     public int PeakProblemCount => Buckets.Count == 0 ? 0 : Buckets.Max(b => b.ProblemEvents);
+    public int BurstWindowCount { get; init; }
+    public int TotalMessagePatterns { get; init; }
+    public IReadOnlyList<LogMessagePattern> TopMessagePatterns { get; init; } = [];
 }

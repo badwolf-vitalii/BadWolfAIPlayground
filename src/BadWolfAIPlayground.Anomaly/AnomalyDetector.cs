@@ -12,6 +12,8 @@ public static partial class AnomalyDetector
     public const int MaxTimelineBuckets = 720;
     public const int MinimumBaselineBuckets = 8;
     private const int MaxFindings = 24;
+    private const int MaxBurstsPerReport = 12;
+    public const int MaxMessagePatterns = 12;
 
     public static AnomalyReport Analyze(
         LogParseResult parsed, AnomalyOptions? options = null,
@@ -149,18 +151,132 @@ public static partial class AnomalyDetector
             }
         }
 
-        // Keep results usable even for noisy logs; deterministic ordering.
-        AnomalyFinding[] prioritized = findings
-            .OrderBy(f => f.Kind == AnomalyKind.ErrorBurst ? 0 : 1)
-            .ThenByDescending(f => f.Kind == AnomalyKind.ErrorBurst
-                ? f.Observed / Math.Max(1, f.Threshold)
-                : 1.0 / f.Observed)
-            .ThenBy(f => f.Timestamp)
+        // Each busy printer bucket previously occupied another of the 24
+        // finding slots. Collapse bursts with the same *representative*
+        // normalized message without pretending this proves the root cause
+        // or counts exact occurrences of that message.
+        AnomalyFinding[] burstGroups = findings
+            .Where(item => item.Kind == AnomalyKind.ErrorBurst)
+            .GroupBy(item => NormalizePattern(item.Evidence), StringComparer.Ordinal)
+            .Select(group =>
+            {
+                AnomalyFinding[] windows = group.ToArray();
+                AnomalyFinding peak = windows.OrderByDescending(item => item.Observed)
+                    .ThenBy(item => item.Timestamp).First();
+                if (windows.Length == 1)
+                    return peak;
+
+                DateTimeOffset firstWindow = windows.Min(item => item.Timestamp);
+                DateTimeOffset lastWindow = windows.Max(item => item.Timestamp);
+                long problemEventsInWindows = windows.Sum(item => (long)item.Observed);
+                return peak with
+                {
+                    Title = $"Repeated warning/error bursts ({windows.Length} windows)",
+                    Explanation = $"{windows.Length} flagged time windows had a " +
+                        "similar normalized representative log message, between " +
+                        $"{firstWindow:yyyy-MM-dd HH:mm} and " +
+                        $"{lastWindow:yyyy-MM-dd HH:mm}. Peak: {peak.Observed:N0} " +
+                        $"WARN/ERROR/FATAL events in a {minutes}-minute bucket. " +
+                        $"{problemEventsInWindows:N0} total problem events occurred " +
+                        "across these flagged buckets, NOT necessarily occurrences " +
+                        "of the sample message. This is grouping, not a diagnosis.",
+                    AffectedWindows = windows.Length,
+                    FirstWindow = firstWindow,
+                    LastWindow = lastWindow
+                };
+            })
+            .OrderByDescending(item => item.AffectedWindows)
+            .ThenByDescending(item => item.Observed)
+            .ThenBy(item => item.Timestamp)
+            .ToArray();
+
+        AnomalyFinding[] rare = findings
+            .Where(item => item.Kind == AnomalyKind.RareErrorPattern)
+            .OrderBy(item => item.Observed)
+            .ThenByDescending(item => item.Timestamp)
+            .ToArray();
+
+        // Reserve room for rare, distinct errors even when one type of
+        // device log floods the statistical burst detector.
+        AnomalyFinding[] prioritized = burstGroups.Take(MaxBurstsPerReport)
+            .Concat(rare.Take(MaxFindings - MaxBurstsPerReport))
+            .Concat(burstGroups.Skip(MaxBurstsPerReport))
+            .Concat(rare.Skip(MaxFindings - MaxBurstsPerReport))
             .Take(MaxFindings)
             .ToArray();
 
+        var patterns = new Dictionary<(LogSeverity Severity, string Template),
+            MessagePatternAccumulator>();
+        for (int i = 0; i < events.Length; i++)
+        {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
+            LogEvent entry = events[i];
+            if (entry.Severity < LogSeverity.Warning)
+                continue;
+
+            string normalized = NormalizePattern(entry.Message);
+            if (normalized.Length == 0)
+                continue;
+            var key = (entry.Severity, normalized);
+            if (!patterns.TryGetValue(key, out MessagePatternAccumulator? item))
+                patterns[key] = item = new MessagePatternAccumulator();
+            item.Add(entry);
+        }
+
+        LogMessagePattern[] topPatterns = patterns.Values
+            .OrderByDescending(item => item.Occurrences)
+            .ThenByDescending(item => item.Severity)
+            .ThenBy(item => item.FirstSeen)
+            .Take(MaxMessagePatterns)
+            .Select(item => item.ToPattern())
+            .ToArray();
+
         return new AnomalyReport(parsed, timeline, prioritized, minutes, typical,
-            mad, threshold, hasHistory, totalProblems);
+            mad, threshold, hasHistory, totalProblems)
+        {
+            BurstWindowCount = timeline.Count(bucket => bucket.IsBurst),
+            TotalMessagePatterns = patterns.Count,
+            TopMessagePatterns = topPatterns
+        };
+    }
+
+    private sealed class MessagePatternAccumulator
+    {
+        private readonly HashSet<string> _sources = new(StringComparer.OrdinalIgnoreCase);
+        private LogEvent? _sample;
+        public LogSeverity Severity { get; private set; }
+        public int Occurrences { get; private set; }
+        public DateTimeOffset FirstSeen { get; private set; }
+        public DateTimeOffset LastSeen { get; private set; }
+
+        public void Add(LogEvent entry)
+        {
+            if (Occurrences == 0)
+            {
+                Severity = entry.Severity;
+                FirstSeen = entry.Timestamp;
+            }
+            LastSeen = entry.Timestamp;
+            Occurrences++;
+            // Show a recent, traceable example. Prefer stack evidence if
+            // present, but never discard its actual source-file location.
+            if (_sample is null || entry.Continuation.Length > 0 ||
+                _sample.Continuation.Length == 0)
+                _sample = entry;
+            if (!string.IsNullOrWhiteSpace(entry.SourceFile))
+                _sources.Add(entry.SourceFile);
+        }
+
+        public LogMessagePattern ToPattern()
+        {
+            LogEvent sample = _sample ??
+                throw new InvalidOperationException("Empty message pattern.");
+            return new LogMessagePattern(
+                Severity, sample.Message, Occurrences, FirstSeen, LastSeen,
+                _sources.Count, sample.SourceFile, sample.LineNumber);
+        }
     }
 
     public static string NormalizePattern(string value)

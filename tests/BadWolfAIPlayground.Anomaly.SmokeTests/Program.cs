@@ -9,6 +9,8 @@ var checks = new (string Name, Action Execute)[]
     ("Insufficient history stays explicit", ShortLog),
     ("Cancellation and invalid options", FailSafely),
     ("Sensitivity controls actual threshold", Sensitivity),
+    ("Repeated burst windows collapse without hiding rare errors", GroupedBursts),
+    ("Recurring message patterns count real events and preserve evidence", RecurringPatterns),
     ("Optional offline C# log-template source context", SourceContext),
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
@@ -138,6 +140,92 @@ static void Sensitivity()
     Ensure(high.BurstThreshold > low.BurstThreshold &&
            low.Findings.Any(f => f.Kind == AnomalyKind.ErrorBurst),
         "Sensitivity must affect the actual threshold.");
+}
+
+
+static void GroupedBursts()
+{
+    DateTimeOffset start = new(2026, 10, 20, 10, 0, 0, TimeSpan.Zero);
+    var entries = new List<LogEvent>();
+    for (int minute = 0; minute < 80; minute++)
+    {
+        // A stable, non-error baseline with several high-error windows
+        // separated in time. Different dates and repeated device messages
+        // should not create one investigation card per bucket.
+        entries.Add(new LogEvent(start.AddMinutes(minute), LogSeverity.Info,
+            "Health ping", minute + 1) { SourceFile = "App.log" });
+        if (minute is 20 or 30 or 40 or 50 or 60)
+        {
+            for (int j = 0; j < 18; j++)
+            {
+                entries.Add(new LogEvent(start.AddMinutes(minute).AddMilliseconds(j),
+                    LogSeverity.Error, "Purge() FAILED", 1000 + minute * 20 + j)
+                {
+                    SourceFile = "CardPrinter.log"
+                });
+            }
+        }
+    }
+
+    // One distinct, unusual error should survive even when a device floods
+    // several independent anomaly windows.
+    for (int i = 0; i < 25; i++)
+        entries.Add(new LogEvent(start.AddMinutes(70).AddSeconds(i),
+            LogSeverity.Error, "Reader busy " + i, 9000 + i)
+        { SourceFile = "Reader.log" });
+    entries.Add(new LogEvent(start.AddMinutes(71), LogSeverity.Error,
+        "Unique disk controller failure", 9999)
+    { SourceFile = "App.log" });
+
+    var parsed = new LogParseResult(entries, entries.Count, 0, 0);
+    AnomalyReport report = AnomalyDetector.Analyze(parsed);
+    AnomalyFinding[] purge = report.Findings.Where(f =>
+        f.Kind == AnomalyKind.ErrorBurst &&
+        f.Evidence == "Purge() FAILED").ToArray();
+    Ensure(report.BurstWindowCount >= 5 && purge.Length == 1 &&
+           purge[0].AffectedWindows == 5 &&
+           purge[0].FirstWindow < purge[0].LastWindow &&
+           purge[0].Explanation.Contains("NOT necessarily occurrences",
+               StringComparison.Ordinal) &&
+           report.Findings.Any(f => f.Kind == AnomalyKind.RareErrorPattern &&
+               f.Evidence.Contains("Unique disk controller failure",
+                   StringComparison.Ordinal)),
+        "Repeated bursts must be grouped without counting source messages " +
+        "as individual incidents or suppressing separate rare errors.");
+}
+
+static void RecurringPatterns()
+{
+    DateTimeOffset start = new(2026, 10, 30, 12, 0, 0, TimeSpan.Zero);
+    var entries = new List<LogEvent>();
+    for (int i = 0; i < 19; i++)
+        entries.Add(new LogEvent(start.AddSeconds(i), LogSeverity.Error,
+            "Printer 100" + i + " Purge() FAILED", 10 + i)
+        { SourceFile = i % 2 == 0 ? "App.log" : "CardPrinter.log" });
+    entries.Add(new LogEvent(start.AddMinutes(1), LogSeverity.Error,
+        "PrintQueueException: Access is denied", 91)
+    { SourceFile = "CardPrinter.log" });
+    entries.Add(new LogEvent(start.AddMinutes(2), LogSeverity.Info,
+        "Printer 1001 Purge() FAILED", 92)
+    { SourceFile = "App.log" });
+
+    AnomalyReport report = AnomalyDetector.Analyze(
+        new LogParseResult(entries, entries.Count, 0, 0));
+    LogMessagePattern purge = report.TopMessagePatterns.Single(p =>
+        p.SampleMessage.Contains("Purge() FAILED", StringComparison.Ordinal));
+    Ensure(purge.Occurrences == 19 &&
+           purge.Severity == LogSeverity.Error &&
+           purge.SourceFileCount == 2 &&
+           purge.FirstSeen == start &&
+           purge.LastSeen == start.AddSeconds(18) &&
+           purge.SampleLine > 0 &&
+           (purge.SampleSourceFile == "App.log" ||
+            purge.SampleSourceFile == "CardPrinter.log") &&
+           report.TotalMessagePatterns == 2 &&
+           report.TopMessagePatterns.Any(p =>
+               p.SampleMessage.Contains("Access is denied", StringComparison.Ordinal)),
+        "The frequency chart must count WARN/ERROR/FATAL entries, " +
+        "not benign INFO rows, and preserve original trace locations.");
 }
 
 static void SourceContext()
