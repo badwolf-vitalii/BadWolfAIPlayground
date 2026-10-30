@@ -11,12 +11,9 @@ namespace BadWolfAIPlayground.Anomaly;
 /// </summary>
 public static partial class LogFolderImporter
 {
-    // Maximum files actually parsed in one bounded report, not the scan limit.
-    public const int MaxFiles = 512;
+    // File bytes are streamed; only retained event counts are bounded.
     public const int MaxDiscoveredFiles = 50_000;
-    public const long MaxFileBytes = 16L * 1024 * 1024;
-    public const long MaxTotalBytes = 256L * 1024 * 1024;
-    public const int MaxCombinedEvents = 500_000;
+    public const int MaxCombinedEvents = 1_000_000;
     public const int MaxRawEvents = 1_000_000;
 
     public static LogFolderImportResult Import(
@@ -81,65 +78,12 @@ public static partial class LogFolderImporter
                 "No .log or .txt files found in this folder or its subfolders.");
         }
 
-        // A high-volume profiler should not hide every other operation log.
-        // Exclude only by a known resource limit and always report its path.
-        var eligible = new List<(string Path, string Relative, long Size, DateTime LastWriteUtc)>();
-        foreach (var entry in candidates)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (entry.Size > MaxFileBytes)
-            {
-                skippedFiles.Add(new LogFolderSkippedFile(
-                    entry.Relative, entry.Size,
-                    $"Exceeds the {MaxFileBytes / 1048576} MiB per-file safety limit."));
-            }
-            else
-            {
-                eligible.Add(entry);
-            }
-        }
-
-        // Prefer explicit operation traces, then current root/component logs,
-        // then archived old/ logs; favor recently modified files within
-        // each class. The selection never relies on enumeration order.
-        // Keep the original byte and file-count safety limits, but report
-        // excluded files instead of failing the entire Logs folder.
-        long totalBytes = 0;
-        var entries = new List<(string Path, string Relative, long Size, DateTime LastWriteUtc)>();
-        foreach (var entry in eligible.OrderBy(e => SelectionPriority(e.Relative))
-                     .ThenByDescending(e => e.LastWriteUtc)
-                     .ThenBy(e => e.Size)
-                     .ThenBy(e => e.Relative, StringComparer.OrdinalIgnoreCase))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (entries.Count == MaxFiles)
-            {
-                skippedFiles.Add(new LogFolderSkippedFile(
-                    entry.Relative, entry.Size,
-                    $"Excluded by the {MaxFiles} analyzed-file limit; " +
-                    "higher-priority or more recent logs were selected."));
-            }
-            else if (entry.Size > MaxTotalBytes - totalBytes)
-            {
-                skippedFiles.Add(new LogFolderSkippedFile(
-                    entry.Relative, entry.Size,
-                    $"Excluded to stay within the {MaxTotalBytes / 1048576} MiB " +
-                    "combined import budget."));
-            }
-            else
-            {
-                entries.Add(entry);
-                totalBytes += entry.Size;
-            }
-        }
-
-        if (entries.Count == 0)
-        {
-            throw new InvalidDataException(
-                $"No .log/.txt files fit the {MaxFileBytes / 1048576} MiB per-file " +
-                $"and {MaxTotalBytes / 1048576} MiB total limits. " +
-                $"{skippedFiles.Count} files could not be analyzed.");
-        }
+        // No arbitrary byte or 512-file cap: rank all discovered logs and
+        // incrementally parse complete sources within the event memory budget.
+        var entries = candidates.OrderBy(item => SelectionPriority(item.Relative))
+            .ThenByDescending(item => item.LastWriteUtc)
+            .ThenBy(item => item.Relative, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
         // Parse in priority order: sorting by path here would exhaust the
         // event budget on old components before reaching Operations logs.
@@ -147,30 +91,31 @@ public static partial class LogFolderImporter
         var accepted = new List<(LogFolderFile File, IReadOnlyList<LogEvent> Events)>();
         int admittedEvents = 0;
         long analyzedBytes = 0;
-        for (int i = 0; i < entries.Count; i++)
+        for (int i = 0; i < entries.Length; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             (string full, string relative, long size, _) = entries[i];
             if (admittedEvents >= eventBudget)
             {
                 skippedFiles.Add(new LogFolderSkippedFile(relative, size,
-                    $"Excluded because the {eventBudget:N0} raw-event analysis budget " +
+                    $"Excluded because the {eventBudget:N0} retained-event budget " +
                     "was already reached; this file was not read."));
                 continue;
             }
 
-            progress?.Report(new LogFolderProgress(i + 1, entries.Count, relative));
-            string content = ReadBoundedText(full, relative, cancellationToken);
-            LogParseResult parsed = LogParser.Parse(content, cancellationToken, relative);
+            progress?.Report(new LogFolderProgress(i + 1, entries.Length, relative));
             int remaining = eventBudget - admittedEvents;
-            if (parsed.Events.Count > remaining)
+            LogParseResult parsed;
+            try
             {
-                // Never take only the beginning of a transaction or a source
-                // file. No events from this source enter any report.
+                parsed = ParseFile(full, relative, remaining, cancellationToken);
+            }
+            catch (LogEventLimitExceededException)
+            {
                 skippedFiles.Add(new LogFolderSkippedFile(relative, size,
-                    $"Excluded by the {eventBudget:N0} raw-event analysis budget: " +
-                    $"{parsed.Events.Count:N0} dated events, {remaining:N0} remaining. " +
-                    "The entire file was excluded; no transaction was truncated."));
+                    $"Excluded by the {eventBudget:N0} retained-event budget. " +
+                    $"This file contains more than {remaining:N0} dated events. " +
+                    "It was not partially imported; the complete count is unknown."));
                 continue;
             }
 
@@ -184,6 +129,11 @@ public static partial class LogFolderImporter
             admittedEvents += parsed.Events.Count;
             analyzedBytes += size;
         }
+
+        if (accepted.Count == 0)
+            throw new InvalidDataException(
+                "No log source fits the retained-event budget. " +
+                "Select a narrower date range or component.");
 
         // Preserve the existing original source order and per-file mirror
         // deduplication semantics after resource-aware admission.
@@ -318,41 +268,36 @@ public static partial class LogFolderImporter
             activeFiles.Length);
     }
 
-    private static string ReadBoundedText(
-        string path, string relativePath, CancellationToken token)
+    /// <summary>
+    /// Import a standalone log as a stream, not via the document-search
+    /// file loader, which has a separate 16 MiB text-indexing limit.
+    /// </summary>
+    public static LogParseResult ImportSingleFile(
+        string path, CancellationToken token = default)
     {
-        // BOM-aware UTF-8/UTF-16, with strict decoding for legacy/invalid data.
-        // Reusing this mode avoids silently corrupting customer log messages.
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return ParseFile(path, Path.GetFileName(path),
+            Math.Min(MaxCombinedEvents, MaxRawEvents), token);
+    }
+
+    private static LogParseResult ParseFile(
+        string path, string relativePath, int maxEvents, CancellationToken token)
+    {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete, 32 * 1024,
             FileOptions.SequentialScan);
         using var reader = new StreamReader(stream, new UTF8Encoding(false, true),
             detectEncodingFromByteOrderMarks: true, bufferSize: 32 * 1024);
-        var builder = new StringBuilder((int)Math.Min(stream.Length, 1_000_000));
-        var chars = new char[32 * 1024];
         try
         {
-            int length;
-            while ((length = reader.Read(chars, 0, chars.Length)) > 0)
-            {
-                token.ThrowIfCancellationRequested();
-                if (builder.Length + length > MaxFileBytes ||
-                    chars.AsSpan(0, length).Contains('\0'))
-                {
-                    throw new InvalidDataException(
-                        $"'{relativePath}' exceeds safe text limits or appears binary.");
-                }
-                builder.Append(chars, 0, length);
-            }
+            return LogParser.Parse(reader, token, relativePath, maxEvents);
         }
         catch (DecoderFallbackException ex)
         {
             throw new InvalidDataException(
-                $"'{relativePath}' is not readable as UTF-8/UTF-16 text. " +
-                "Use Select local LOG/TXT with an appropriate encoding " +
-                "or convert a copy to UTF-8.", ex);
+                $"'{relativePath}' is not valid UTF-8 or BOM-marked UTF-16. " +
+                "Convert a copy to UTF-8 without modifying the original.", ex);
         }
-        return builder.ToString();
     }
 
     // This is a deterministic import preference, not a diagnosis.

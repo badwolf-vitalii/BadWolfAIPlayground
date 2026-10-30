@@ -12,24 +12,38 @@ public static partial class LogParser
     public const int MaxEvents = 200_000;
     public const int MaxContinuationLinesPerEvent = 32;
     public const int MaxContinuationCharactersPerEvent = 4_096;
+    public const int MaxLineCharacters = 4 * 1024 * 1024;
 
     public static LogParseResult Parse(
         string content, CancellationToken cancellationToken = default, string sourceFile = "")
     {
         ArgumentNullException.ThrowIfNull(content);
+        using var reader = new StringReader(content);
+        return Parse(reader, cancellationToken, sourceFile, MaxEvents);
+    }
+
+    /// <summary>Incremental parser: the entire log text is never buffered.</summary>
+    public static LogParseResult Parse(
+        TextReader reader, CancellationToken cancellationToken = default,
+        string sourceFile = "", int maxEvents = MaxEvents)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        if (maxEvents < 1)
+            throw new ArgumentOutOfRangeException(nameof(maxEvents));
         var parsed = new List<LogEvent>();
         int total = 0, skipped = 0, continuations = 0;
         int capturedContinuationLines = 0;
         bool canAttachContinuation = false;
-        using var reader = new StringReader(content);
         string? line;
         while ((line = reader.ReadLine()) is not null)
         {
             total++;
             if ((total & 511) == 0)
-            {
                 cancellationToken.ThrowIfCancellationRequested();
-            }
+            if (line.Length > MaxLineCharacters || line.Contains('\0'))
+                throw new InvalidDataException(
+                    $"'{sourceFile}' contains an oversized individual line or " +
+                    $"binary data at physical line {total:N0}.");
 
             Match match = TimestampPattern().Match(line);
             if (!match.Success ||
@@ -101,11 +115,8 @@ public static partial class LogParser
             {
                 message = message[..2_000];
             }
-            if (parsed.Count >= MaxEvents)
-            {
-                throw new InvalidDataException(
-                    $"Log exceeds {MaxEvents:N0} parsed events. Select a smaller time range.");
-            }
+            if (parsed.Count >= maxEvents)
+                throw new LogEventLimitExceededException(maxEvents);
             parsed.Add(new LogEvent(timestamp, severity, message, total)
             {
                 SourceFile = sourceFile
@@ -158,4 +169,11 @@ public static partial class LogParser
         @"^(?:--->\s*)?(?:[A-Za-z_][\w+]*\.)*[A-Za-z_][\w+]*(?:Exception|Error)(?:\s*:\s*.*)?$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ExceptionHeaderPattern();
+}
+
+/// <summary>Retained-event capacity reached without truncating a source file.</summary>
+public sealed class LogEventLimitExceededException(int acceptedCapacity)
+    : InvalidDataException($"Log contains more than {acceptedCapacity:N0} dated events.")
+{
+    public int AcceptedCapacity { get; } = acceptedCapacity;
 }

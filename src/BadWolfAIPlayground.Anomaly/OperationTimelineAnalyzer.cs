@@ -190,12 +190,11 @@ public static class OperationTimelineAnalyzer
                   end.DurationMs.Value.ToString(CultureInfo.InvariantCulture) +
                   " ms."
                 : "";
-            return ("Card reading/checks finished; result unconfirmed",
-                "CardInfoReadAndChecks ended without a confirmed read result. " +
-                "status=completed denotes completion of the logged operation; " +
-                "result=unknown does not establish read success or failure. " +
-                "No VTS transaction is expected for this standalone flow." +
-                timing);
+            return ("Card reading/checks completed",
+                "CardInfoReadAndChecks completed. The void handler has no return " +
+                "value: result=unknown is an instrumentation placeholder, not " +
+                "an error or an unresolved card-read result. " +
+                "No VTS transaction is required." + timing);
         }
 
         bool HasEnd(string operation, string result) => events.Any(e =>
@@ -362,7 +361,9 @@ public sealed record OperationTimelineEvent(
                 _ => EventKind
             };
             var details = new List<string>();
-            if (Result.Length > 0) details.Add("result=" + Result);
+            if (Result.Length > 0 &&
+                !(Operation == "CardInfoReadAndChecks" && Result == "unknown"))
+                details.Add("result=" + Result);
             if (ResultName.Length > 0) details.Add("result_name=" + ResultName);
             if (Success.Length > 0) details.Add("success=" + Success);
             if (Status.Length > 0) details.Add("status=" + Status);
