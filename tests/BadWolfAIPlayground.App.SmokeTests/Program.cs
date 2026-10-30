@@ -886,6 +886,108 @@ internal static class Program
                 Directory.Delete(logFolder, recursive: true);
             }
 
+
+            // App and WebClient contain the same operation_id. The DEBUG
+            // caller path lives in a different log from the App exception;
+            // no timestamp-only correlation is allowed.
+            string correlationRoot = Path.Combine(Path.GetTempPath(),
+                "BadWolfAIPlayground-WpfCorrelation-" +
+                Guid.NewGuid().ToString("N"));
+            string correlationLogs = Path.Combine(correlationRoot, "Logs");
+            string correlationSource = Path.Combine(correlationRoot, "Checkout");
+            Directory.CreateDirectory(correlationLogs);
+            string sourceFolder = Path.Combine(correlationSource,
+                "src", "AFCS.TOM.UCUILib", "Views");
+            Directory.CreateDirectory(sourceFolder);
+            try
+            {
+                const string operationId = "41d14983730d4ac6b1c491fc232b77de";
+                string sourceFile = Path.Combine(sourceFolder,
+                    "UCCardInfoView.xaml.cs");
+                string[] sourceLines = Enumerable.Repeat("// filler", 1843).ToArray();
+                sourceLines[0] = "class UCCardInfoView {";
+                sourceLines[1] = "void Load() {";
+                sourceLines[1838] = "try { } catch(Exception ex) {";
+                sourceLines[1839] = "BLogic.Helper.LogException(Logger, ex);";
+                sourceLines[1840] = "}";
+                sourceLines[1841] = "}";
+                sourceLines[1842] = "}";
+                File.WriteAllLines(sourceFile, sourceLines);
+
+                const string appName = "App_2026-10-30.log";
+                const string webName = "WebClient_2026-10-30.log";
+                string message = "Unable to read data from transport connection" +
+                    " | operation_id=" + operationId +
+                    " | exception_logger=AppLogger";
+                string caller = @"C:\Src\Azure\AFCS.TOM-ATM\src\AFCS.TOM.UCUILib\Views\UCCardInfoView\.xaml.cs: line 1840";
+                File.WriteAllText(Path.Combine(correlationLogs, appName),
+                    "2026-10-30 16:26:53.3860 ERROR " + message + "\n");
+                File.WriteAllText(Path.Combine(correlationLogs, webName),
+                    "2026-10-30 16:26:53.3860 DEBUG " + caller +
+                    " | operation_id=" + operationId + "\n" +
+                    "2026-10-30 16:26:53.3860 ERROR " + message + "\n");
+
+                Task loadCSharp = analyzer.LoadSourceContextAsync(correlationSource);
+                PumpUntil(() => loadCSharp.IsCompleted, TimeSpan.FromSeconds(20));
+                loadCSharp.GetAwaiter().GetResult();
+                Task loadLogs = analyzer.ImportFolderAsync(correlationLogs);
+                PumpUntil(() => loadLogs.IsCompleted, TimeSpan.FromSeconds(20));
+                loadLogs.GetAwaiter().GetResult();
+
+                AnomalyInvestigationRow linkedCase = analyzer.Investigations
+                    .First(row => row.OperationId == operationId &&
+                        row.Candidates.Any(candidate => candidate.Source.Kind ==
+                            SourceEvidenceKind.LoggedCallerLocation));
+                AnomalySourceCandidateRow callerCandidate = linkedCase.Candidates
+                    .First(candidate => candidate.Source.Kind ==
+                        SourceEvidenceKind.LoggedCallerLocation);
+                Assert(linkedCase.RelatedEventCount == 2 &&
+                       linkedCase.RelatedLogs.Any(row =>
+                           row.SourceFile == webName &&
+                           row.SourceLine == 1) &&
+                       linkedCase.RelatedSummary.Contains("Same operation_id",
+                           StringComparison.Ordinal) &&
+                       analyzer.OpenRelatedLogCommand.CanExecute(
+                           linkedCase.RelatedLogs[0]) &&
+                       analyzer.ResolveLogLocation(webName, 1) ==
+                           (Path.GetFullPath(Path.Combine(correlationLogs, webName)), 1) &&
+                       analyzer.ResolveCSharpLocation(callerCandidate.Source) ==
+                           (Path.GetFullPath(sourceFile), 1840),
+                    "WPF must show the linked WebClient DEBUG entry, resolve an " +
+                    "indexed C# location and open only imported LOG sources.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.DataContext is AnomalyInvestigationRow row &&
+                    row.OperationId == operationId &&
+                    row.RelatedLogs.Count > 0),
+                    "WPF must render correlated operation evidence in an expander.");
+
+                Task appOnly = analyzer.SetIncludedFilesAsync([appName]);
+                PumpUntil(() => appOnly.IsCompleted, TimeSpan.FromSeconds(20));
+                appOnly.GetAwaiter().GetResult();
+                Assert(analyzer.Investigations.Any(row =>
+                        row.OperationId == operationId &&
+                        row.RelatedEventCount == 1 &&
+                        row.Candidates.All(candidate => candidate.Source.Kind !=
+                            SourceEvidenceKind.LoggedCallerLocation)),
+                    "Excluding WebClient must remove its DEBUG caller evidence " +
+                    "from all investigation cases.");
+
+                Task both = analyzer.SetIncludedFilesAsync([appName, webName]);
+                PumpUntil(() => both.IsCompleted, TimeSpan.FromSeconds(20));
+                both.GetAwaiter().GetResult();
+                Assert(analyzer.Investigations.Any(row =>
+                        row.OperationId == operationId &&
+                        row.Candidates.Any(candidate => candidate.Source.Kind ==
+                            SourceEvidenceKind.LoggedCallerLocation)),
+                    "Reenabling WebClient must restore the explicit source link.");
+            }
+            finally
+            {
+                Directory.Delete(correlationRoot, recursive: true);
+            }
+
             window.NavigateToNeuralLab();
             Assert(anomalyView.Visibility == Visibility.Collapsed,
                 "Anomaly navigation must return to the neural lab.");
