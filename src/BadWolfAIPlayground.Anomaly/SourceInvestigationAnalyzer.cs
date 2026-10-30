@@ -94,8 +94,13 @@ public static class SourceInvestigationAnalyzer
         var cases = new List<SourceInvestigationCase>();
         LogMessagePattern[] patterns =
             report.TopMessagePatterns.Take(MaxPatternCases).ToArray();
+        // Some App/WebClient NLog targets flatten exception_stack into the
+        // dated message itself; deduplication can also retain the mirrored
+        // target without multiline Continuation. An explicit operation_id
+        // is sufficient to pursue cross-log evidence in either form.
         AnomalyFinding[] findings = report.Findings
-            .Where(item => !string.IsNullOrEmpty(item.Continuation))
+            .Where(item => !string.IsNullOrEmpty(item.Continuation) ||
+                           ReadOperationId(item.Evidence).Length > 0)
             .Take(MaxExceptionCases).ToArray();
 
         // Restrict correlation to the small set of IDs already displayed as
