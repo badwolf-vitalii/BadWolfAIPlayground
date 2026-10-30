@@ -68,6 +68,31 @@
                                    FontWeight="SemiBold" FontSize="11" TextWrapping="Wrap"/>
                         <TextBlock Text="{Binding StatusText}" Foreground="#B8D2E6"
                                    FontSize="11" TextWrapping="Wrap" Margin="0,6,0,10"/>
+                        <Expander x:Name="AnomalySkippedFilesExpander"
+                                  Header="SKIPPED FILES — NOT ANALYZED"
+                                  IsExpanded="True"
+                                  Visibility="{Binding SkippedFilesVisibility}"
+                                  Foreground="#F2C5A1" Background="#172237"
+                                  BorderBrush="#775740" BorderThickness="1"
+                                  Padding="9" Margin="0,0,0,10">
+                            <StackPanel Margin="2,7,2,3">
+                                <TextBlock Text="{Binding SkippedFilesSummary}"
+                                           Foreground="#F0D4C0" FontSize="11"
+                                           TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <ScrollViewer MaxHeight="135" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding SkippedSourceFiles}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Display}"
+                                                           FontFamily="Consolas" FontSize="10"
+                                                           Foreground="#DFCFBB" TextWrapping="Wrap"
+                                                           Margin="0,4,0,4"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </StackPanel>
+                        </Expander>
                         <Border Background="#0A192A" CornerRadius="7"
                                 BorderBrush="#2E4E68" BorderThickness="1" Padding="10">
                             <TextBlock Text="{Binding Preview}" Foreground="#C8E2F3"

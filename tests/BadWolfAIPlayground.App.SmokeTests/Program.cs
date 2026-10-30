@@ -387,6 +387,7 @@ internal static class Program
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
                    anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
                    anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
+                   anomalyView.FindName("AnomalySkippedFilesExpander") is Expander &&
                    anomalyView.FindName("AnomalyFilesExpander") is Expander &&
                    anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
                    anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
@@ -658,6 +659,43 @@ internal static class Program
                             label == "Open in Notepad++" &&
                             button.Command is not null),
                     "Each evidence card must expose a real Notepad++ command.");
+
+                // A large profiler must not block valid files, and omitted
+                // sources must be disclosed with their original path/size.
+                string oversizedProfiler =
+                    Path.Combine(logFolder, "WebClientProfiler_2026-10-29.log");
+                using (var stream = new FileStream(oversizedProfiler, FileMode.Create))
+                    stream.SetLength(LogFolderImporter.MaxFileBytes + 1);
+                Task partialFolder = analyzer.ImportFolderAsync(logFolder);
+                PumpUntil(() => partialFolder.IsCompleted, TimeSpan.FromSeconds(20));
+                partialFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 &&
+                       analyzer.SourceFiles.Count == 3 &&
+                       analyzer.SkippedSourceFiles.Count == 1 &&
+                       analyzer.SkippedSourceFiles[0].RelativePath ==
+                           "WebClientProfiler_2026-10-29.log" &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
+                       analyzer.SkippedFilesSummary.Contains("NOT analyzed",
+                           StringComparison.Ordinal) &&
+                       analyzer.SourceFilesSummary.Contains("PARTIAL",
+                           StringComparison.Ordinal) &&
+                       analyzer.StatusText.Contains("Partial import",
+                           StringComparison.Ordinal) &&
+                       analyzer.Preview.Contains("PARTIAL IMPORT",
+                           StringComparison.Ordinal),
+                    "Partial import must retain valid evidence and disclose skipped data.");
+                var skippedPanel =
+                    (Expander)anomalyView.FindName("AnomalySkippedFilesExpander");
+                anomalyView.UpdateLayout();
+                Assert(skippedPanel.Visibility == Visibility.Visible &&
+                       skippedPanel.IsExpanded,
+                    "Skipped data must be shown prominently, not hidden.");
+                bool excludedProfiler = false;
+                try { analyzer.ResolveLogLocation("WebClientProfiler_2026-10-29.log", 1); }
+                catch (InvalidOperationException) { excludedProfiler = true; }
+                Assert(excludedProfiler,
+                    "A skipped profiler cannot be opened as an imported source.");
+                File.Delete(oversizedProfiler);
 
                 int validCount = analyzer.EventCount;
                 Task badFolder = analyzer.ImportFolderAsync(

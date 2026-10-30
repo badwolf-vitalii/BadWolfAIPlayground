@@ -39,6 +39,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
     private string _source = "No file selected";
     private string _filesSummary = "Choose a Logs folder to inspect all components.";
+    private string _skippedSummary = "No files skipped.";
     private string _exceptionSummary = "Load a log or the demo to inspect exception details.";
     private string _operationSummary = "Select logs to correlate structured TOM_OP operations.";
     private int _operationGroupCount;
@@ -84,6 +85,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ObservableCollection<AnomalyExceptionRow> ExceptionEntries { get; } = [];
     public ObservableCollection<AnomalyOperationGroupRow> OperationGroups { get; } = [];
     public ObservableCollection<AnomalySourceFileRow> SourceFiles { get; } = [];
+    public ObservableCollection<LogFolderSkippedFile> SkippedSourceFiles { get; } = [];
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
     public ICommand ChooseFolderCommand => _chooseFolder;
@@ -114,6 +116,13 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         get => _filesSummary;
         private set => SetProperty(ref _filesSummary, value);
     }
+    public string SkippedFilesSummary
+    {
+        get => _skippedSummary;
+        private set => SetProperty(ref _skippedSummary, value);
+    }
+    public Visibility SkippedFilesVisibility =>
+        SkippedSourceFiles.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     public int DuplicateCopies
     {
         get => _duplicateCopies;
@@ -263,11 +272,15 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             NotifyOpenCommands();
             OnPropertyChanged(nameof(CanEditFiles));
             SourceName = $"{Path.GetFileName(Path.TrimEndingDirectorySeparator(folder))}" +
-                $" — {imported.Files.Count:N0} log files";
-            Preview =
-                "All supported .log and .txt files in the chosen folder, including old/, " +
-                "were analyzed locally. Every finding includes its original " +
-                "relative filename and physical line number.";
+                $" — {imported.Files.Count:N0} analyzed files" +
+                (imported.SkippedFiles.Count == 0
+                    ? "" : $" ({imported.SkippedFiles.Count:N0} skipped)");
+            Preview = imported.SkippedFiles.Count == 0
+                ? "All eligible .log/.txt files, including old/, were analyzed locally. " +
+                  "Findings retain the original relative filename and physical line."
+                : "PARTIAL IMPORT: oversized or over-budget logs were NOT analyzed. " +
+                  "Only imported files contribute to results. The SKIPPED FILES " +
+                  "list identifies the missing data.";
             foreach (LogFolderFile file in imported.Files
                 .OrderByDescending(f => f.ProblemEvents)
                 .ThenBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
@@ -279,10 +292,18 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 SourceFiles.Add(row);
             }
             DuplicateCopies = imported.DuplicateCopies;
+            UpdateSkippedFiles(imported.SkippedFiles);
             int components = imported.Files.Select(f => f.Component)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count();
             UpdateSelectedFilesSummary(imported.Files.Count);
             Apply(report, operations);
+            if (imported.SkippedFiles.Count > 0)
+            {
+                StatusText =
+                    $"Partial import: {imported.Files.Count:N0} analyzed; " +
+                    $"{imported.SkippedFiles.Count:N0} skipped due to size limits. " +
+                    "See SKIPPED FILES — those files are NOT in the results.";
+            }
             _run.NotifyCanExecuteChanged();
         });
     });
@@ -308,6 +329,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private void ClearFileSummary()
     {
         ClearFileRows();
+        UpdateSkippedFiles([]);
         _folderImport = null;
         _folderRoot = null;
         _singleFilePath = null;
@@ -315,6 +337,19 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         DuplicateCopies = 0;
         OnPropertyChanged(nameof(CanEditFiles));
         NotifyOpenCommands();
+    }
+
+    private void UpdateSkippedFiles(IReadOnlyList<LogFolderSkippedFile> skipped)
+    {
+        SkippedSourceFiles.Clear();
+        foreach (LogFolderSkippedFile entry in skipped)
+            SkippedSourceFiles.Add(entry);
+        SkippedFilesSummary = skipped.Count == 0
+            ? "No files skipped."
+            : $"{skipped.Count:N0} files were NOT analyzed. " +
+              "These sources have no events in charts, findings or operations. " +
+              "Use a smaller file if the content is needed.";
+        OnPropertyChanged(nameof(SkippedFilesVisibility));
     }
 
     private void ClearFileRows()
@@ -433,6 +468,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             $"Enabled {enabledCount:N0} / {imported.Files.Count:N0} files " +
             $"across {components:N0} components. " +
             $"Exact NLog copies among enabled files: {DuplicateCopies:N0}. " +
+            (imported.SkippedFiles.Count == 0 ? "" :
+                $"PARTIAL: {imported.SkippedFiles.Count:N0} files skipped entirely. ") +
             "Per-file counts below are original; the timeline uses only enabled files.";
     }
 
