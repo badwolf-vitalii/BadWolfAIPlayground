@@ -322,7 +322,32 @@ static void FolderGuards()
         failed = false;
         try { LogFolderImporter.Import(root); }
         catch (InvalidDataException) { failed = true; }
-        Ensure(failed, "Oversized file must reject the folder before partial analysis.");
+        Ensure(failed, "An all-oversized folder must not claim it analyzed any events.");
+
+        // A sparse high-volume profiler must not prevent reading a valid,
+        // unrelated TOM_OP log; skipped content must be explicitly disclosed.
+        string operations = Path.Combine(root, "Operations_2026-10-29.log");
+        File.WriteAllText(operations,
+            "2026-10-29 09:00:00 INFO TOM_OP v=1 event=start " +
+            "operation=TrySellContract transaction_id=77 session_id=s1 flow_id=f1" +
+            Environment.NewLine);
+        LogFolderImportResult partial = LogFolderImporter.Import(root);
+        Ensure(partial.Files.Count == 1 &&
+               partial.Files[0].RelativePath == "Operations_2026-10-29.log" &&
+               partial.Combined.Events.Count == 1 &&
+               partial.RawEvents.Count == 1 &&
+               partial.SkippedFiles.Count == 1 &&
+               partial.SkippedFiles[0].RelativePath == "App_2026-10-29.log" &&
+               partial.SkippedFiles[0].Reason.Contains("16 MiB", StringComparison.Ordinal) &&
+               partial.SkippedFiles[0].SizeBytes == LogFolderImporter.MaxFileBytes + 1 &&
+               partial.TotalBytes < LogFolderImporter.MaxFileBytes &&
+               OperationTimelineAnalyzer.Analyze(partial.Combined).GroupCount == 1,
+            "A large profiler must be visibly excluded without hiding valid operation events.");
+        failed = false;
+        try { LogFolderImporter.SelectFiles(partial, ["App_2026-10-29.log"]); }
+        catch (ArgumentException) { failed = true; }
+        Ensure(failed, "An excluded oversized file cannot be enabled as if it were parsed.");
+        File.Delete(operations);
 
         File.WriteAllBytes(file, [0xC3, 0x28, 0xFF]); // invalid UTF-8 sequence.
         failed = false;

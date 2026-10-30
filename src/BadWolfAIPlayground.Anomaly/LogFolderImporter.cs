@@ -30,8 +30,8 @@ public static partial class LogFolderImporter
         }
 
         string root = Path.GetFullPath(folder);
-        var entries = new List<(string Path, string Relative, long Size)>();
-        long totalBytes = 0;
+        var candidates = new List<(string Path, string Relative, long Size)>();
+        var skippedFiles = new List<LogFolderSkippedFile>();
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = true,
@@ -49,36 +49,69 @@ public static partial class LogFolderImporter
                 continue; // Do not read .zip, binaries, arbitrary work files.
             }
 
-            var info = new FileInfo(fullPath);
-            if (info.Length > MaxFileBytes)
-            {
-                throw new InvalidDataException(
-                    $"'{info.Name}' exceeds the {MaxFileBytes / 1048576} MiB per-file " +
-                    "limit. Narrow the Logs folder or use a smaller date range.");
-            }
-
-            totalBytes = checked(totalBytes + info.Length);
-            if (totalBytes > MaxTotalBytes)
-            {
-                throw new InvalidDataException(
-                    $"Logs folder exceeds {MaxTotalBytes / 1048576} MiB. " +
-                    "Choose a smaller date range or move older archives temporarily.");
-            }
-
-            if (entries.Count == MaxFiles)
+            if (candidates.Count == MaxFiles)
             {
                 throw new InvalidDataException(
                     $"Logs folder contains more than {MaxFiles} supported files. " +
                     "Choose a smaller log collection.");
             }
+            var info = new FileInfo(fullPath);
+            candidates.Add((fullPath, Path.GetRelativePath(root, fullPath), info.Length));
+        }
 
-            entries.Add((fullPath, Path.GetRelativePath(root, fullPath), info.Length));
+        if (candidates.Count == 0)
+        {
+            throw new InvalidDataException(
+                "No .log or .txt files found in this folder or its subfolders.");
+        }
+
+        // A high-volume profiler should not hide every other operation log.
+        // Exclude only by a known resource limit and always report its path.
+        var eligible = new List<(string Path, string Relative, long Size)>();
+        foreach (var entry in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.Size > MaxFileBytes)
+            {
+                skippedFiles.Add(new LogFolderSkippedFile(
+                    entry.Relative, entry.Size,
+                    $"Exceeds the {MaxFileBytes / 1048576} MiB per-file safety limit."));
+            }
+            else
+            {
+                eligible.Add(entry);
+            }
+        }
+
+        // Reserve the total in-memory budget for as many eligible files as
+        // possible, in size+path order. Re-sort selected files by path for
+        // deterministic original NLog provenance and file counts.
+        long totalBytes = 0;
+        var entries = new List<(string Path, string Relative, long Size)>();
+        foreach (var entry in eligible.OrderBy(e => e.Size)
+                     .ThenBy(e => e.Relative, StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.Size > MaxTotalBytes - totalBytes)
+            {
+                skippedFiles.Add(new LogFolderSkippedFile(
+                    entry.Relative, entry.Size,
+                    $"Excluded to stay within the {MaxTotalBytes / 1048576} MiB " +
+                    "combined import budget."));
+            }
+            else
+            {
+                entries.Add(entry);
+                totalBytes += entry.Size;
+            }
         }
 
         if (entries.Count == 0)
         {
             throw new InvalidDataException(
-                "No .log or .txt files found in this folder or its subfolders.");
+                $"No .log/.txt files fit the {MaxFileBytes / 1048576} MiB per-file " +
+                $"and {MaxTotalBytes / 1048576} MiB total limits. " +
+                $"{skippedFiles.Count} files could not be analyzed.");
         }
 
         entries.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(
@@ -123,7 +156,10 @@ public static partial class LogFolderImporter
         return new LogFolderImportResult(
             selected.Combined, files, selected.DuplicateCopies, totalBytes)
         {
-            RawEvents = originalEvents
+            RawEvents = originalEvents,
+            SkippedFiles = skippedFiles
+                .OrderBy(item => item.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .ToArray()
         };
     }
 
@@ -304,12 +340,21 @@ public sealed record LogFolderFile(
 public sealed record LogFolderProgress(
     int CurrentFile, int TotalFiles, string RelativePath);
 
+/// <summary>Discovered but not read; contributes no timeline or findings.</summary>
+public sealed record LogFolderSkippedFile(string RelativePath, long SizeBytes, string Reason)
+{
+    public string Display => RelativePath + " (" +
+        (SizeBytes / 1048576.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) +
+        " MiB): " + Reason;
+}
+
 public sealed record LogFolderImportResult(
     LogParseResult Combined, IReadOnlyList<LogFolderFile> Files,
     int DuplicateCopies, long TotalBytes)
 {
     // Original per-file entries; never persisted or sent to a service.
     public IReadOnlyList<LogEvent> RawEvents { get; init; } = [];
+    public IReadOnlyList<LogFolderSkippedFile> SkippedFiles { get; init; } = [];
 }
 
 public sealed record LogFolderSelection(
