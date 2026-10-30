@@ -428,7 +428,13 @@ evidence to statistics, findings or operation timelines.
 
 Safety bounds are **50,000 discovered file metadata entries**, **512 analyzed
 files**, **16 MiB per file**, **256 MiB combined**, **1,000,000 raw events**
-and **500,000 distinct events**. The scanner no longer fails at file
+and **500,000 distinct events**. To prevent the event ceilings from
+invalidating the entire import, files are admitted whole in priority order
+within a **conservative 500,000 raw-event budget** (which also guarantees
+no more than 500,000 distinct events). Files that would exceed the
+remaining event budget are excluded in full, with counts and filenames
+in **SKIPPED FILES**. No event is silently truncated and
+file/line provenance stays intact. The scanner no longer fails at file
 513: it prioritizes `Operations*.log` (including inside `old/`),
 then current root-level logs, other non-archive logs, and archived logs.
 Within each category recently modified files are preferred. Files
@@ -439,9 +445,11 @@ complete coverage. Scans exceeding the separate 50,000-entry metadata
 guard or with no usable files fail clearly. UTF-8 and
 BOM-marked UTF-16 are supported; use single-file import or
 convert a copy for legacy code pages. Binary data, ZIP archives
-and unsupported file types are not processed. The detector's
-existing 366-day analysis span limit still applies to a combined
-folder. The demo and automated tests use only synthetic log data.
+and unsupported file types are not processed. If selected logs span more than 366 days, the detector uses up to
+720 coarser time buckets instead of rejecting the operation timeline.
+For multi-day buckets the UI displays dates, warns that statistical
+spikes have lower temporal resolution, and still retains original
+transaction timestamps. The demo and tests use only synthetic logs.
 
 
 **Deduplication safeguard:** two unrelated components are *not*
@@ -571,8 +579,9 @@ aborting the entire import because of that profiler.
 
 If files were excluded, a prominent expanded **SKIPPED FILES —
 NOT ANALYZED** panel lists their relative filenames, original sizes
-and exact reasons. This includes files excluded by the 512-analyzed
-file limit. The import is labelled **PARTIAL IMPORT**. The imported
+and exact reasons. This includes files excluded by the
+512-analyzed-file limit or remaining event budget. The import is labelled
+**PARTIAL IMPORT**. The imported
 and excluded lists use WPF item virtualization to remain scrollable
 even for hundreds or thousands of discovered log files.
 Skipped files contribute *zero* events to the charts, findings,

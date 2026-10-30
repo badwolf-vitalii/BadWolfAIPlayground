@@ -557,8 +557,16 @@ Files over 16 MiB are excluded before reading. Candidates that
 exceed the 512 analyzed-file cap or combined 256 MiB byte budget
 are explicitly listed in `SkippedFiles`, never quietly truncated.
 Selected files are then read in path order for consistent provenance.
-Existing UTF-8/UTF-16 decoding, raw/distinct event limits,
-cancellation and exact NLog mirror deduplication still apply.
+Selected files are **parsed in preference order**, so archived
+component files cannot consume the event budget before
+`Operations`. A file is accepted only when its entire dated-event
+count fits the remaining conservative **500,000 raw-event budget**.
+This also guarantees the 500,000 distinct-event cap before mirror
+deduplication. If it does not fit, the **entire** source is disclosed
+in `SkippedFiles` and not included in any report. Only successfully
+admitted per-file batches are sorted back into stable path order;
+`TotalBytes` counts those actual admitted files. UTF-8/UTF-16
+decoding, cancellation and exact NLog mirror deduplication are unchanged.
 
 If every file is over the limit, the import fails rather than
 presenting invented coverage. Likewise, genuinely invalid encoded
@@ -586,3 +594,27 @@ with correct transaction outcome and original source line.
 Every excluded archive file is reported and cannot be enabled as
 if it had been imported. The 50,000 metadata-entry guard is separate
 from the 512 files actually analyzed at once.
+
+### Complete-file admission at the raw-event budget
+
+The original importer threw at >1,000,000 raw events and again at
+>500,000 distinct events, discarding an otherwise useful batch of
+`Operations` traces. File selection now runs before merge:
+all `Operations` are parsed first within their size/file budgets,
+then current component logs, then archives. A complete source file
+is admitted if it fits the remaining conservative 500,000 raw-event
+budget. Otherwise the entire file is skipped and its original relative
+path, size and dated-event count are shown in the partial-import panel.
+No event sample is falsely presented as a complete transaction.
+For high-volume log sets, this prioritization intentionally favors
+recent explicit operation evidence over total historical coverage.
+
+The detector also supports multi-year archive spans by expanding
+the bucket interval to retain at most 720 buckets rather than
+discarding the imported report due to the former 366-day guard.
+The WPF chart uses date-aware labels and explicitly notes the
+coarse granularity. Single-event provenance and the TOM_OP
+operation timeline retain their original timestamps and source lines.
+A deterministic small-budget fixture verifies whole-file exclusion,
+path/line preservation, skip warnings and byte accounting; a
+separate multi-year fixture verifies coarse bounded buckets.

@@ -752,8 +752,13 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         int maximum = Math.Max(1, report.PeakProblemCount);
         foreach (LogTimeBucket bucket in report.Buckets)
         {
+            // A multi-day archive has coarse buckets; HH:mm alone would
+            // misleadingly label different days as the same interval.
+            string bucketLabelFormat = report.BucketMinutes >= 24 * 60
+                ? "yyyy-MM-dd" : report.BucketMinutes >= 60
+                    ? "MM-dd HH:mm" : "HH:mm";
             Timeline.Add(new AnomalyBucketRow(
-                bucket.Start.ToString("HH:mm", CultureInfo.InvariantCulture),
+                bucket.Start.ToString(bucketLabelFormat, CultureInfo.InvariantCulture),
                 bucket.ProblemEvents, bucket.TotalEvents, bucket.IsBurst,
                 (int)Math.Round(8 + 72.0 * bucket.ProblemEvents / maximum)));
         }
@@ -827,6 +832,12 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
               $"{report.BurstThreshold:0.##}. Findings: {report.Findings.Count}."
             : "Not enough time history to establish a reliable spike baseline. " +
               "No artificial burst alerts have been generated.";
+        if (report.BucketMinutes >= 24 * 60)
+        {
+            Summary += " Wide log date range: chart uses coarse multi-day " +
+                "buckets, not minute-level latency. Review individual logs " +
+                "or Operation lifecycle for exact times.";
+        }
         Diagnostics = $"Dated events: {report.Source.Events.Count:N0}. " +
             $"Skipped/unrecognized lines: {report.Source.SkippedLines:N0}. " +
             $"Stack-trace continuations: {report.Source.ContinuationLines:N0}.";

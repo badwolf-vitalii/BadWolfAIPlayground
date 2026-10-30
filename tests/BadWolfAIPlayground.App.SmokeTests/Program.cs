@@ -491,6 +491,21 @@ internal static class Program
                     row.Outcome == "Cancelled by operator"),
                 "Lifecycle results must render a real WPF expander.");
 
+            // Old archives must not make WPF throw away structured operations
+            // solely because the statistical timeline spans over a year.
+            Task longArchive = analyzer.ImportTextAsync("Synthetic multi-year archive",
+                "2023-09-01 09:00:00 ERROR old archive failure\n" +
+                "2026-10-30 09:00:00 INFO TOM_OP v=1 event=step " +
+                "step=card_preview_ready session_id=s1 transaction_id=2854 flow_id=f1");
+            PumpUntil(() => longArchive.IsCompleted, TimeSpan.FromSeconds(20));
+            longArchive.GetAwaiter().GetResult();
+            Assert(analyzer.EventCount == 2 &&
+                   analyzer.OperationGroupCount == 1 &&
+                   analyzer.Summary.Contains("coarse multi-day", StringComparison.Ordinal) &&
+                   analyzer.Timeline.All(entry => entry.Time.Contains(
+                       "20", StringComparison.Ordinal)),
+                "Multi-year log analysis must show date-aware buckets and retain TOM_OP.");
+
             // Test importing a whole application Logs folder, including old/
             // and duplicate NLog App/component targets. No work data in CI.
             string logFolder = Path.Combine(Path.GetTempPath(),
