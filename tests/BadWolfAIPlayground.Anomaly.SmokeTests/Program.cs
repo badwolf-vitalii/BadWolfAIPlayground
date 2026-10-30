@@ -509,6 +509,81 @@ static void CrossLogCallerEvidence()
             "App error and WebClient DEBUG must link by matching operation_id, " +
             "without borrowing same-timestamp events from unrelated operations.");
 
+        // Search must inspect all retained log lines even if the statistical
+        // detector's top-pattern and rare-finding slots omit this error.
+        AnomalyReport hiddenError = AnomalyDetector.Analyze(import.Combined) with
+        {
+            Findings = [],
+            TopMessagePatterns = []
+        };
+        Ensure(SourceInvestigationAnalyzer.Analyze(hiddenError,
+                   OperationTimelineAnalyzer.Analyze(import.Combined), index)
+                   .Cases.Count == 0,
+            "The unranked example must not appear in the default top findings.");
+        SourceInvestigationSearchResult exact =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, operationId);
+        Ensure(exact.MatchingEventCount == 2 && exact.DisplayedGroups == 1 &&
+               exact.Cases.Single().Category == "LOG SEARCH" &&
+               exact.Cases.Single().Evidence.Contains("Unable to read data",
+                   StringComparison.Ordinal) &&
+               exact.Cases.Single().RelatedEventCount == 2 &&
+               exact.Cases.Single().Candidates.Any(candidate =>
+                   candidate.Kind == SourceEvidenceKind.LoggedCallerLocation &&
+                   candidate.LineNumber == 1840) &&
+               exact.Cases.Single().ObservedAt.HasValue,
+            "Searching an old operation_id must find all DEBUG/ERROR entries " +
+            "outside top anomalies, group one operation and expose C# caller evidence.");
+
+        SourceInvestigationSearchResult byException =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, "IOException");
+        Ensure(byException.MatchingEventCount == 1 &&
+               byException.Cases.Single().RelatedEvents.Any(entry =>
+                   entry.SourceFile == webName && entry.Severity == LogSeverity.Debug),
+            "Searching exception text must bring in linked DEBUG metadata even " +
+            "when that metadata does not include the exception's words.");
+
+        SourceInvestigationSearchResult byMirrorAlias =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, appName);
+        Ensure(byMirrorAlias.MatchingEventCount == 1 &&
+               byMirrorAlias.Cases.Single().OperationId == operationId,
+            "Filename queries must include the original App target if its " +
+            "mirrored error was deduplicated in favor of WebClient.");
+
+        SourceInvestigationSearchResult byOtherId =
+            SourceInvestigationAnalyzer.Search(import.Combined, index,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        Ensure(byOtherId.MatchingEventCount == 1 &&
+               byOtherId.Cases.Single().OperationId != operationId &&
+               byOtherId.Cases.Single().RelatedEventCount == 1 &&
+               byOtherId.Cases.Single().RelatedEvents.All(entry =>
+                   !entry.Message.Contains(operationId, StringComparison.Ordinal)),
+            "Two events at exactly the same timestamp must never be joined " +
+            "across different operation IDs.");
+
+        SourceInvestigationSearchResult withoutSource =
+            SourceInvestigationAnalyzer.Search(import.Combined, null, "IOException");
+        Ensure(withoutSource.MatchingEventCount == 1 &&
+               withoutSource.Cases.Single().Candidates.Count == 0 &&
+               withoutSource.Cases.Single().Assessment.Contains(
+                   "Choose a local C# solution", StringComparison.Ordinal),
+            "Full-log search must still work without a selected source checkout.");
+
+        bool shortQueryRejected = false;
+        try { SourceInvestigationAnalyzer.Search(import.Combined, index, "IO"); }
+        catch (ArgumentException) { shortQueryRejected = true; }
+        Ensure(shortQueryRejected, "A very short query must not produce huge result lists.");
+
+        using var canceledSearch = new CancellationTokenSource();
+        canceledSearch.Cancel();
+        bool canceledProperly = false;
+        try
+        {
+            SourceInvestigationAnalyzer.Search(
+                import.Combined, index, operationId, canceledSearch.Token);
+        }
+        catch (OperationCanceledException) { canceledProperly = true; }
+        Ensure(canceledProperly, "Full-log search must honor cancellation.");
+
         // File filtering must recompute evidence from the currently enabled
         // report, not retain sources omitted from the user's analysis.
         LogFolderSelection appOnly = LogFolderImporter.SelectFiles(import, [appName]);
@@ -518,6 +593,14 @@ static void CrossLogCallerEvidence()
                isolated.Candidates.All(c =>
                    c.Kind != SourceEvidenceKind.LoggedCallerLocation),
             "Disabling WebClient must remove its caller evidence and source link.");
+        SourceInvestigationSearchResult filteredSearch =
+            SourceInvestigationAnalyzer.Search(appOnly.Combined, index, operationId);
+        Ensure(filteredSearch.MatchingEventCount == 1 &&
+               filteredSearch.Cases.Single().RelatedEventCount == 1 &&
+               filteredSearch.Cases.Single().Candidates.All(candidate =>
+                   candidate.Kind != SourceEvidenceKind.LoggedCallerLocation),
+            "Search must recompute from included files, never from the original folder.");
+
     }
     finally
     {
