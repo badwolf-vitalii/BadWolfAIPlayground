@@ -173,7 +173,7 @@ public static partial class LogParser
 
 /// <summary>Retained-event capacity reached without truncating a source file.</summary>
 public sealed class LogEventLimitExceededException(int acceptedCapacity)
-    : InvalidDataException($"Log contains more than {acceptedCapacity:N0} dated events.")
+    : IOException($"Log contains more than {acceptedCapacity:N0} dated events.")
 {
     public int AcceptedCapacity { get; } = acceptedCapacity;
 }
