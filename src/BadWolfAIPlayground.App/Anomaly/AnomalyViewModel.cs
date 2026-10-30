@@ -44,7 +44,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private string _sourceContextStatus =
         "Optional: select a local Visual Studio solution for source-aware log investigation.";
     private string _investigationSummary =
-        "Load logs to inspect selected evidence. You can search all imported events without C# source.";
+        "Select a local C# solution (optional) to locate source methods. " +
+        "Search across all imported log events also works without source code.";
     private string _investigationSearchText = "";
     private string _activeInvestigationQuery = "";
     private IReadOnlyList<AnomalyInvestigationRow> _defaultInvestigationRows = [];
