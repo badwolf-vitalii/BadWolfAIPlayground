@@ -388,6 +388,7 @@ internal static class Program
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
                    anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
                    anomalyView.FindName("AnomalyPatterns") is ItemsControl &&
+                   anomalyView.FindName("AnomalyInvestigationCases") is ItemsControl &&
                    anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
                    anomalyView.FindName("AnomalySkippedFilesExpander") is Expander &&
                    anomalyView.FindName("AnomalySkippedFileList") is ListBox &&
@@ -400,6 +401,10 @@ internal static class Program
                    anomalyView.FindName("ReanalyzeLogButton") is Button,
                 "Anomaly lab must be visible and allow local log selection and sensitivity.");
 
+            Assert(analyzer.Investigations.Count == 0 &&
+                   analyzer.InvestigationSummary.Contains(
+                       "Select a local C# solution", StringComparison.Ordinal),
+                "Source investigations must not claim matches before source selection.");
             Task demoAnalysis = analyzer.UseDemoAsync();
             PumpUntil(() => demoAnalysis.IsCompleted, TimeSpan.FromSeconds(20));
             demoAnalysis.GetAwaiter().GetResult();
@@ -438,12 +443,37 @@ internal static class Program
                 Task sourceLoad = analyzer.LoadSourceContextAsync(contextDir);
                 PumpUntil(() => sourceLoad.IsCompleted, TimeSpan.FromSeconds(20));
                 sourceLoad.GetAwaiter().GetResult();
-                Assert(analyzer.SourceContextStatus.Contains("logging templates",
+                Assert(analyzer.SourceContextStatus.Contains("methods",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       analyzer.SourceContextStatus.Contains("Roslyn",
                            StringComparison.OrdinalIgnoreCase) &&
                        analyzer.Findings.Any(f =>
                            f.Kind == "BURST" &&
-                           f.SourceHint.Contains("DemoWorker.cs", StringComparison.Ordinal)),
-                    "Optional source context must connect a demo error to its local C# statement.");
+                           f.SourceHint.Contains("DemoWorker.cs", StringComparison.Ordinal)) &&
+                       analyzer.Investigations.Count > 0 &&
+                       analyzer.Investigations.Any(row => row.Candidates.Any(candidate =>
+                           candidate.Source.MethodName == "Run" &&
+                           candidate.Source.RelativePath == "DemoWorker.cs")),
+                    "Optional source context must link demo log evidence to " +
+                    "the correct C# method and original file/line without AI.");
+                var sourceCase = analyzer.Investigations
+                    .First(row => row.Candidates.Any(candidate =>
+                        candidate.Source.RelativePath == "DemoWorker.cs"));
+                AnomalySourceCandidateRow sourceCandidate = sourceCase.Candidates
+                    .First(candidate => candidate.Source.RelativePath == "DemoWorker.cs");
+                Assert(analyzer.OpenCSharpSourceCommand.CanExecute(sourceCandidate) &&
+                       !analyzer.OpenInvestigationLogCommand.CanExecute(sourceCase) &&
+                       analyzer.ResolveCSharpLocation(sourceCandidate.Source) ==
+                           (Path.GetFullPath(Path.Combine(contextDir, "DemoWorker.cs")),
+                            sourceCandidate.Source.LineNumber),
+                    "Roslyn source navigation must stay within the explicitly selected " +
+                    "checkout and demo-only logs must not become disk navigation targets.");
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.DataContext is AnomalyInvestigationRow row &&
+                    row.Candidates.Any(candidate =>
+                        candidate.Source.RelativePath == "DemoWorker.cs")),
+                    "Source investigation candidates must render in real WPF expanders.");
             }
             finally
             {
