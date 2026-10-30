@@ -13,6 +13,7 @@ using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
 using BadWolfAIPlayground.App.Search;
 using BadWolfAIPlayground.App.Anomaly;
+using BadWolfAIPlayground.Anomaly;
 using BadWolfAIPlayground.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
@@ -697,6 +698,16 @@ internal static class Program
                     "A skipped profiler cannot be opened as an imported source.");
                 File.Delete(oversizedProfiler);
 
+                Task partialReanalysis = analyzer.AnalyzeAsync();
+                PumpUntil(() => partialReanalysis.IsCompleted, TimeSpan.FromSeconds(20));
+                partialReanalysis.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 &&
+                       analyzer.SkippedSourceFiles.Count == 1 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
+                       analyzer.SkippedFilesSummary.Contains("NOT analyzed",
+                           StringComparison.Ordinal),
+                    "A later reanalysis must not hide the previously excluded files.");
+
                 int validCount = analyzer.EventCount;
                 Task badFolder = analyzer.ImportFolderAsync(
                     Path.Combine(logFolder, "missing"));
@@ -704,9 +715,18 @@ internal static class Program
                 badFolder.GetAwaiter().GetResult();
                 Assert(analyzer.EventCount == validCount &&
                        analyzer.SourceFiles.Count == 3 &&
+                       analyzer.SkippedSourceFiles.Count == 1 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
                        analyzer.StatusText.Contains("failed",
                            StringComparison.OrdinalIgnoreCase),
-                    "Failed folder import must preserve last valid result.");
+                    "Failed folder import must preserve last valid result and warnings.");
+
+                Task switchToDemo = analyzer.UseDemoAsync();
+                PumpUntil(() => switchToDemo.IsCompleted, TimeSpan.FromSeconds(20));
+                switchToDemo.GetAwaiter().GetResult();
+                Assert(analyzer.SkippedSourceFiles.Count == 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Collapsed,
+                    "A later successful import without exclusions must clear stale warnings.");
             }
             finally
             {
