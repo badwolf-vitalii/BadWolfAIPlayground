@@ -536,6 +536,35 @@
                 <StackPanel>
                     <TextBlock Text="9  Source-aware log investigation" FontSize="16"
                                FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="AnomalyInvestigationSearchBox" Grid.Column="0"
+                                 Text="{Binding InvestigationSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Search every included LOG event by message text, operation_id or component filename. Press Enter to search."
+                                 Background="#0B2034" Foreground="#E6F5FC"
+                                 BorderBrush="#3B6280" BorderThickness="1"
+                                 FontSize="12" Padding="11,8" Margin="0,0,9,0">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding SearchInvestigationsCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Button x:Name="AnomalyInvestigationFindButton"
+                                Grid.Column="1" Content="Search all logs"
+                                Style="{StaticResource PrimaryButton}"
+                                Command="{Binding SearchInvestigationsCommand}"
+                                Margin="0,0,8,0"/>
+                        <Button x:Name="AnomalyInvestigationClearButton"
+                                Grid.Column="2" Content="Clear search"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ClearInvestigationSearchCommand}"/>
+                    </Grid>
+                    <TextBlock Text="Search text, operation_id or filenames (3+ characters). Includes INFO/DEBUG and errors outside the top findings. Results are limited to 40 groups; every included log event is checked."
+                               FontSize="10" Foreground="#9BC6DA"
+                               TextWrapping="Wrap" Margin="0,0,0,9"/>
                     <TextBlock Text="{Binding InvestigationSummary}" FontSize="11"
                                Foreground="#9BC6DA" TextWrapping="Wrap"
                                Margin="0,0,0,9"/>
@@ -551,10 +580,17 @@
                                               Background="#0C1C30" Foreground="#D3E6F5"
                                               Padding="8" Margin="0,0,0,8">
                                         <Expander.Header>
-                                            <TextBlock Text="{Binding Heading}"
-                                                       FontFamily="Consolas" FontSize="11"
-                                                       Foreground="#96CCEB"
-                                                       TextWrapping="Wrap"/>
+                                            <StackPanel MaxWidth="1080">
+                                                <TextBlock Text="{Binding Heading}"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="#D7ECFF"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Evidence}"/>
+                                                <TextBlock Text="{Binding DetailLine}"
+                                                           FontFamily="Consolas" FontSize="10"
+                                                           Foreground="#89BBD6" TextWrapping="Wrap"
+                                                           Margin="0,4,0,0"/>
+                                            </StackPanel>
                                         </Expander.Header>
                                         <StackPanel Margin="3,9,3,4">
                                             <TextBlock Text="{Binding Assessment}"
