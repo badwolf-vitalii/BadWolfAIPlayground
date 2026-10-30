@@ -139,6 +139,40 @@ dotnet restore BadWolfAIPlayground.sln
 dotnet run --project src/BadWolfAIPlayground.App/BadWolfAIPlayground.App.csproj
 ```
 
+### Visual Studio: Roslyn / Microsoft.CodeAnalysis not found
+
+Source-aware Log Investigation uses the **Microsoft.CodeAnalysis.CSharp 4.14.0**
+NuGet package, declared in
+`src/BadWolfAIPlayground.Anomaly/BadWolfAIPlayground.Anomaly.csproj`.
+If Visual Studio shows `CS0234: Microsoft.CodeAnalysis does not exist`
+followed by missing `SyntaxNode`, `SourceInvestigationIndex`, or
+investigation ViewModel types, those later errors are commonly
+**cascading** from an unsuccessful or outdated local NuGet restore.
+
+Open the solution in VS 2022 and choose **Restore NuGet Packages**
+from the solution context menu. You can also close Visual Studio,
+open PowerShell in the repository root, and run:
+
+```powershell
+dotnet restore .\BadWolfAIPlayground.sln --force
+dotnet build .\BadWolfAIPlayground.sln --configuration Debug --no-restore
+```
+
+Reopen/reload the solution after a successful build if the Error List
+still contains stale **active** IntelliSense diagnostics. The Error
+List's **Build Only** filter can distinguish real compiler errors
+from editor design-time state. Do not remove Roslyn `using`
+directives or add references individually to dependent projects:
+the Anomaly project already declares the NuGet dependency and the
+App/tests reference that project.
+
+If restore fails with `NU1301`, `NU1101` or another `NU...`
+diagnostic, fix the indicated NuGet source/network/authentication
+issue rather than changing C# code. You can inspect feeds using
+`dotnet nuget list source` and SDKs using `dotnet --list-sdks`.
+The Windows CI performs both **Release** and **Debug** builds with
+the same declared package.
+
 ### First experiment: Neural Network Lab tutorial
 
 1. Open **START HERE / GUIDED XOR EXPERIMENT**.

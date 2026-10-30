@@ -25,6 +25,10 @@ jobs:
         run: dotnet restore BadWolfAIPlayground.sln
       - name: Build Windows desktop application
         run: dotnet build BadWolfAIPlayground.sln --configuration Release --no-restore
+      # F5 and the VS 2022 editor use Debug by default. Compile it too
+      # so dependency/reference regressions are visible before merge.
+      - name: Build Debug (Visual Studio default)
+        run: dotnet build BadWolfAIPlayground.sln --configuration Debug --no-restore
       - name: Run neural network smoke tests
         run: dotnet run --project tests/BadWolfAIPlayground.Core.SmokeTests/BadWolfAIPlayground.Core.SmokeTests.csproj --configuration Release --no-build
       - name: Run WPF UI startup smoke tests
