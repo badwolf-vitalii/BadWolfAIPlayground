@@ -26,6 +26,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private readonly ParameterRelayCommand<AnomalySourceFileRow> _openLogFile;
     private readonly ParameterRelayCommand<AnomalySourceCandidateRow> _openCSharpSource;
     private readonly ParameterRelayCommand<AnomalyInvestigationRow> _openInvestigationLog;
+    private readonly ParameterRelayCommand<AnomalyRelatedLogRow> _openRelatedLog;
     private LogFolderImportResult? _folderImport;
     private string? _folderRoot;
     private string? _singleFilePath;
@@ -95,6 +96,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openInvestigationLog = new ParameterRelayCommand<AnomalyInvestigationRow>(
             item => OpenLogInNotepadPlusPlus(item.LogFile, item.LogLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
+        _openRelatedLog = new ParameterRelayCommand<AnomalyRelatedLogRow>(
+            item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
@@ -118,6 +122,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand OpenLogFileCommand => _openLogFile;
     public ICommand OpenCSharpSourceCommand => _openCSharpSource;
     public ICommand OpenInvestigationLogCommand => _openInvestigationLog;
+    public ICommand OpenRelatedLogCommand => _openRelatedLog;
     public bool CanEditFiles => !Busy && _folderImport is not null;
     public string EditorStatus
     {
@@ -423,6 +428,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openLogFile.NotifyCanExecuteChanged();
         _openCSharpSource.NotifyCanExecuteChanged();
         _openInvestigationLog.NotifyCanExecuteChanged();
+        _openRelatedLog.NotifyCanExecuteChanged();
     }
 
     private async void OnFolderFileIncludedChanged(object? sender, EventArgs e)
@@ -992,7 +998,18 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                     item.Category, item.Title, item.Evidence, item.Assessment,
                     item.LogFile, item.LogLine,
                     item.Candidates.Select(candidate =>
-                        new AnomalySourceCandidateRow(candidate)).ToArray()));
+                        new AnomalySourceCandidateRow(candidate)).ToArray())
+                {
+                    OperationId = item.OperationId,
+                    RelatedEventCount = item.RelatedEventCount,
+                    RelatedLogs = item.RelatedEvents.Select(entry =>
+                        new AnomalyRelatedLogRow(
+                            entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
+                                CultureInfo.InvariantCulture),
+                            entry.Severity.ToString().ToUpperInvariant(),
+                            entry.Message, entry.SourceFile, entry.SourceLine))
+                        .ToArray()
+                });
             }
             InvestigationSummary =
                 $"Investigated {investigation.Total:N0} selected log/operation " +
@@ -1069,6 +1086,24 @@ public sealed record AnomalyInvestigationRow(
         ? $"Log line {LogLine}" : $"{LogFile}:{LogLine}";
     public string Heading => Category + " | " + Title +
         $" | {Candidates.Count:N0} candidate(s)";
+    public string OperationId { get; init; } = "";
+    public int RelatedEventCount { get; init; }
+    public IReadOnlyList<AnomalyRelatedLogRow> RelatedLogs { get; init; } = [];
+    public string RelatedSummary => RelatedEventCount == 0
+        ? ""
+        : $"Same operation_id={OperationId}: {RelatedEventCount:N0} " +
+          $"included event(s), showing {RelatedLogs.Count:N0}. " +
+          "No timestamp-only joins; a logger's source line is not proof of root cause.";
+}
+
+/// <summary>
+/// Original, explicitly linked LOG/TXT evidence. Navigation always uses the
+/// selected Logs-folder allowlist, not a path copied out of the log message.
+/// </summary>
+public sealed record AnomalyRelatedLogRow(
+    string Time, string Severity, string Message, string SourceFile, int SourceLine)
+{
+    public string Heading => $"{Time} | {Severity} | {SourceFile}:{SourceLine}";
 }
 
 /// <summary>
