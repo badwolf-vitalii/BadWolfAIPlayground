@@ -775,10 +775,10 @@ internal static class Program
                            row.DatedEvents == profilerLines),
                     "The entire valid profiler must be included in a Logs-folder " +
                     "report, with no byte-based skips.");
-                (string largePath, int largeLine) = analyzer.ResolveLogLocation(
+                (string resolvedProfilerPath, int profilerLine) = analyzer.ResolveLogLocation(
                     "WebClientProfiler_2026-10-29.log", profilerLines);
-                Assert(largePath == Path.GetFullPath(largeProfiler) &&
-                       largeLine == profilerLines,
+                Assert(resolvedProfilerPath == Path.GetFullPath(largeProfiler) &&
+                       profilerLine == profilerLines,
                     "Large streamed files retain original physical line navigation.");
 
                 // A deliberately tiny test-only event budget still creates an
