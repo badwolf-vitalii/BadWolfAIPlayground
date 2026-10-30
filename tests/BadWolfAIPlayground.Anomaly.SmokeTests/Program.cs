@@ -13,8 +13,8 @@ var checks = new (string Name, Action Execute)[]
     ("Recurring message patterns count real events and preserve evidence", RecurringPatterns),
     ("Optional offline C# log-template source context", SourceContext),
     ("Import entire Logs directory with component provenance", FolderImport),
-    ("Folder importer fails safely for invalid and oversized sets", FolderGuards),
-    ("Over 512 discovered files preserves recent Operations and lists omissions", FolderFileCount),
+    ("Large files stream safely without 16 MiB exclusion", FolderGuards),
+    ("More than 512 log files remain individually importable", FolderFileCount),
     ("Raw event overflow retains complete high-priority operations", FolderEventBudget),
     ("Multi-year Logs archives use a bounded coarse timeline", MultiYearTimeline),
     ("File selection recomputes events and duplicate provenance", FolderSelection),
@@ -407,38 +407,39 @@ static void FolderGuards()
         catch (OperationCanceledException) { failed = true; }
         Ensure(failed, "Cancelled folder scan must stop immediately.");
 
-        using (var stream = new FileStream(file, FileMode.Open, FileAccess.Write))
+        const int largeLines = 9_000;
+        string payload = new('X', 2_050);
+        using (var writer = new StreamWriter(file, append: false))
         {
-            stream.SetLength(LogFolderImporter.MaxFileBytes + 1);
+            for (int i = 0; i < largeLines; i++)
+                writer.WriteLine("2026-10-29 09:00:00 INFO profiler entry " +
+                    i + " " + payload);
         }
-        failed = false;
-        try { LogFolderImporter.Import(root); }
-        catch (InvalidDataException) { failed = true; }
-        Ensure(failed, "An all-oversized folder must not claim it analyzed any events.");
+        Ensure(new FileInfo(file).Length > 16L * 1024 * 1024,
+            "Fixture must exceed the obsolete 16 MiB input limit.");
 
-        // A sparse high-volume profiler must not prevent reading a valid,
-        // unrelated TOM_OP log; skipped content must be explicitly disclosed.
         string operations = Path.Combine(root, "Operations_2026-10-29.log");
         File.WriteAllText(operations,
             "2026-10-29 09:00:00 INFO TOM_OP v=1 event=start " +
             "operation=TrySellContract transaction_id=77 session_id=s1 flow_id=f1" +
             Environment.NewLine);
-        LogFolderImportResult partial = LogFolderImporter.Import(root);
-        Ensure(partial.Files.Count == 1 &&
-               partial.Files[0].RelativePath == "Operations_2026-10-29.log" &&
-               partial.Combined.Events.Count == 1 &&
-               partial.RawEvents.Count == 1 &&
-               partial.SkippedFiles.Count == 1 &&
-               partial.SkippedFiles[0].RelativePath == "App_2026-10-29.log" &&
-               partial.SkippedFiles[0].Reason.Contains("16 MiB", StringComparison.Ordinal) &&
-               partial.SkippedFiles[0].SizeBytes == LogFolderImporter.MaxFileBytes + 1 &&
-               partial.TotalBytes < LogFolderImporter.MaxFileBytes &&
-               OperationTimelineAnalyzer.Analyze(partial.Combined).GroupCount == 1,
-            "A large profiler must be visibly excluded without hiding valid operation events.");
-        failed = false;
-        try { LogFolderImporter.SelectFiles(partial, ["App_2026-10-29.log"]); }
-        catch (ArgumentException) { failed = true; }
-        Ensure(failed, "An excluded oversized file cannot be enabled as if it were parsed.");
+        LogFolderImportResult full = LogFolderImporter.Import(root);
+        Ensure(full.Files.Count == 2 &&
+               full.Combined.Events.Count == largeLines + 1 &&
+               full.RawEvents.Count == largeLines + 1 &&
+               full.SkippedFiles.Count == 0 &&
+               full.Files.Any(f => f.RelativePath == "App_2026-10-29.log" &&
+                   f.DatedEvents == largeLines) &&
+               full.RawEvents.Any(e => e.SourceFile == "App_2026-10-29.log" &&
+                   e.LineNumber == largeLines) &&
+               full.TotalBytes > 16L * 1024 * 1024 &&
+               OperationTimelineAnalyzer.Analyze(full.Combined).GroupCount == 1,
+            "Large profiler must be parsed without a byte-based exclusion, " +
+            "and the operation log must retain its source line.");
+        LogParseResult standalone = LogFolderImporter.ImportSingleFile(file);
+        Ensure(standalone.Events.Count == largeLines &&
+               standalone.Events[^1].LineNumber == largeLines,
+            "A large standalone LOG/TXT file must use incremental parsing.");
         File.Delete(operations);
 
         File.WriteAllBytes(file, [0xC3, 0x28, 0xFF]); // invalid UTF-8 sequence.
@@ -463,51 +464,38 @@ static void FolderFileCount()
     Directory.CreateDirectory(old);
     try
     {
-        Ensure(LogFolderImporter.MaxDiscoveredFiles > LogFolderImporter.MaxFiles,
-            "Discovery and analysis caps must not be conflated.");
-
-        // Old archives vastly outnumber the analyzed-file budget. Keep
-        // the tiny current TOM_OP trace even if its modification time is
-        // older than the archived files.
-        for (int i = 0; i < LogFolderImporter.MaxFiles + 16; i++)
-        {
+        const int archiveCount = 528;
+        for (int i = 0; i < archiveCount; i++)
             File.WriteAllText(Path.Combine(old, $"Reader_{i:0000}.log"),
                 $"2026-10-29 09:00:00 INFO archive reader {i}" + Environment.NewLine);
-        }
 
         string operations = Path.Combine(root, "Operations_2026-10-30(5).log");
         File.WriteAllText(operations,
             "2026-10-30 18:21:31 INFO TOM_OP v=1 event=step " +
             "step=card_issuing_cancelled session_id=s1 transaction_id=2854 " +
             "flow_id=f1 reason=user category=issuing" + Environment.NewLine);
-        File.SetLastWriteTimeUtc(operations, new DateTime(2021, 1, 1, 0, 0, 0,
-            DateTimeKind.Utc));
+        File.SetLastWriteTimeUtc(operations,
+            new DateTime(2021, 1, 1, 0, 0, 0, DateTimeKind.Utc));
         File.WriteAllText(Path.Combine(root, "App_2026-10-30.log"),
             "2026-10-30 18:21:32 INFO App running" + Environment.NewLine);
 
         LogFolderImportResult result = LogFolderImporter.Import(root);
-        int discovered = LogFolderImporter.MaxFiles + 16 + 2;
-        Ensure(result.Files.Count == LogFolderImporter.MaxFiles &&
-               result.SkippedFiles.Count == discovered - LogFolderImporter.MaxFiles &&
+        int discovered = archiveCount + 2;
+        Ensure(result.Files.Count == discovered &&
+               result.SkippedFiles.Count == 0 &&
+               result.Combined.Events.Count == discovered &&
                result.Files.Any(f => f.RelativePath == "Operations_2026-10-30(5).log") &&
                result.Files.Any(f => f.RelativePath == "App_2026-10-30.log") &&
-               result.SkippedFiles.All(f => f.Reason.Contains(
-                   "analyzed-file limit", StringComparison.Ordinal)) &&
-               result.SkippedFiles.All(f => f.RelativePath.StartsWith(
-                   "old" + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) &&
-               result.Combined.Events.Any(e => e.Message.Contains(
-                   "card_issuing_cancelled", StringComparison.Ordinal)) &&
                OperationTimelineAnalyzer.Analyze(result.Combined).Groups.Any(g =>
                    g.TransactionId == "2854" &&
                    g.Outcome == "Cancelled by operator"),
-            "A large old/ archive must not block the current Operations log " +
-            "or hide exact count-limit exclusions.");
+            "Many small archived files should all be parsed; current operation " +
+            "evidence must not be lost.");
 
-        var skipped = result.SkippedFiles[0].RelativePath;
-        bool rejected = false;
-        try { LogFolderImporter.SelectFiles(result, [skipped]); }
-        catch (ArgumentException) { rejected = true; }
-        Ensure(rejected, "Excluded archive files must not be selectable as parsed logs.");
+        LogFolderSelection onlyArchived = LogFolderImporter.SelectFiles(
+            result, [Path.Combine("old", "Reader_0000.log")]);
+        Ensure(onlyArchived.Combined.Events.Count == 1,
+            "Archival files must remain independently selectable.");
     }
     finally
     {
@@ -854,10 +842,12 @@ static void StandaloneCardRead()
     Ensure(cardRead.Kind == OperationTimelineGroupKind.StandaloneCardRead &&
            cardRead.TransactionId.Length == 0 &&
            cardRead.FlowIds.Single() == flow &&
-           cardRead.Outcome == "Card reading/checks finished; result unconfirmed" &&
-           cardRead.Explanation.Contains("No VTS transaction is expected",
+           cardRead.Outcome == "Card reading/checks completed" &&
+           cardRead.Explanation.Contains("no return value", StringComparison.Ordinal) &&
+           cardRead.Explanation.Contains("No VTS transaction is required",
                StringComparison.Ordinal) &&
-           cardRead.Explanation.Contains("result=unknown", StringComparison.Ordinal) &&
+           !cardRead.Events[0].Description.Contains("result=unknown",
+               StringComparison.Ordinal) &&
            cardRead.Events[0].DurationMs == 4057 &&
            cardRead.Events[0].SourceFile == path &&
            cardRead.Events[0].SourceLine == 1,
