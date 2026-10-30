@@ -963,6 +963,61 @@ internal static class Program
                     row.RelatedLogs.Count > 0),
                     "WPF must render correlated operation evidence in an expander.");
 
+
+                // Search the entire currently imported event set, not just
+                // the 12 top patterns and four displayed error findings.
+                var investigationSearch = anomalyView.FindName(
+                    "AnomalyInvestigationSearchBox") as TextBox;
+                Assert(investigationSearch is not null &&
+                       anomalyView.FindName("AnomalyInvestigationFindButton") is Button &&
+                       anomalyView.FindName("AnomalyInvestigationClearButton") is Button &&
+                       investigationSearch.GetBindingExpression(
+                           TextBox.TextProperty) is not null,
+                    "Source-aware search must have a real bound input and working buttons.");
+
+                analyzer.InvestigationSearchText = operationId;
+                Assert(analyzer.SearchInvestigationsCommand.CanExecute(null),
+                    "A pasted operation_id must enable searching the complete log.");
+                Task findById = analyzer.SearchInvestigationsAsync();
+                PumpUntil(() => findById.IsCompleted, TimeSpan.FromSeconds(20));
+                findById.GetAwaiter().GetResult();
+                Assert(analyzer.Investigations.Count == 1 &&
+                       analyzer.Investigations.Single().Category == "LOG SEARCH" &&
+                       analyzer.Investigations.Single().Heading.Contains(
+                           "Unable to read data", StringComparison.Ordinal) &&
+                       analyzer.Investigations.Single().DetailLine.Contains(
+                           operationId, StringComparison.Ordinal) &&
+                       analyzer.Investigations.Single().ObservedAt.HasValue &&
+                       analyzer.Investigations.Single().RelatedEventCount == 2 &&
+                       analyzer.Investigations.Single().Candidates.Any(candidate =>
+                           candidate.Source.Kind ==
+                               SourceEvidenceKind.LoggedCallerLocation) &&
+                       analyzer.InvestigationSummary.Contains(
+                           "2 matching event", StringComparison.Ordinal),
+                    "Searching by operation_id must show a descriptive collapsed " +
+                    "error title, time/file/line/ID and linked WebClient C# evidence.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.DataContext is AnomalyInvestigationRow row &&
+                    row.Category == "LOG SEARCH" && row.Heading.Contains(
+                        "Unable to read", StringComparison.Ordinal)),
+                    "Real WPF investigation expanders must show searchable error titles.");
+
+                analyzer.InvestigationSearchText = webName;
+                Task findByComponent = analyzer.SearchInvestigationsAsync();
+                PumpUntil(() => findByComponent.IsCompleted, TimeSpan.FromSeconds(20));
+                findByComponent.GetAwaiter().GetResult();
+                Assert(analyzer.Investigations.Count == 1 &&
+                       analyzer.Investigations.Single().OperationId == operationId,
+                    "A component filename search must include both INFO/DEBUG and " +
+                    "ERROR entries and group them by the exact operation ID.");
+
+                // Keep the operation ID search active through Include/Exclude.
+                analyzer.InvestigationSearchText = operationId;
+                Task restoreSearch = analyzer.SearchInvestigationsAsync();
+                PumpUntil(() => restoreSearch.IsCompleted, TimeSpan.FromSeconds(20));
+                restoreSearch.GetAwaiter().GetResult();
                 Task appOnly = analyzer.SetIncludedFilesAsync([appName]);
                 PumpUntil(() => appOnly.IsCompleted, TimeSpan.FromSeconds(20));
                 appOnly.GetAwaiter().GetResult();
@@ -982,6 +1037,18 @@ internal static class Program
                         row.Candidates.Any(candidate => candidate.Source.Kind ==
                             SourceEvidenceKind.LoggedCallerLocation)),
                     "Reenabling WebClient must restore the explicit source link.");
+                Assert(analyzer.Investigations.Count == 1 &&
+                       analyzer.Investigations.Single().Category == "LOG SEARCH",
+                    "An active query must remain in search mode after file filtering.");
+
+                analyzer.ClearInvestigationSearch();
+                Assert(analyzer.InvestigationSearchText.Length == 0 &&
+                       !analyzer.SearchInvestigationsCommand.CanExecute(null) &&
+                       analyzer.Investigations.All(row => row.Category != "LOG SEARCH") &&
+                       analyzer.InvestigationSummary.Contains("Investigated",
+                           StringComparison.Ordinal),
+                    "Clear must restore the original investigation list and summary.");
+
             }
             finally
             {
