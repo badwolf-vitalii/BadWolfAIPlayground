@@ -22,6 +22,7 @@ public sealed record SourceInvestigationCase(
     public string OperationId { get; init; } = "";
     public int RelatedEventCount { get; init; }
     public IReadOnlyList<SourceInvestigationLogEvent> RelatedEvents { get; init; } = [];
+    public DateTimeOffset? ObservedAt { get; init; }
 }
 
 public sealed record SourceInvestigationReport(
@@ -35,7 +36,7 @@ public sealed record SourceInvestigationReport(
 /// log report and syntax/source locations in an explicitly selected checkout.
 /// No timestamp-proximity grouping and no inferred runtime call graph.
 /// </summary>
-public static class SourceInvestigationAnalyzer
+public static partial class SourceInvestigationAnalyzer
 {
     public const int MaxPatternCases = 12;
     public const int MaxOperationCases = 8;
