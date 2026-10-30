@@ -515,3 +515,30 @@ A count of zero means no *multiline* context was captured; an exception
 written entirely on the original dated line remains in that message
 and is not counted as a separate stack trace. No exception content
 is sent, persisted or embedded.
+
+### Structured operation lifecycle timeline (TOM_OP v1)
+
+In **Anomaly Detection Lab**, choose a local Logs folder (including nested old/)
+or an individual Operations log. The new **Operation lifecycle** section
+shows transaction groups with their original log file/line, timings, user
+actions, dialog responses and completion outcomes. It works on INFO-only
+logs as well as warnings and errors, with no model, network access or cloud.
+
+The analyzer joins only explicit `session_id`, `transaction_id` and
+`flow_id`. Pre-transaction events join the transaction only if later
+evidence explicitly links the same session and flow to exactly one VTS ID.
+Unlinked flows remain separate; the same numeric VTS ID in another
+session is a different group. The newest 40 groups and 80 events per
+group are displayed with complete group/event counts and safe
+Notepad++ source navigation. File Include/Exclude filters apply here too.
+
+A successful `VtsTransactionClose` is distinct from a failed
+`PrintReceipt`. A `card_issuing_cancelled reason=user` event establishes
+intentional operator cancellation, for which `GenericError` can be
+the expected VTS commit status, not a hardware diagnosis. Watchdog and
+programmatic exits remain separate. Preview-to-decision time is
+reported only when explicit `card_preview_ready` and decision events
+exist, never guessed from an unexplained timestamp gap.
+
+No proprietary logs are committed. All deterministic fixtures are
+synthetic, and imported data stays local/in memory.

@@ -509,3 +509,28 @@ file target and cannot launch the editor. All/none/file filtering uses
 the same merged selection and source-file provenance as the findings.
 Tests verify the demo, non-anomalous context, WPF template, filtering,
 mirrored event identity, and safe external-editor availability.
+
+### Deterministic structured TOM_OP timeline
+
+`OperationTimelineAnalyzer.Analyze(LogParseResult)` reads only already
+imported events and decodes documented `TOM_OP v=1` fields. It maps
+(session, flow) to a transaction only when explicit records containing
+both IDs give an unambiguous association. It does not join records by
+temporal proximity or interpret undocumented error codes. Multiple
+flows may share one VTS transaction, but repeated VTS numbers across
+different sessions are never merged.
+
+`OperationTimelineReport` describes evidence-derived outcomes,
+distinguishing an API acknowledgement from a physical card issued,
+receipt printing success, and confirmed VTS closure. An explicit
+operator cancellation makes `GenericError` an expected cancellation
+commit status; without that evidence, the status is reported as
+unknown cause. Preview-review duration is measured only between
+documented preview and decision events. Unknown versions are ignored.
+
+The WPF view computes the operation report off the UI dispatcher on
+every successful import, filter update and reanalysis; cancellation
+preserves earlier results. It displays bounded groups/rows with
+typed source-file/line navigation using the existing Notepad++
+launcher. No local files, private source, or model input are persisted
+or transmitted.

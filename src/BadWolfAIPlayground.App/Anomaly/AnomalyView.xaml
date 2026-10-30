@@ -267,9 +267,83 @@
                 </StackPanel>
             </Border>
 
+
             <Border Style="{StaticResource Card}" Margin="0,0,0,17">
                 <StackPanel>
-                    <TextBlock Text="5  Warnings and errors over time" FontSize="16"
+                    <TextBlock Text="5  Operation lifecycle (TOM_OP v=1)"
+                               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding OperationSummary}" Foreground="#A9CDE2"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,9"/>
+                    <TextBlock Text="Only explicit transaction/session/flow evidence is joined. A user cancellation can legitimately commit GenericError; a successful VTS close does not prove receipt printing."
+                               Foreground="#8EB9D6" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,0,0,11"/>
+                    <ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyOperationGroups"
+                                      ItemsSource="{Binding OperationGroups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander Background="#0C1C30" Foreground="#D4E9F8"
+                                              BorderBrush="#304E6D" BorderThickness="1"
+                                              Padding="8" Margin="0,0,0,8">
+                                        <Expander.Header>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Heading}" FontSize="11"
+                                                           Foreground="#90D4F2" TextWrapping="Wrap"
+                                                           FontFamily="Consolas"/>
+                                                <TextBlock Text="{Binding Outcome}" FontWeight="SemiBold"
+                                                           FontSize="12" Foreground="#E4D9A9"
+                                                           Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <StackPanel Margin="4,7,4,4">
+                                            <TextBlock Text="{Binding Explanation}" FontSize="11"
+                                                       Foreground="#D3E4F4" TextWrapping="Wrap"
+                                                       Margin="0,0,0,7"/>
+                                            <TextBlock Text="{Binding FlowSummary}" FontSize="10"
+                                                       Foreground="#95B8D1" TextWrapping="Wrap"
+                                                       Margin="0,0,0,9"/>
+                                            <ItemsControl ItemsSource="{Binding Events}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border BorderBrush="#29445D"
+                                                                BorderThickness="0,0,0,1"
+                                                                Padding="3,6">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel Grid.Column="0">
+                                                                    <TextBlock Text="{Binding Display}"
+                                                                               FontFamily="Consolas" FontSize="10"
+                                                                               Foreground="#C5DFEF" TextWrapping="Wrap"/>
+                                                                    <TextBlock Text="{Binding Location}"
+                                                                               FontSize="9" Foreground="#8EBAD5"
+                                                                               TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                                                </StackPanel>
+                                                                <Button Grid.Column="1" Content="Open"
+                                                                        Style="{StaticResource SecondaryButton}"
+                                                                        Command="{Binding DataContext.OpenOperationEventCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                        CommandParameter="{Binding}"
+                                                                        ToolTip="Open the original log line in Notepad++"
+                                                                        VerticalAlignment="Center" Margin="9,0,0,0"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="6  Warnings and errors over time" FontSize="16"
                                FontWeight="SemiBold" Margin="0,0,0,5"/>
                     <TextBlock Text="Orange bars show spikes across the imported logs. Hover to inspect counts."
                                Foreground="#92B8D3" FontSize="11" Margin="0,0,0,14"/>
@@ -304,7 +378,7 @@
 
             <Border Style="{StaticResource Card}">
                 <StackPanel>
-                    <TextBlock Text="6  Findings with source evidence" FontSize="16"
+                    <TextBlock Text="7  Findings with source evidence" FontSize="16"
                                FontWeight="SemiBold" Margin="0,0,0,8"/>
                     <TextBlock Text="These are observations and investigation leads, not confirmed diagnoses."
                                Style="{StaticResource MutedText}" FontSize="11"

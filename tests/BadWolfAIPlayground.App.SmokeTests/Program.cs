@@ -386,6 +386,7 @@ internal static class Program
                    anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
                    anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
                    anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
+                   anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
                    anomalyView.FindName("AnomalyFilesExpander") is Expander &&
                    anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
                    anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
@@ -461,6 +462,30 @@ internal static class Program
                    analyzer.ExceptionSummary.Contains("not necessarily statistical anomalies",
                        StringComparison.Ordinal),
                 "The independent exception list must not depend on anomaly thresholds.");
+
+            // Structured cancellation must be visible even when every event
+            // is INFO and there are no statistical findings.
+            Task traceTask = analyzer.ImportTextAsync("Synthetic TOM_OP v1",
+                "2026-10-30 16:29:00 INFO TOM_OP v=1 event=step step=card_preview_ready session_id=s1 transaction_id=- flow_id=f1\n" +
+                "2026-10-30 16:29:10 INFO TOM_OP v=1 event=step step=card_issuing_cancelled session_id=s1 transaction_id=- flow_id=f1 category=issuing reason=user\n" +
+                "2026-10-30 16:29:11 INFO TOM_OP v=1 event=step step=card_commit_status session_id=s1 transaction_id=2849 flow_id=f1 category=GenericError success=false\n" +
+                "2026-10-30 16:29:12 INFO TOM_OP v=1 event=end operation=CardEmissionCommit session_id=s1 transaction_id=2849 flow_id=f1 result=true");
+            PumpUntil(() => traceTask.IsCompleted, TimeSpan.FromSeconds(20));
+            traceTask.GetAwaiter().GetResult();
+            Assert(analyzer.FindingCount == 0 &&
+                   analyzer.OperationGroupCount == 1 &&
+                   analyzer.OperationGroups.Single().Outcome == "Cancelled by operator" &&
+                   analyzer.OperationGroups.Single().Events.Count == 4 &&
+                   analyzer.OperationGroups.Single().Explanation.Contains(
+                       "GenericError was committed", StringComparison.Ordinal) &&
+                   !analyzer.OpenOperationEventCommand.CanExecute(
+                       analyzer.OperationGroups.Single().Events[0]),
+                "Structured user cancellation must be visible without statistical anomalies.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.DataContext is AnomalyOperationGroupRow row &&
+                    row.Outcome == "Cancelled by operator"),
+                "Lifecycle results must render a real WPF expander.");
 
             // Test importing a whole application Logs folder, including old/
             // and duplicate NLog App/component targets. No work data in CI.

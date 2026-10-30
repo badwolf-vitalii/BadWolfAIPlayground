@@ -21,6 +21,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _selectAll, _selectNone, _chooseEditor;
     private readonly ParameterRelayCommand<AnomalyFindingRow> _openFinding;
     private readonly ParameterRelayCommand<AnomalyExceptionRow> _openException;
+    private readonly ParameterRelayCommand<AnomalyOperationEventRow> _openOperationEvent;
     private readonly ParameterRelayCommand<AnomalySourceFileRow> _openLogFile;
     private LogFolderImportResult? _folderImport;
     private string? _folderRoot;
@@ -32,12 +33,15 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _active;
     private LogParseResult? _loaded;
     private AnomalyReport? _lastReport;
+    private OperationTimelineReport? _lastOperations;
     private LogSourceContextIndex? _sourceIndex;
     private string _sourceContextStatus =
         "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
     private string _source = "No file selected";
     private string _filesSummary = "Choose a Logs folder to inspect all components.";
     private string _exceptionSummary = "Load a log or the demo to inspect exception details.";
+    private string _operationSummary = "Select logs to correlate structured TOM_OP operations.";
+    private int _operationGroupCount;
     private int _duplicateCopies;
     private string _status = "Load a generated example or select a local LOG/TXT file.";
     private string _summary = "No analysis yet.";
@@ -67,6 +71,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openException = new ParameterRelayCommand<AnomalyExceptionRow>(
             item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
+        _openOperationEvent = new ParameterRelayCommand<AnomalyOperationEventRow>(
+            item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
         _openLogFile = new ParameterRelayCommand<AnomalySourceFileRow>(
             item => OpenLogInNotepadPlusPlus(item.RelativePath, 1),
             _ => _folderRoot is not null);
@@ -75,6 +82,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
     public ObservableCollection<AnomalyFindingRow> Findings { get; } = [];
     public ObservableCollection<AnomalyExceptionRow> ExceptionEntries { get; } = [];
+    public ObservableCollection<AnomalyOperationGroupRow> OperationGroups { get; } = [];
     public ObservableCollection<AnomalySourceFileRow> SourceFiles { get; } = [];
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
@@ -84,6 +92,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand ChooseNotepadCommand => _chooseEditor;
     public ICommand OpenFindingCommand => _openFinding;
     public ICommand OpenExceptionCommand => _openException;
+    public ICommand OpenOperationEventCommand => _openOperationEvent;
     public ICommand OpenLogFileCommand => _openLogFile;
     public bool CanEditFiles => !Busy && _folderImport is not null;
     public string EditorStatus
@@ -122,6 +131,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         get => _exceptionSummary;
         private set => SetProperty(ref _exceptionSummary, value);
+    }
+    public string OperationSummary
+    {
+        get => _operationSummary;
+        private set => SetProperty(ref _operationSummary, value);
+    }
+    public int OperationGroupCount
+    {
+        get => _operationGroupCount;
+        private set => SetProperty(ref _operationGroupCount, value);
     }
 
     public double Sensitivity
@@ -165,6 +184,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token, name), token);
         AnomalyReport analyzed = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
+        OperationTimelineReport operations = await Task.Run(() =>
+            OperationTimelineAnalyzer.Analyze(parsed, token), token);
         token.ThrowIfCancellationRequested();
         await _dispatcher.InvokeAsync(() =>
         {
@@ -174,7 +195,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             string preview = string.Join(Environment.NewLine,
                 text.Split('\n').Take(5).Select(s => s.TrimEnd('\r')));
             Preview = preview[..Math.Min(650, preview.Length)];
-            Apply(analyzed);
+            Apply(analyzed, operations);
             _run.NotifyCanExecuteChanged();
         });
     });
@@ -188,6 +209,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         LogParseResult parsed = await Task.Run(() => LogParser.Parse(text, token, Path.GetFileName(path)), token);
         AnomalyReport result = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
+        OperationTimelineReport operations = await Task.Run(() =>
+            OperationTimelineAnalyzer.Analyze(parsed, token), token);
         token.ThrowIfCancellationRequested();
         await _dispatcher.InvokeAsync(() =>
         {
@@ -198,7 +221,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             NotifyOpenCommands();
 
             Preview = text[..Math.Min(text.Length, 650)];
-            Apply(result);
+            Apply(result, operations);
             _run.NotifyCanExecuteChanged();
         });
     });
@@ -224,6 +247,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         AnomalyReport report = await Task.Run(() =>
             AnomalyDetector.Analyze(imported.Combined,
                 new AnomalyOptions(Sensitivity), token), token);
+        OperationTimelineReport operations = await Task.Run(() =>
+            OperationTimelineAnalyzer.Analyze(imported.Combined, token), token);
         token.ThrowIfCancellationRequested();
         // Some progress callbacks may still be queued on the dispatcher.
         // Do not let them overwrite the final "Completed locally" status.
@@ -257,7 +282,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             int components = imported.Files.Select(f => f.Component)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count();
             UpdateSelectedFilesSummary(imported.Files.Count);
-            Apply(report);
+            Apply(report, operations);
             _run.NotifyCanExecuteChanged();
         });
     });
@@ -305,6 +330,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         _openFinding.NotifyCanExecuteChanged();
         _openException.NotifyCanExecuteChanged();
+        _openOperationEvent.NotifyCanExecuteChanged();
         _openLogFile.NotifyCanExecuteChanged();
     }
 
@@ -342,6 +368,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         AnomalyReport report = await Task.Run(() =>
             AnomalyDetector.Analyze(filtered.Combined,
                 new AnomalyOptions(Sensitivity), token), token);
+        OperationTimelineReport operations = await Task.Run(() =>
+            OperationTimelineAnalyzer.Analyze(filtered.Combined, token), token);
         token.ThrowIfCancellationRequested();
 
         await _dispatcher.InvokeAsync(() =>
@@ -349,7 +377,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             _loaded = filtered.Combined;
             DuplicateCopies = filtered.DuplicateCopies;
             UpdateSelectedFilesSummary(filtered.EnabledFileCount);
-            Apply(report);
+            Apply(report, operations);
             if (filtered.EnabledFileCount == 0)
             {
                 StatusText =
@@ -517,8 +545,10 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
         AnomalyReport analyzed = await Task.Run(() =>
             AnomalyDetector.Analyze(parsed, new AnomalyOptions(Sensitivity), token), token);
+        OperationTimelineReport operations = await Task.Run(() =>
+            OperationTimelineAnalyzer.Analyze(parsed, token), token);
         token.ThrowIfCancellationRequested();
-        await _dispatcher.InvokeAsync(() => Apply(analyzed));
+        await _dispatcher.InvokeAsync(() => Apply(analyzed, operations));
     });
 
     public Task LoadSourceContextAsync(string folder) => ExecuteAsync(async token =>
@@ -533,9 +563,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 $"Local C# context loaded: {index.TemplateCount:N0} logging templates " +
                 $"from {index.FilesScanned:N0} source files. " +
                 "Matches are heuristic; the source stays on this PC.";
-            if (_lastReport is not null)
+            if (_lastReport is not null && _lastOperations is not null)
             {
-                Apply(_lastReport);
+                Apply(_lastReport, _lastOperations);
             }
         });
     });
@@ -615,12 +645,47 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
     }
 
-    private void Apply(AnomalyReport report)
+    private void Apply(AnomalyReport report, OperationTimelineReport operations)
     {
         _lastReport = report;
+        _lastOperations = operations;
         Findings.Clear();
         ExceptionEntries.Clear();
+        OperationGroups.Clear();
         Timeline.Clear();
+
+        OperationGroupCount = operations.GroupCount;
+        OperationSummary = operations.StructuredEvents == 0
+            ? "No structured TOM_OP v=1 events in the enabled logs. " +
+              "Statistical anomaly detection still works without these markers."
+            : "Recognized " + operations.StructuredEvents.ToString("N0", CultureInfo.InvariantCulture) +
+              " structured events in " + operations.GroupCount.ToString("N0", CultureInfo.InvariantCulture) +
+              " correlated transaction/flow groups. Showing " +
+              operations.Groups.Count.ToString("N0", CultureInfo.InvariantCulture) +
+              " latest; " + operations.UnlinkedEvents.ToString("N0", CultureInfo.InvariantCulture) +
+              " events have neither an explicit transaction ID nor a safe flow link.";
+
+        foreach (OperationTimelineGroup group in operations.Groups)
+        {
+            string name = group.TransactionId.Length > 0
+                ? "VTS transaction " + group.TransactionId
+                : "Unlinked flow " + (group.FlowIds.FirstOrDefault() ?? "unknown");
+            string period = group.StartedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture) +
+                " - " + group.EndedAt.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            string flows = group.FlowIds.Count == 0 ? "No flow_id present" :
+                group.FlowIds.Count + " flow_id(s): " + string.Join(", ", group.FlowIds);
+            AnomalyOperationEventRow[] rows = group.Events.Select(entry =>
+                new AnomalyOperationEventRow(
+                    entry.Timestamp.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture),
+                    entry.Description, entry.SourceFile, entry.SourceLine)).ToArray();
+            OperationGroups.Add(new AnomalyOperationGroupRow(
+                name + "  |  " + period + "  |  " + group.EventCount + " events",
+                group.Outcome, group.Explanation,
+                flows + (group.EventCount > rows.Length
+                    ? " (showing the most recent " + rows.Length + " events)"
+                    : ""),
+                rows));
+        }
 
         // Show all captured exception context, even when the detector found
         // no statistical anomaly. Display is bounded independently of import.
@@ -746,6 +811,20 @@ public sealed record AnomalyBucketRow(
 {
     public string Color => Burst ? "#F0A080" : "#438BC1";
     public string Label => $"{Time}: {Problems} warning/error events of {Total}.";
+}
+
+/// <summary>Correlated operation group from explicit TOM_OP records.</summary>
+public sealed record AnomalyOperationGroupRow(
+    string Heading, string Outcome, string Explanation, string FlowSummary,
+    IReadOnlyList<AnomalyOperationEventRow> Events);
+
+/// <summary>A structured event retaining its original source line.</summary>
+public sealed record AnomalyOperationEventRow(
+    string Time, string Description, string SourceFile, int SourceLine)
+{
+    public string Display => Time + "  " + Description;
+    public string Location => string.IsNullOrWhiteSpace(SourceFile)
+        ? "Log line " + SourceLine : SourceFile + ":" + SourceLine;
 }
 
 /// <summary>One dated event with bounded original exception context.</summary>
