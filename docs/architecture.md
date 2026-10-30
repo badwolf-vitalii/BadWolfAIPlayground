@@ -393,7 +393,10 @@ and rejects unreadable or binary inputs. Files exceeding the
 per-file or combined byte budgets are excluded *before reading*,
 with each original relative path, file size and exclusion reason
 preserved in `LogFolderSkippedFile` instead of silently losing events.
-WPF explicitly reports **PARTIAL IMPORT** when there are exclusions.
+WPF explicitly reports **PARTIAL IMPORT** for excluded files, including
+file-count exclusions. The imported and skipped file lists use
+virtualized WPF `ListBox` controls to avoid creating thousands
+of child elements for the entire archive.
 
 Every `LogEvent` now stores `SourceFile` (relative to the
 chosen folder) and its physical `LineNumber`. Detection
@@ -545,14 +548,17 @@ without ambiguous cross-session merging or timestamp heuristics.
 
 ### Safe partial import for high-volume profiler logs
 
-`LogFolderImporter.Import` first enumerates up to 512 eligible
-extensions with size metadata. Files over 16 MiB are never read;
-they are added to `SkippedFiles`. If total eligible file sizes
-exceed 256 MiB, smaller files are selected within that budget in
-deterministic size/path order, then actually read in original
-path order. Existing UTF-8/UTF-16 decoding, per-file event and
-combined event limits, cancellation and exact NLog mirror
-deduplication still apply to the selected contents.
+`LogFolderImporter.Import` scans up to 50,000 supported file
+metadata entries without reading content. It selects up to 512
+for one analysis, preferring `Operations*` logs, then current
+root-level files, other non-archived folders, then `old/` archives;
+within those classes the most recently modified files come first.
+Files over 16 MiB are excluded before reading. Candidates that
+exceed the 512 analyzed-file cap or combined 256 MiB byte budget
+are explicitly listed in `SkippedFiles`, never quietly truncated.
+Selected files are then read in path order for consistent provenance.
+Existing UTF-8/UTF-16 decoding, raw/distinct event limits,
+cancellation and exact NLog mirror deduplication still apply.
 
 If every file is over the limit, the import fails rather than
 presenting invented coverage. Likewise, genuinely invalid encoded
@@ -567,3 +573,16 @@ Engine and WPF smoke tests use sparse synthetic oversized
 profiler files and a valid small operation trace, verifying
 that the latter survives, the omissions are shown explicitly,
 and failed subsequent imports preserve the prior valid result.
+
+### Large archive file-count regression
+
+The former hard failure at the 513th discovered file is replaced
+by metadata discovery and resource-limited selection. A synthetic
+regression fixture creates more than 512 old component logs plus
+current `Operations_2026-10-30(5).log` and `App` logs.
+The Operations file deliberately has an old filesystem timestamp;
+its explicit priority must still retain the structured cancellation,
+with correct transaction outcome and original source line.
+Every excluded archive file is reported and cannot be enabled as
+if it had been imported. The 50,000 metadata-entry guard is separate
+from the 512 files actually analyzed at once.

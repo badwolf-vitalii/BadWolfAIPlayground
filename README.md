@@ -401,10 +401,11 @@ checkout, and never commit your source data to this public repo.
 
 ### Analyze a complete Logs folder (v0.3.0)
 
-Select **Logs folder** inside Anomaly Detection Lab to import all
+Select **Logs folder** inside Anomaly Detection Lab to discover
 `.log` and `.txt` files from that folder and any subfolders,
 including `old/` and dated component archives, without selecting
-files one by one. The app merges events by timestamp, displays
+files one by one. The app imports as many as its bounded resource
+budgets allow, merges selected events by timestamp, and displays
 a single anomaly timeline, and includes a collapsible per-file /
 component breakdown with per-file event and problem counts.
 
@@ -425,14 +426,17 @@ labelled partial result instead of letting one oversized profiler
 prevent analysis of all other logs. Skipped files contribute no
 evidence to statistics, findings or operation timelines.
 
-Safety bounds are **512 discovered files**, **16 MiB per file**, **256 MiB
-combined**, and **500,000 distinct events**. Oversized individual files
-are **excluded from analysis with a prominent SKIPPED FILES list**.
-If the total byte budget is exceeded, the importer selects a
-deterministic subset of smaller eligible files and identifies every
-excluded file. Results are explicitly marked **PARTIAL IMPORT**,
-never presented as complete coverage. A folder with no usable files
-fails clearly. UTF-8 and
+Safety bounds are **50,000 discovered file metadata entries**, **512 analyzed
+files**, **16 MiB per file**, **256 MiB combined**, **1,000,000 raw events**
+and **500,000 distinct events**. The scanner no longer fails at file
+513: it prioritizes `Operations*.log` (including inside `old/`),
+then current root-level logs, other non-archive logs, and archived logs.
+Within each category recently modified files are preferred. Files
+excluded by the count or byte budget appear with their exact reason
+in **SKIPPED FILES — NOT ANALYZED**. Files above 16 MiB are never read.
+Results are explicitly marked **PARTIAL IMPORT**, not presented as
+complete coverage. Scans exceeding the separate 50,000-entry metadata
+guard or with no usable files fail clearly. UTF-8 and
 BOM-marked UTF-16 are supported; use single-file import or
 convert a copy for legacy code pages. Binary data, ZIP archives
 and unsupported file types are not processed. The detector's
@@ -567,7 +571,10 @@ aborting the entire import because of that profiler.
 
 If files were excluded, a prominent expanded **SKIPPED FILES —
 NOT ANALYZED** panel lists their relative filenames, original sizes
-and exact reasons. The import is labelled **PARTIAL IMPORT**.
+and exact reasons. This includes files excluded by the 512-analyzed
+file limit. The import is labelled **PARTIAL IMPORT**. The imported
+and excluded lists use WPF item virtualization to remain scrollable
+even for hundreds or thousands of discovered log files.
 Skipped files contribute *zero* events to the charts, findings,
 exception list and Operation lifecycle timeline, and cannot be
 re-enabled through Include/Exclude until a smaller copy is imported.
