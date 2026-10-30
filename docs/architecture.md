@@ -326,3 +326,316 @@ irrelevant quote; it adds no additional Qwen or embedding call.
 More relevant later evidence remains preferred to weaker early
 mentions. Test coverage includes the user's exact fox-name
 introductory sentence and the later chunk-2 citation.
+
+
+## Anomaly Detection Lab (v0.3.0 development)
+
+`BadWolfAIPlayground.Anomaly` is a dependency-free .NET 8 module with
+records, a conservative timestamp/severity log parser, a robust
+median/MAD time-bucket outlier detector and a rare error-template
+heuristic. `AnomalyViewModel` invokes parsing and detection on worker
+threads, applies results through the captured WPF dispatcher, supports
+cancellation, and retains the last valid result after a failed import.
+
+The demo is 100% synthetic and deterministic. Production logs are
+accepted only through explicit local selection and the existing
+size-bounded file importer, and remain in memory. Nothing is
+uploaded, stored in embedding caches, or sent to Ollama. The UI
+exposes both timestamped results and counts of unrecognized lines.
+Eight or more buckets are required before producing burst alerts;
+the outlier threshold is median + sensitivity times a robust spread,
+with a minimum additional count of 3 and a minimum total burst of 5.
+Rarer error templates are labeled as investigation leads, not proven
+incidents, and only evaluated with at least 25 errors.
+
+Testing: a dedicated non-WPF anomaly smoke runner covers parser
+accuracy, synthetic error spikes, normal baseline, rare templates,
+sensitivity, insufficient history and cancellation. The Windows WPF
+smoke test additionally opens the third experiment, executes the
+demo, verifies actual finding cards and reanalyzes the same sample
+with a changed sensitivity. Without actual work log samples, the
+supported format and any root-cause interpretation remain provisional.
+
+
+### Optional source-aware log triage
+
+`LogSourceContextIndex` scans a locally chosen solution directory
+for elementary C# logging statements, supports simple interpolated
+templates with bounded variable spans, and records relative source
+file paths and line numbers. It intentionally does not require a
+Roslyn dependency, cloud access, cloning or persisted embeddings.
+A matched source location is labeled as a *possible* source, not
+proof of execution; no source code or matched message is transferred
+to the public repository. File size, file count, total bytes,
+template count and regex timeouts are bounded; generated build
+folders are excluded.
+
+The optional WPF **Select local C# solution** action builds this
+in-memory index on a worker thread and annotates evidence cards
+with possible source locations when the logged message matches.
+A nearby `C:\...\File.cs: line 123` DEBUG line can also supply
+caller evidence if it was emitted within three physical lines and
+three seconds of the finding. Neither matching scheme establishes
+causation. Deterministic tests use only synthetic C# statements
+and exercise exact, interpolated and irrelevant messages as well as
+the WPF source-selection flow. The ability to understand business
+rules still requires human-authored documentation or explicit
+source-level investigation, not just a message-template match.
+
+
+### Importing a whole multi-component Logs directory
+
+`LogFolderImporter.Import` discovers supported `.log` and `.txt` files
+recursively, including `old/`. The file content is read incrementally
+through a strict UTF-8/BOM-marked UTF-16 `StreamReader` into
+`LogParser.Parse(TextReader)`, with FileShare.ReadWrite|Delete for active
+logs. The source text is never collected into a giant string.
+The old 16 MiB per-file, 256 MiB combined, and 512 analyzed-file
+limits no longer apply. The parser preserves strict encoding, binary
+checks, bounded individual lines/context and physical line provenance.
+
+Source discovery remains bounded at 50,000 metadata entries, and
+up to 1,000,000 dated events can be retained in a single report.
+Candidates are analyzed in priority order (Operations first, then
+current/root files, non-archive and archived files). Files that
+cannot fit wholly in the remaining event budget are excluded with
+a visible reason and original relative path; no partial transaction
+is represented as a complete file. The skipped-file count is based
+on actual excluded sources. WPF virtualizes imported and skipped
+file lists and reports PARTIAL IMPORT only when data was excluded.
+
+Every `LogEvent` now stores `SourceFile` (relative to the
+chosen folder) and its physical `LineNumber`. Detection
+findings preserve this provenance and the optional list of
+`AlsoInFiles` aliases. Exact cross-file duplicate copies
+(timestamp, explicit severity, message) are deduplicated;
+repeated same-file events remain distinct. The component
+is inferred conservatively from the NLog filename, not
+from undocumented application semantics. This avoids
+false spikes from mirrored general App and component targets.
+
+The WPF view offers **Select Logs folder** alongside single-file
+selection and the demo. A collapsible per-file/component
+breakdown explains the difference between raw source-file
+counts and deduplicated aggregate totals. Findings display
+`relativePath:line`; code-caller DEBUG hints are restricted
+to **the same source file** to avoid accidentally correlating
+unrelated entries with matching physical line numbers.
+
+The import is transactional at the view-model boundary: a
+failed or canceled selection does not replace the previous
+successful report. No absolute paths, file bodies, or
+business-specific log templates are persisted, uploaded,
+or added to this public repository. Tests build an entirely
+synthetic multi-target Logs folder with nested archives,
+identical mirrored NLog entries, provenance and failure cases.
+
+
+**Conservative event identity:** exact equality alone is not enough
+to merge two independent components. Cross-file deduplication is
+restricted to a general `App` log paired with a dedicated
+component target, or duplicate copies of the *same filename*
+in different folders. Other components retain independent
+events even at identical timestamps. A regression test guards
+against accidental undercounting of simultaneous device events.
+
+
+### Per-file filtering and precise local log navigation
+
+A `LogFolderImportResult` retains bounded `RawEvents` in
+memory and the initial deduplicated `Combined` report.
+`LogFolderImporter.SelectFiles` validates selected paths
+against the original imported file list and rebuilds
+cross-target deduplication from **only the enabled raw
+events**, recomputing per-file totals and duplicate counts.
+This avoids incorrect counts and lost evidence when the
+primary component target of a previously deduplicated
+App/component pair is disabled. The import has a maximum
+of 1,000,000 retained dated events, both raw and distinct. Selection never
+causes a second disk read, copy of log text to a server,
+embedding operation, or Ollama request.
+
+`AnomalySourceFileRow.Included` is an observable state,
+bound directly to per-log WPF checkboxes. Changing a file
+triggers asynchronous, cancellable local recomputation of
+the timeline and detection findings. Include all / Exclude
+all allow bulk selection with one recomputation. While busy,
+file controls are disabled to avoid contradictory results.
+An empty selection explicitly shows no events. The previous
+valid data remains available if a reanalysis fails.
+
+`AnomalyFindingRow.SourceFile` and `SourceLine` preserve
+original relative filename and physical line without relying
+on display parsing. WPF finding actions pass the typed row
+as a command parameter. `ResolveLogLocation` requires the
+file to be part of the imported file list and verifies that
+its normalized absolute path is below the selected root;
+single-file mode has its own authorized path. The path
+remains only in volatile ViewModel memory.
+
+`NotepadPlusPlusLauncher` builds a `ProcessStartInfo`
+using separate `ArgumentList` entries (`-nLINE`, filename)
+rather than interpolating a shell command. Windows
+App Paths/Program Files/PATH supply automatic discovery;
+optional explicit `notepad++.exe` selection supports a
+portable installation without persistent settings.
+No editor is started in CI. WPF smoke tests verify
+automatic filtering through real checkboxes, all/none
+recalculation, deduplicated App/component evidence after
+selection, safe path containment, and Notepad++ command
+construction for an original log line.
+
+### Bounded exception continuation evidence
+
+`LogParser` attaches contiguous recognized undated .NET exception headers,
+indented frames and inner-exception markers to the preceding timestamped
+`LogEvent`. The per-event capture is capped at 32 lines and 4,096 characters;
+`ContinuationTruncated` records overflow while `ContinuationLines` counts
+all recognized lines. Blank/unrecognized undated content terminates the
+association. Severity tokens are anchored to the beginning of the
+post-timestamp text, preventing false ERROR classifications in device messages.
+
+`AnomalyDetector` propagates available exception context from its selected
+representative event to `AnomalyFinding`. Burst representatives favor a
+higher severity or same-severity entry with stack evidence. Timeline and rare
+pattern calculations, cross-target duplicate identity, and original
+file/physical-line provenance are unaffected. WPF displays a conditional
+collapsed stack expander. Synthetic tests cover truncated context, boundaries,
+severity, propagation, component filtering, and actual WPF binding.
+
+
+### Discoverable exception evidence independent of findings
+
+`DemoLogs` contains a synthetic, explicitly labeled multiline exception
+on the existing rare FATAL event. `AnomalyViewModel.Apply` enumerates the
+deduplicated, currently enabled `report.Source.Events`, counts all events
+with captured continuation text, and displays at most the **40 most recent**
+as `AnomalyExceptionRow` entries. This is independent of the
+`AnomalyDetector` finding threshold and therefore useful even with
+zero anomalies. The WPF overview shows a dedicated `ExceptionCount`
+metric; its separate section has per-event expanders with bounded
+original detail and a typed `OpenExceptionCommand` using the existing
+validated Notepad++ path/line launcher. Demo-only data has no local
+file target and cannot launch the editor. All/none/file filtering uses
+the same merged selection and source-file provenance as the findings.
+Tests verify the demo, non-anomalous context, WPF template, filtering,
+mirrored event identity, and safe external-editor availability.
+
+### Deterministic structured TOM_OP timeline
+
+`OperationTimelineAnalyzer.Analyze(LogParseResult)` reads only already
+imported events and decodes documented `TOM_OP v=1` fields. It maps
+(session, flow) to a transaction only when explicit records containing
+both IDs give an unambiguous association. It does not join records by
+temporal proximity or interpret undocumented error codes. Multiple
+flows may share one VTS transaction, but repeated VTS numbers across
+different sessions are never merged.
+
+`OperationTimelineReport` describes evidence-derived outcomes,
+distinguishing an API acknowledgement from a physical card issued,
+receipt printing success, and confirmed VTS closure. An explicit
+operator cancellation makes `GenericError` an expected cancellation
+commit status; without that evidence, the status is reported as
+unknown cause. Preview-review duration is measured only between
+documented preview and decision events. Unknown versions are ignored.
+
+The WPF view computes the operation report off the UI dispatcher on
+every successful import, filter update and reanalysis; cancellation
+preserves earlier results. It displays bounded groups/rows with
+typed source-file/line navigation using the existing Notepad++
+launcher. No local files, private source, or model input are persisted
+or transmitted.
+
+A second exact-ID pass resolves missing `session_id` on end records
+from the matching `operation_id` start record when that ID maps to
+exactly one session. This matches the observed TOM_OP wire format
+without ambiguous cross-session merging or timestamp heuristics.
+
+### Large-source streaming and bounded evidence retention
+
+`LogParser.Parse(TextReader)` parses every physical line without
+buffering the complete original file. The same streamed parser is
+used for standalone LOG/TXT selection and recursive Logs-folder
+imports. Files above 16 MiB are ordinary inputs, not automatic
+exclusions; document indexing in Smart Search is unaffected.
+
+A 1,000,000-event in-memory budget bounds the events retained for
+deduplication, grouping, timelines and reversible Include/Exclude.
+If the remaining space is too small for an entire file, the parser
+stops at the limit; the importer discloses that source as excluded
+without retaining a partial file. The number of events in a skipped
+source beyond the bound is intentionally not claimed as known.
+Operations sources retain priority for correlation; admitted
+sources are sorted by path afterward to preserve mirror provenance.
+
+Synthetic engine tests import a real >16 MiB UTF-8 log with 9,000
+dated entries, plus an operation trace. They also import more than
+512 archived logs without exclusions. Windows WPF smoke tests
+exercise both single-file and folder streaming and an intentionally
+small event budget to validate partial-import warnings, preserved
+state, Notepad++ physical-line links and failure behavior.
+
+The detector also supports multi-year archive spans by expanding
+the bucket interval to retain at most 720 buckets rather than
+discarding the imported report due to the former 366-day guard.
+The WPF chart uses date-aware labels and explicitly notes the
+coarse granularity. Single-event provenance and the TOM_OP
+operation timeline retain their original timestamps and source lines.
+A deterministic small-budget fixture verifies whole-file exclusion,
+path/line preservation, skip warnings and byte accounting; a
+separate multi-year fixture verifies coarse bounded buckets.
+
+### Consolidating repetitive log evidence without asserting causes
+
+`AnomalyDetector` now reports the count of flagged statistical buckets
+separately from consolidated finding rows. Bursts are grouped by
+`NormalizePattern(representativeEvidence)` with explicit
+`AffectedWindows`, `FirstWindow` and `LastWindow` metadata, while the
+sample line is preserved for Notepad++ source navigation. The sum of
+bucket-level WARN/ERROR/FATAL events is not the number of occurrences
+of the representative message. Ranking reserves capacity for rare
+errors, instead of allowing one noisy component to dominate all 24
+cards.
+
+From the same already-deduplicated `LogParseResult`, the detector
+builds up to 12 `LogMessagePattern` summaries. A key consists of
+`(LogSeverity, NormalizePattern(message))`; the summary tracks actual
+occurrences, first/last timestamps, distinct source paths and a
+recent original example with physical source line. The full pattern
+count is retained even when only the top 12 rows are visible. This
+pattern model does not infer hardware failure or business causality.
+
+The WPF ViewModel also independently groups dated events carrying
+multiline exception context. Its display key combines severity,
+normalized dated message and normalized first continuation line.
+These are only similar context signatures: stack-frame tails can
+differ. `ExceptionCount` remains the original count; display rows
+carry `Occurrences`, `FirstSeen` and `LastSeen`, along with an
+unchanged authorized local source path/line for opening the sample.
+
+The pattern panel uses collapsed WPF expanders; findings scroll
+inside a bounded-height region. Synthetic .NET and WPF regressions
+check grouping, preserved severity and file/line attribution, rare
+errors not hidden by bursts, dynamic reanalysis and no access to
+non-imported sources. No proprietary log text enters the repo.
+
+
+### Non-transactional card reads are not missing VTS links
+
+`OperationTimelineGroup.Kind` differentiates `VtsTransaction`,
+`StandaloneCardRead` and `UnlinkedFlow`. The analyzer recognizes
+`CardInfoReadAndChecks` as a standalone read/check operation when
+there is no explicit transaction association and no other named
+operation in that flow. WPF shows **Card reading/checks** instead
+of incorrectly reporting **VTS link unknown**. Any explicit
+transaction association still takes precedence.
+
+Because the card-insertion handler is void, `result=unknown` is an
+emitter placeholder for no method return value. `event=end` with
+`status=completed` means the independent card-read/check handler
+**completed**, with no VTS dependency. WPF hides the placeholder
+and preserves timing and source line. An absent end event is not
+assumed completed; explicitly logged failures remain reportable. An unknown or
+mixed-operation flow is never presumed standalone solely because
+its `transaction_id` is absent. Deterministic engine and WPF
+tests cover the production record shape with synthetic IDs.

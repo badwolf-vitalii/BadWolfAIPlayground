@@ -14,6 +14,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Search"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Search.SmokeTests", "tests\BadWolfAIPlayground.Search.SmokeTests\BadWolfAIPlayground.Search.SmokeTests.csproj", "{A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Anomaly", "src\BadWolfAIPlayground.Anomaly\BadWolfAIPlayground.Anomaly.csproj", "{542993F4-7BE2-453E-B48C-7A18146326C1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BadWolfAIPlayground.Anomaly.SmokeTests", "tests\BadWolfAIPlayground.Anomaly.SmokeTests\BadWolfAIPlayground.Anomaly.SmokeTests.csproj", "{868E9C42-A504-4B0D-9526-F05A48B3C55A}"
+EndProject
 Global
     GlobalSection(SolutionConfigurationPlatforms) = preSolution
         Debug|Any CPU = Debug|Any CPU
@@ -44,6 +48,14 @@ Global
         {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
         {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
         {A24E8C35-E2F7-441D-9B80-3A6BBC0645A2}.Release|Any CPU.Build.0 = Release|Any CPU
+        {542993F4-7BE2-453E-B48C-7A18146326C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {542993F4-7BE2-453E-B48C-7A18146326C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {542993F4-7BE2-453E-B48C-7A18146326C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {542993F4-7BE2-453E-B48C-7A18146326C1}.Release|Any CPU.Build.0 = Release|Any CPU
+        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+        {868E9C42-A504-4B0D-9526-F05A48B3C55A}.Release|Any CPU.Build.0 = Release|Any CPU
     EndGlobalSection
     GlobalSection(SolutionProperties) = preSolution
         HideSolutionNode = FALSE

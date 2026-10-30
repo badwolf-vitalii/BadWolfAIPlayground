@@ -12,6 +12,8 @@ using System.Windows.Threading;
 using BadWolfAIPlayground.App;
 using BadWolfAIPlayground.App.ViewModels;
 using BadWolfAIPlayground.App.Search;
+using BadWolfAIPlayground.App.Anomaly;
+using BadWolfAIPlayground.Anomaly;
 using BadWolfAIPlayground.Search;
 
 namespace BadWolfAIPlayground.App.SmokeTests;
@@ -373,6 +375,491 @@ internal static class Program
             Assert(smartSearch.Visibility == Visibility.Collapsed,
                 "Neural Network Lab navigation failed.");
             Console.WriteLine("PASS Smart Search navigation, demo and offline keyword comparison");
+
+            window.NavigateToAnomalyLab();
+            var anomalyView = FindDescendants<AnomalyView>(window).Single();
+            AnomalyViewModel analyzer = anomalyView.AnalysisModel;
+            Assert(anomalyView.Visibility == Visibility.Visible &&
+                   smartSearch.Visibility == Visibility.Collapsed &&
+                   anomalyView.FindName("ChooseAnomalySourceButton") is Button &&
+                   anomalyView.FindName("UseAnomalyDemoButton") is Button &&
+                   anomalyView.FindName("SelectAnomalyLogButton") is Button &&
+                   anomalyView.FindName("SelectAnomalyFolderButton") is Button &&
+                   anomalyView.FindName("AnomalySourceFiles") is ItemsControl &&
+                   anomalyView.FindName("AnomalyExceptionEntries") is ItemsControl &&
+                   anomalyView.FindName("AnomalyPatterns") is ItemsControl &&
+                   anomalyView.FindName("AnomalyOperationGroups") is ItemsControl &&
+                   anomalyView.FindName("AnomalySkippedFilesExpander") is Expander &&
+                   anomalyView.FindName("AnomalySkippedFileList") is ListBox &&
+                   anomalyView.FindName("AnomalySourceFiles") is ListBox &&
+                   anomalyView.FindName("AnomalyFilesExpander") is Expander &&
+                   anomalyView.FindName("EnableAllAnomalyLogsButton") is Button &&
+                   anomalyView.FindName("DisableAllAnomalyLogsButton") is Button &&
+                   anomalyView.FindName("LocateNotepadPlusPlusButton") is Button &&
+                   anomalyView.FindName("AnomalySensitivitySlider") is Slider &&
+                   anomalyView.FindName("ReanalyzeLogButton") is Button,
+                "Anomaly lab must be visible and allow local log selection and sensitivity.");
+
+            Task demoAnalysis = analyzer.UseDemoAsync();
+            PumpUntil(() => demoAnalysis.IsCompleted, TimeSpan.FromSeconds(20));
+            demoAnalysis.GetAwaiter().GetResult();
+            Assert(analyzer.PatternCount > 0 &&
+                   analyzer.Patterns.Count > 0 &&
+                   analyzer.PatternSummary.Contains("normalized", StringComparison.Ordinal) &&
+                   !analyzer.OpenPatternCommand.CanExecute(analyzer.Patterns[0]),
+                "Demo grouping must stay local without pretending source file exists.");
+            Assert(analyzer.FindingCount >= 2 && analyzer.EventCount >= 200 &&
+                   analyzer.Timeline.Count == 36 &&
+                   analyzer.Findings.Any(f => f.Kind == "BURST") &&
+                   analyzer.Findings.Any(f => f.Kind == "RARE ERROR") &&
+                   analyzer.ExceptionCount == 1 &&
+                   analyzer.ExceptionEntries.Count == 1 &&
+                   analyzer.ExceptionEntries[0].Context.Contains("System.IO.IOException",
+                       StringComparison.Ordinal) &&
+                   analyzer.ExceptionEntries[0].SourceLine > 0 &&
+                   !analyzer.OpenExceptionCommand.CanExecute(analyzer.ExceptionEntries[0]),
+                "The synthetic demo must visibly list one multiline stack trace " +
+                "while keeping the external editor disabled for demo-only data.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView)
+                    .Any(item => item.DataContext is AnomalyExceptionRow row &&
+                                 row.Context.Contains("Storage.cs:line 82", StringComparison.Ordinal)),
+                "The new exception list must materialize actual WPF expanders.");
+            // The same generic scanner can be fed local, non-proprietary
+            // source. It never needs to fetch a private repository in CI.
+            string contextDir = Path.Combine(Path.GetTempPath(),
+                "BadWolfAIPlayground-AnomalyContext-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(contextDir);
+            try
+            {
+                File.WriteAllText(Path.Combine(contextDir, "DemoWorker.cs"),
+                    "class DemoWorker { void Run(int id) { " +
+                    "logger.Error($\"Retry timeout on connection {id}\"); } }");
+                Task sourceLoad = analyzer.LoadSourceContextAsync(contextDir);
+                PumpUntil(() => sourceLoad.IsCompleted, TimeSpan.FromSeconds(20));
+                sourceLoad.GetAwaiter().GetResult();
+                Assert(analyzer.SourceContextStatus.Contains("logging templates",
+                           StringComparison.OrdinalIgnoreCase) &&
+                       analyzer.Findings.Any(f =>
+                           f.Kind == "BURST" &&
+                           f.SourceHint.Contains("DemoWorker.cs", StringComparison.Ordinal)),
+                    "Optional source context must connect a demo error to its local C# statement.");
+            }
+            finally
+            {
+                Directory.Delete(contextDir, recursive: true);
+            }
+
+            double before = analyzer.Sensitivity;
+            analyzer.Sensitivity = 4.5;
+            Task reanalysis = analyzer.AnalyzeAsync();
+            PumpUntil(() => reanalysis.IsCompleted, TimeSpan.FromSeconds(20));
+            reanalysis.GetAwaiter().GetResult();
+            Assert(!analyzer.Busy && analyzer.EventCount >= 200 &&
+                   analyzer.Sensitivity > before &&
+                   analyzer.StatusText.Contains("locally", StringComparison.OrdinalIgnoreCase),
+                "Reanalysis must update UI locally without model inference.");
+
+            // Exception context must be visible even when there is no anomaly.
+            Task nonAnomalous = analyzer.ImportTextAsync("Standalone context example",
+                "2026-10-29 09:00:00 INFO Single diagnostic\n" +
+                "System.InvalidOperationException: Synthetic diagnostics\n" +
+                "   at Demo.Engine.Check()\n");
+            PumpUntil(() => nonAnomalous.IsCompleted, TimeSpan.FromSeconds(20));
+            nonAnomalous.GetAwaiter().GetResult();
+            Assert(analyzer.FindingCount == 0 && analyzer.ExceptionCount == 1 &&
+                   analyzer.ExceptionEntries.Single().Severity == "INFO" &&
+                   analyzer.ExceptionSummary.Contains("not necessarily statistical anomalies",
+                       StringComparison.Ordinal),
+                "The independent exception list must not depend on anomaly thresholds.");
+
+            // Repetitions must not consume every visible exception slot.
+            var repeatedException = new StringBuilder();
+            for (int index = 0; index < 25; index++)
+            {
+                repeatedException.AppendLine(
+                    $"2026-10-29 09:00:{index:00} ERROR Printer queue access denied");
+                repeatedException.AppendLine(
+                    "System.Printing.PrintQueueException: Access is denied");
+                repeatedException.AppendLine("   at Example.Printer.Purge()");
+            }
+            Task duplicatedStacks = analyzer.ImportTextAsync(
+                "Repeated synthetic printer failures", repeatedException.ToString());
+            PumpUntil(() => duplicatedStacks.IsCompleted, TimeSpan.FromSeconds(20));
+            duplicatedStacks.GetAwaiter().GetResult();
+            Assert(analyzer.ExceptionCount == 25 &&
+                   analyzer.ExceptionEntries.Count == 1 &&
+                   analyzer.ExceptionEntries[0].Occurrences == 25 &&
+                   analyzer.ExceptionEntries[0].SourceLine > 1 &&
+                   analyzer.ExceptionSummary.Contains(
+                       "1 normalized message/first-line groups", StringComparison.Ordinal) &&
+                   analyzer.Patterns.Any(item => item.Heading.Contains(
+                       "25 occurrences", StringComparison.Ordinal)),
+                "Repeated printer stacks and error patterns must be grouped " +
+                "while retaining original counts and provenance.");
+
+            // Structured cancellation must be visible even when every event
+            // is INFO and there are no statistical findings.
+            Task traceTask = analyzer.ImportTextAsync("Synthetic TOM_OP v1",
+                "2026-10-30 16:29:00 INFO TOM_OP v=1 event=step step=card_preview_ready session_id=s1 transaction_id=- flow_id=f1\n" +
+                "2026-10-30 16:29:10 INFO TOM_OP v=1 event=step step=card_issuing_cancelled session_id=s1 transaction_id=- flow_id=f1 category=issuing reason=user\n" +
+                "2026-10-30 16:29:11 INFO TOM_OP v=1 event=step step=card_commit_status session_id=s1 transaction_id=2849 flow_id=f1 category=GenericError success=false\n" +
+                "2026-10-30 16:29:12 INFO TOM_OP v=1 event=end operation=CardEmissionCommit session_id=s1 transaction_id=2849 flow_id=f1 result=true");
+            PumpUntil(() => traceTask.IsCompleted, TimeSpan.FromSeconds(20));
+            traceTask.GetAwaiter().GetResult();
+            Assert(analyzer.FindingCount == 0 &&
+                   analyzer.OperationGroupCount == 1 &&
+                   analyzer.OperationGroups.Single().Outcome == "Cancelled by operator" &&
+                   analyzer.OperationGroups.Single().Events.Count == 4 &&
+                   analyzer.OperationGroups.Single().Explanation.Contains(
+                       "GenericError was committed", StringComparison.Ordinal) &&
+                   !analyzer.OpenOperationEventCommand.CanExecute(
+                       analyzer.OperationGroups.Single().Events[0]),
+                "Structured user cancellation must be visible without statistical anomalies.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.DataContext is AnomalyOperationGroupRow row &&
+                    row.Outcome == "Cancelled by operator"),
+                "Lifecycle results must render a real WPF expander.");
+
+            // A standalone card read is not required to have a VTS link.
+            Task standaloneRead = analyzer.ImportTextAsync(
+                "Synthetic standalone card read",
+                "2026-10-30 18:17:01.7750 INFO TOM_OP v=1 event=end " +
+                "operation=CardInfoReadAndChecks " +
+                "operation_id=e52290a2566c4d4a881a114bca3ef3dc " +
+                "status=completed result=unknown duration_ms=4057 " +
+                "transaction_id=- flow_id=6a7b1ae187644c80b9160c9003eb22cc");
+            PumpUntil(() => standaloneRead.IsCompleted, TimeSpan.FromSeconds(20));
+            standaloneRead.GetAwaiter().GetResult();
+            Assert(analyzer.OperationGroupCount == 1 &&
+                   analyzer.OperationGroups.Single().Heading.StartsWith(
+                       "Card reading/checks | flow ", StringComparison.Ordinal) &&
+                   analyzer.OperationGroups.Single().Outcome ==
+                       "Card reading/checks completed" &&
+                   analyzer.OperationGroups.Single().Explanation.Contains(
+                       "not return a value", StringComparison.Ordinal) &&
+                   !analyzer.OperationGroups.Single().Events.Single().Description.Contains(
+                       "result=unknown", StringComparison.Ordinal) &&
+                   analyzer.OperationGroups.Single().Events.Single().Description.Contains(
+                       "4057 ms", StringComparison.Ordinal),
+                "Reading/checking a card must not appear as a missing VTS transaction " +
+                "or a confirmed successful read.");
+            anomalyView.UpdateLayout();
+            Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                   expander.DataContext is AnomalyOperationGroupRow group &&
+                   group.Heading.StartsWith("Card reading/checks | flow ",
+                       StringComparison.Ordinal)),
+                "The WPF timeline must visibly label independent card reading.");
+
+            // Old archives must not make WPF throw away structured operations
+            // solely because the statistical timeline spans over a year.
+            Task longArchive = analyzer.ImportTextAsync("Synthetic multi-year archive",
+                "2023-09-01 09:00:00 ERROR old archive failure\n" +
+                "2026-10-30 09:00:00 INFO TOM_OP v=1 event=step " +
+                "step=card_preview_ready session_id=s1 transaction_id=2854 flow_id=f1");
+            PumpUntil(() => longArchive.IsCompleted, TimeSpan.FromSeconds(20));
+            longArchive.GetAwaiter().GetResult();
+            Assert(analyzer.EventCount == 2 &&
+                   analyzer.OperationGroupCount == 1 &&
+                   analyzer.Summary.Contains("coarse multi-day", StringComparison.Ordinal) &&
+                   analyzer.Timeline.All(entry => entry.Time.Contains(
+                       "20", StringComparison.Ordinal)),
+                "Multi-year log analysis must show date-aware buckets and retain TOM_OP.");
+
+            // Test importing a whole application Logs folder, including old/
+            // and duplicate NLog App/component targets. No work data in CI.
+            string logFolder = Path.Combine(Path.GetTempPath(),
+                "BadWolfAIPlayground-MultiLogs-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(logFolder);
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(logFolder, "old"));
+                var appLog = new StringBuilder();
+                var salesLog = new StringBuilder();
+                var deviceLog = new StringBuilder();
+                for (int minute = 0; minute < 36; minute++)
+                {
+                    string prefix = $"2026-10-29 09:{minute:00}:";
+                    appLog.AppendLine(prefix + "00.0000 INFO App alive");
+                    salesLog.AppendLine(prefix + "01.0000 ERROR Connection timeout");
+                    deviceLog.AppendLine(prefix + "02.0000 INFO Reader available");
+                    if (minute == 24)
+                    {
+                        for (int k = 0; k < 12; k++)
+                        {
+                            string eventText =
+                                prefix + $"{20 + k:00}.0000 ERROR Sale request failed";
+                            appLog.AppendLine(eventText);
+                            salesLog.AppendLine(eventText);
+                            if (k == 0)
+                            {
+                                // Synthetic NLog exception continuation in both targets.
+                                appLog.AppendLine("System.TimeoutException: Retry exhausted");
+                                salesLog.AppendLine("System.TimeoutException: Retry exhausted");
+                                appLog.AppendLine("   at Example.Worker.Send()");
+                                salesLog.AppendLine("   at Example.Worker.Send()");
+                            }
+                        }
+                    }
+                }
+                File.WriteAllText(Path.Combine(logFolder, "App_2026-10-29.log"),
+                    appLog.ToString());
+                File.WriteAllText(Path.Combine(logFolder, "SaleController_2026-10-29.log"),
+                    salesLog.ToString());
+                File.WriteAllText(Path.Combine(logFolder, "old", "QRReader_2026-10-29.log"),
+                    deviceLog.ToString());
+                Task folderTask = analyzer.ImportFolderAsync(logFolder);
+                PumpUntil(() => folderTask.IsCompleted, TimeSpan.FromSeconds(20));
+                folderTask.GetAwaiter().GetResult();
+                Assert(analyzer.SourceFiles.Count == 3 &&
+                       analyzer.DuplicateCopies == 12 &&
+                       analyzer.Patterns.Count > 0 &&
+                       analyzer.OpenPatternCommand.CanExecute(analyzer.Patterns[0]) &&
+                       analyzer.EventCount == 120 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "SaleController_", StringComparison.Ordinal) &&
+                       analyzer.OpenExceptionCommand.CanExecute(analyzer.ExceptionEntries[0]) &&
+                       analyzer.Findings.Any(f =>
+                           f.Kind == "BURST" &&
+                           f.Evidence.Contains("SaleController_2026-10-29.log:",
+                                StringComparison.Ordinal) &&
+                            f.Context.Contains("System.TimeoutException",
+                                StringComparison.Ordinal) &&
+                            f.ContextVisibility == Visibility.Visible),
+                    "Multi-file analysis must keep original source lines and " +
+                    "not count duplicated App NLog targets twice.");
+                Assert(analyzer.SourceFiles.Any(f =>
+                           f.RelativePath.StartsWith(
+                               "old" + Path.DirectorySeparatorChar,
+                               StringComparison.OrdinalIgnoreCase) &&
+                           f.Component == "QRReader"),
+                    "WPF per-file list must include archive subfolders.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Expander>(anomalyView).Any(expander =>
+                    expander.Header is string header &&
+                    header.StartsWith("Exception / stack trace", StringComparison.Ordinal) &&
+                    expander.DataContext is AnomalyFindingRow row &&
+                    row.Context.Contains("System.TimeoutException", StringComparison.Ordinal)),
+                    "WPF findings must render expandable exception context.");
+
+                // Verify WPF's real checkbox -> ViewModel selection binding.
+                var fileExpander = (Expander)anomalyView.FindName("AnomalyFilesExpander");
+                fileExpander.IsExpanded = true;
+                anomalyView.UpdateLayout();
+                var salesCheck = FindDescendants<CheckBox>(anomalyView)
+                    .FirstOrDefault(box =>
+                        box.DataContext is AnomalySourceFileRow row &&
+                        row.Component == "SaleController");
+                Assert(salesCheck is not null && salesCheck.IsChecked == true,
+                    "The source file's Include checkbox must be visible and checked.");
+                salesCheck!.IsChecked = false;
+                PumpUntil(() => !analyzer.Busy && analyzer.EventCount == 84,
+                    TimeSpan.FromSeconds(20));
+                Assert(analyzer.EventCount == 84 &&
+                       analyzer.ProblemCount == 12 &&
+                       analyzer.DuplicateCopies == 0 &&
+                       analyzer.SourceFiles.Count(f => f.Included) == 2 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "App_", StringComparison.Ordinal) &&
+                       analyzer.Findings.Any(f =>
+                           f.Evidence.Contains("App_2026-10-29.log:",
+                                StringComparison.Ordinal) &&
+                            f.Context.Contains("System.TimeoutException",
+                                StringComparison.Ordinal)),
+                    "Disabling SaleController must retain App's original copy, " +
+                    "recompute true event counts and update evidence origin.");
+
+                // Switching from App to Sales must recover Sales' copy in the
+                // rebuilt raw-event view, not a stale pre-merged alias.
+                Task salesOnly = analyzer.SetIncludedFilesAsync(
+                    ["SaleController_2026-10-29.log"]);
+                PumpUntil(() => salesOnly.IsCompleted, TimeSpan.FromSeconds(20));
+                salesOnly.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 48 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.DuplicateCopies == 0 &&
+                       analyzer.SourceFiles.Count(f => f.Included) == 1 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.ExceptionEntries.Single().SourceFile.StartsWith(
+                           "SaleController_", StringComparison.Ordinal) &&
+                       analyzer.Findings.Any(f =>
+                           f.Evidence.Contains("SaleController_2026-10-29.log:",
+                               StringComparison.Ordinal)),
+                    "Selecting Sales alone must keep its original errors and source lines.");
+
+                Task noLogs = analyzer.SetIncludedFilesAsync([]);
+                PumpUntil(() => noLogs.IsCompleted, TimeSpan.FromSeconds(20));
+                noLogs.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 0 &&
+                       analyzer.FindingCount == 0 &&
+                       analyzer.ExceptionCount == 0 &&
+                       analyzer.ExceptionEntries.Count == 0 &&
+                       analyzer.Timeline.Count == 0 &&
+                       analyzer.StatusText.Contains("No logs enabled",
+                           StringComparison.Ordinal),
+                    "Exclude all should visibly show zero events without inventing an incident.");
+
+                Task restore = analyzer.SetIncludedFilesAsync(
+                    analyzer.SourceFiles.Select(f => f.RelativePath).ToArray());
+                PumpUntil(() => restore.IsCompleted, TimeSpan.FromSeconds(20));
+                restore.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 &&
+                       analyzer.ProblemCount == 48 &&
+                       analyzer.DuplicateCopies == 12 &&
+                       analyzer.ExceptionCount == 1 &&
+                       analyzer.SourceFiles.All(f => f.Included),
+                    "Include all must restore exact pre-filter counts and provenance.");
+
+                // No Notepad++ is started in CI; verify the exact safe
+                // command-line construction and original-file resolution.
+                (string resolved, int line) = analyzer.ResolveLogLocation(
+                    "SaleController_2026-10-29.log", 44);
+                var startInfo = NotepadPlusPlusLauncher.CreateStartInfo(
+                    @"C:\Program Files\Notepad++\notepad++.exe", resolved, line);
+                Assert(resolved == Path.GetFullPath(Path.Combine(
+                           logFolder, "SaleController_2026-10-29.log")) &&
+                       line == 44 && !startInfo.UseShellExecute &&
+                       startInfo.ArgumentList.Count == 2 &&
+                       startInfo.ArgumentList[0] == "-n44" &&
+                       startInfo.ArgumentList[1] == resolved,
+                    "Notepad++ jump must preserve the exact physical line " +
+                    "and pass paths as separately quoted arguments.");
+                bool rejectedOutside = false;
+                try { analyzer.ResolveLogLocation("../secret.log", 1); }
+                catch (InvalidOperationException) { rejectedOutside = true; }
+                Assert(rejectedOutside, "Open action must reject unimported paths.");
+
+                anomalyView.UpdateLayout();
+                Assert(FindDescendants<Button>(anomalyView)
+                        .Any(button => button.Content is string label &&
+                            label == "Open in Notepad++" &&
+                            button.Command is not null),
+                    "Each evidence card must expose a real Notepad++ command.");
+
+                // A real, decodable profiler over 16 MiB must be imported
+                // without excluding it for its byte size.
+                string largeProfiler =
+                    Path.Combine(logFolder, "WebClientProfiler_2026-10-29.log");
+                const int profilerLines = 9_000;
+                string payload = new('X', 2_050);
+                using (var writer = new StreamWriter(largeProfiler, append: false))
+                {
+                    for (int index = 0; index < profilerLines; index++)
+                        writer.WriteLine("2026-10-29 10:00:00 INFO profiler event " +
+                            index + " " + payload);
+                }
+                Assert(new FileInfo(largeProfiler).Length > 16L * 1024 * 1024,
+                    "Large synthetic profiler must exceed the old byte cap.");
+
+                Task largeFileOnly = analyzer.ImportFileAsync(largeProfiler);
+                PumpUntil(() => largeFileOnly.IsCompleted, TimeSpan.FromSeconds(30));
+                largeFileOnly.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == profilerLines &&
+                       analyzer.SourceName == Path.GetFileName(largeProfiler),
+                    "Single-file LOG selection must stream files above 16 MiB.");
+
+                Task entireFolder = analyzer.ImportFolderAsync(logFolder);
+                PumpUntil(() => entireFolder.IsCompleted, TimeSpan.FromSeconds(30));
+                entireFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == 120 + profilerLines &&
+                       analyzer.SourceFiles.Count == 4 &&
+                       analyzer.SkippedSourceFiles.Count == 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Collapsed &&
+                       analyzer.SourceFiles.Any(row =>
+                           row.RelativePath == "WebClientProfiler_2026-10-29.log" &&
+                           row.DatedEvents == profilerLines),
+                    "The entire valid profiler must be included in a Logs-folder " +
+                    "report, with no byte-based skips.");
+                (string resolvedProfilerPath, int profilerLine) = analyzer.ResolveLogLocation(
+                    "WebClientProfiler_2026-10-29.log", profilerLines);
+                Assert(resolvedProfilerPath == Path.GetFullPath(largeProfiler) &&
+                       profilerLine == profilerLines,
+                    "Large streamed files retain original physical line navigation.");
+
+                // A deliberately tiny test-only event budget still creates an
+                // honest partial import. This checks warnings without writing
+                // a million-line fixture or restoring old byte limits.
+                Task partialFolder = analyzer.ImportFolderAsync(
+                    logFolder, maxImportedEvents: 125);
+                PumpUntil(() => partialFolder.IsCompleted, TimeSpan.FromSeconds(30));
+                partialFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount > 0 &&
+                       analyzer.EventCount <= 125 &&
+                       analyzer.SourceFiles.Count > 0 &&
+                       analyzer.SkippedSourceFiles.Any(row =>
+                           row.RelativePath == "WebClientProfiler_2026-10-29.log") &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
+                       analyzer.SkippedFilesSummary.Contains("NOT analyzed",
+                           StringComparison.Ordinal) &&
+                       analyzer.SourceFilesSummary.Contains("PARTIAL",
+                           StringComparison.Ordinal) &&
+                       analyzer.StatusText.Contains("Partial import",
+                           StringComparison.Ordinal) &&
+                       analyzer.Preview.Contains("PARTIAL IMPORT",
+                           StringComparison.Ordinal),
+                    "A partial event-budget import must identify precisely which " +
+                    "sources have not been analyzed.");
+
+                var skippedPanel =
+                    (Expander)anomalyView.FindName("AnomalySkippedFilesExpander");
+                anomalyView.UpdateLayout();
+                var skippedList = (ListBox)anomalyView.FindName("AnomalySkippedFileList");
+                var analyzedList = (ListBox)anomalyView.FindName("AnomalySourceFiles");
+                Assert(skippedPanel.Visibility == Visibility.Visible &&
+                       skippedPanel.IsExpanded &&
+                       skippedList.Items.Count > 0 &&
+                       VirtualizingStackPanel.GetIsVirtualizing(skippedList) &&
+                       VirtualizingStackPanel.GetIsVirtualizing(analyzedList),
+                    "File lists must remain visible and virtualized at large counts.");
+                bool excludedProfiler = false;
+                try { analyzer.ResolveLogLocation("WebClientProfiler_2026-10-29.log", 1); }
+                catch (InvalidOperationException) { excludedProfiler = true; }
+                Assert(excludedProfiler,
+                    "A file excluded due to the event budget is not imported evidence.");
+                File.Delete(largeProfiler);
+
+                Task partialReanalysis = analyzer.AnalyzeAsync();
+                PumpUntil(() => partialReanalysis.IsCompleted, TimeSpan.FromSeconds(20));
+                partialReanalysis.GetAwaiter().GetResult();
+                Assert(analyzer.SkippedSourceFiles.Count > 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible,
+                    "Reanalysis must preserve truthful partial-import warnings.");
+
+                int validCount = analyzer.EventCount;
+                int validFiles = analyzer.SourceFiles.Count;
+                Task badFolder = analyzer.ImportFolderAsync(
+                    Path.Combine(logFolder, "missing"));
+                PumpUntil(() => badFolder.IsCompleted, TimeSpan.FromSeconds(20));
+                badFolder.GetAwaiter().GetResult();
+                Assert(analyzer.EventCount == validCount &&
+                       analyzer.SourceFiles.Count == validFiles &&
+                       analyzer.SkippedSourceFiles.Count > 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Visible &&
+                       analyzer.StatusText.Contains("failed",
+                           StringComparison.OrdinalIgnoreCase),
+                    "Failed import must preserve the previous report and exclusions.");
+
+                Task switchToDemo = analyzer.UseDemoAsync();
+                PumpUntil(() => switchToDemo.IsCompleted, TimeSpan.FromSeconds(20));
+                switchToDemo.GetAwaiter().GetResult();
+                Assert(analyzer.SkippedSourceFiles.Count == 0 &&
+                       analyzer.SkippedFilesVisibility == Visibility.Collapsed,
+                    "A later successful import without exclusions must clear stale warnings.");
+            }
+            finally
+            {
+                Directory.Delete(logFolder, recursive: true);
+            }
+
+            window.NavigateToNeuralLab();
+            Assert(anomalyView.Visibility == Visibility.Collapsed,
+                "Anomaly navigation must return to the neural lab.");
+            Console.WriteLine("PASS Anomaly Detection WPF demo, full Logs folder, provenance, errors and reanalysis");
             return 0;
         }
         catch (Exception exception)

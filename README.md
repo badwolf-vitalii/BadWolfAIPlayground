@@ -2,7 +2,7 @@
 
 **A local-first C#/.NET WPF playground for understanding how AI can be useful in normal software.**
 
-BadWolfAIPlayground contains small, interactive experiments you can understand, inspect, and reuse in your own applications. Both existing labs run on the local Windows computer; no cloud API key is required.
+BadWolfAIPlayground contains small, interactive experiments you can understand, inspect, and reuse in your own applications. All labs run on the local Windows computer; no cloud API key is required.
 
 ## Experiments
 
@@ -27,6 +27,41 @@ A fully connected neural network implemented from scratch in C#, with **no exter
 - **Restore previous files** reloads only the user-selected local paths and their chosen encoding after a restart; the files are never loaded automatically, and their text is not copied into the checkpoint cache.
 - The File encoding dropdown has a high-contrast dark selection box and dark dropdown entries.
 - Reusable `BadWolfAIPlayground.Search` library independent of WPF; no external NuGet packages.
+
+
+### Anomaly Detection Lab (v0.3.0 development)
+
+The third lab performs **local, explainable statistical analysis** of
+timestamped application logs without Ollama, codebase access, cloud
+services, or external ML dependencies.
+
+- Open a local \`.log\` or \`.txt\` file or load the entirely synthetic
+  36-minute demo with a deliberately injected error burst.
+- Reuse the bounded UTF-8/Unicode importer from Smart Search Lab, but
+  **never save, index, embed, or upload production log text**.
+- Parse dated log entries with common ISO/.NET timestamp forms and
+  \`TRACE/DEBUG/INFO/WARN/ERROR/FATAL\` levels; count skipped and
+  continuation lines. Unrecognized lines do not acquire invented times.
+- Aggregate WARN/ERROR/FATAL counts per interval. The baseline uses
+  the median and median absolute deviation (MAD), so an exceptional
+  error burst can be highlighted against the file's own typical rate.
+  A tiny log has no defensible baseline and should show that limitation.
+- Normalize numbers, GUIDs, and hexadecimal addresses to group error
+  messages into approximate templates, highlighting rare patterns only
+  with enough observations.
+- Show time-bucket timeline, detected findings, exact example log lines,
+  threshold/explanation, and a user-adjustable sensitivity setting.
+- Support cancellation and preserve the previous valid results when
+  a new import fails.
+
+**Important:** this component does NOT understand undocumented error
+codes or prove the cause of a crash. It is an unsupervised statistical
+detector, not an LLM. To interpret real work logs, we should validate
+the timestamp/message format on a *sanitized local excerpt* and then
+add a **project-specific event glossary**. An optional locally run
+Ollama interpreter may use the glossary and cite original lines,
+but should never claim to know undocumented system semantics.
+Confidential work logs should not be committed to a public repository.
 
 #### Local model setup (one-time)
 
@@ -336,3 +371,266 @@ change; it does not trigger additional Qwen calls or invalidate
 existing embeddings. Automated regression tests cover equal-scoring
 introductory and later quotes, a crowded long book, and a more
 relevant later sentence.
+
+
+#### Optional local source-code context for application logs
+
+You do **not** need to know the codebase to use the anomaly detector.
+After opening a log, optionally click **Select local C# solution**
+and choose a `.sln` file from a local checkout of a project.
+The app scans only the local `.cs` files below that solution folder
+(up to 4,000 files, with bounded memory/size), never downloads or
+publishes the repository, and indexes simple logging statements
+such as `logger.Error("...")`, `logger.Debug($"...{id}...")`
+and `Helper.SimpleLogE(logger, "...")`.
+When a finding's actual message matches a literal or interpolated
+logging template, its card displays **Possible log origin:
+relative/path/File.cs:line**. These are helpful call-site candidates,
+not proof that a specific code path ran. Complex expressions and
+logger wrappers may be unmatched.
+
+Some applications also emit a DEBUG message with the caller's
+`File.cs: line 123` immediately before an error; the lab recognizes
+this as a nearby caller hint (without claiming it caused the error).
+Source context is optional, in-memory, and never used to infer
+unknown business rules or generate an unsupported diagnosis.
+This generic scanner contains **no company source, logging strings,
+secrets or production logs**. Always keep private source in a private
+checkout, and never commit your source data to this public repo.
+
+
+### Analyze a complete Logs folder (v0.3.0)
+
+Select **Logs folder** inside Anomaly Detection Lab to discover
+`.log` and `.txt` files from that folder and any subfolders,
+including `old/` and dated component archives, without selecting
+files one by one. The app imports as many as its bounded resource
+budgets allow, merges selected events by timestamp, and displays
+a single anomaly timeline, and includes a collapsible per-file /
+component breakdown with per-file event and problem counts.
+
+Each finding identifies its **original relative filename and
+physical source line**. When NLog emits the exact same
+timestamp/severity/message to two different targets (e.g. a general
+App log and a component log), the aggregate removes the duplicate
+while preserving both filenames as provenance. Distinct repeated
+messages in the same file are kept. Raw per-file counts include
+copies; aggregate counts exclude these exact cross-file copies.
+
+Folder import is **offline, cancellable and non-persistent**. The
+anomaly parser now reads UTF-8 / BOM-marked UTF-16 logs incrementally
+through a TextReader rather than loading the whole file as a string.
+**Anomaly Detection Lab no longer has a 16 MiB per-file limit,
+a 256 MiB combined byte limit, or a 512-file analysis cutoff.**
+Those older byte restrictions still apply separately to text indexing
+inside Smart Search Lab, not log analysis.
+
+The remaining limits concern *retained in-memory evidence*, not input
+file size: scan at most **50,000 file metadata entries** and retain
+at most **1,000,000 dated events** in a report. Source priority is
+Operations logs, current/root components, other components, then
+archived old/ logs, with recent files preferred within a class.
+Files that cannot fit wholly in the remaining event budget are
+explicitly listed as **SKIPPED FILES — NOT ANALYZED**, without
+misrepresenting a partial transaction as a complete source.
+Raw event totals and per-file provenance are based only on admitted
+files. If parsing reached the limit mid-file, the skip reason reports
+a lower bound, not a fabricated full event count.
+
+Strict decoding, binary-data checks, a maximum individual line length,
+bounded stack context, source-file/line navigation, cancellation and
+mirror deduplication remain. Failed/canceled imports preserve the
+last successful report. No work logs are uploaded or stored by this lab.
+For multi-year archives, statistics use coarser time buckets while
+individual structured operations retain their original timestamps.
+
+**Deduplication safeguard:** two unrelated components are *not*
+assumed to be copies simply because they emitted identical text at
+the same timestamp. Automatic merging is restricted to the known
+generic App/component mirroring pattern and duplicate copies of
+the same named file from different directories. Other
+identical events remain visible separately. This is tested with
+two synthetic independent device logs.
+
+
+### Enable/disable individual log files and jump to Notepad++
+
+After selecting a whole Logs folder, expand **Files & Components**:
+- Each imported file has an **Include** checkbox. Changes
+  automatically rerun detection on **only the enabled files**,
+  updating the summary, error timeline, finding cards and per-finding
+  evidence without re-reading files from disk.
+- **Include all** and **Exclude all** provide quick selection.
+  An empty selection displays zero analyzed events rather than a
+  misleading all-components baseline. Per-file row counts remain
+  visible for comparison, regardless of the Include state.
+- The imported original per-file events are retained in memory
+  solely for this session. When files are toggled, exact
+  mirrored-event deduplication is recomputed from the enabled
+  source files. Thus turning off a component log will not
+  accidentally erase an event that remains in its enabled
+  App log (or vice versa). Cross-component duplicates never
+  cause unrelated logs to be discarded.
+
+Every finding now has an **Open in Notepad++** button that opens the
+original on-disk `.log`/`.txt` file at its **actual physical
+source line** (`notepad++.exe -n42 "C:\\path\\file.log"`).
+The per-file list offers an **Open** button (line 1).
+Notepad++ is discovered from Windows App Paths, standard
+installation folders, or PATH. For portable installations,
+click **Locate Notepad++** and select `notepad++.exe` manually.
+No Notepad++ installation or model download is performed by
+the application. When the editor is missing or the file
+has moved, a clear error is displayed without changing the
+analysis. For synthetic demo data, opening a nonexistent file
+is disabled.
+
+The tool stores the selected folder's absolute location
+**only in process memory** to resolve original files; no local
+work paths, event content or editor settings are committed,
+transmitted, or persisted. Source file paths are validated
+against the imported file list and the selected root before
+opening to prevent traversal outside the Logs directory.
+Opening a log is a read/view action in an external editor;
+saving changes in that editor is the user's responsibility.
+
+### Multiline .NET exception and stack context
+
+For NLog layouts that emit exception stack traces on undated lines, finding cards
+now show a collapsed **Exception / stack trace (original log)** panel when
+there is captured context. Contiguous exception headings, stack frames, and
+inner-exception markers are attached to their preceding dated event. An
+unrelated or blank undated line ends the association; no timestamp or
+severity is guessed.
+
+Retained evidence is limited to **32 lines and 4,096 characters per event**.
+Additional recognized stack lines are counted but omitted with a visible
+truncation notice. Duplicate-event matching still uses timestamp, explicit
+severity and primary message, not the continuation. A severity-looking word
+inside a device message is not treated as a log level. Captured details
+remain in memory and do not imply a proven root cause.
+
+
+**Where to see it:** Open **Anomaly Detection Lab** and click **Use demo log**.
+The demo now contains a synthetic `System.IO.IOException` stack trace.
+The **Analysis overview** includes a visible **STACK CONTEXT** count,
+and section **4 — Exception / stack trace details** lists the source
+timestamp, original file/line, severity and event message. Expand a row
+to read the bounded exception stack. The list works **even when there
+are zero statistical findings**, and updates as files are included
+or excluded. The newest **40** entries are shown to keep the UI
+responsive; the counter reports the complete count for enabled logs.
+For real local logs, the expanded entry can jump to its original
+line in Notepad++. The button is disabled for the synthetic demo.
+
+A count of zero means no *multiline* context was captured; an exception
+written entirely on the original dated line remains in that message
+and is not counted as a separate stack trace. No exception content
+is sent, persisted or embedded.
+
+### Structured operation lifecycle timeline (TOM_OP v1)
+
+In **Anomaly Detection Lab**, choose a local Logs folder (including nested old/)
+or an individual Operations log. The new **Operation lifecycle** section
+shows transaction groups with their original log file/line, timings, user
+actions, dialog responses and completion outcomes. It works on INFO-only
+logs as well as warnings and errors, with no model, network access or cloud.
+
+The analyzer joins only explicit `session_id`, `transaction_id` and
+`flow_id`. Pre-transaction events join the transaction only if later
+evidence explicitly links the same session and flow to exactly one VTS ID.
+Unlinked flows remain separate; the same numeric VTS ID in another
+session is a different group. The newest 40 groups and 80 events per
+group are displayed with complete group/event counts and safe
+Notepad++ source navigation. File Include/Exclude filters apply here too.
+
+A successful `VtsTransactionClose` is distinct from a failed
+`PrintReceipt`. A `card_issuing_cancelled reason=user` event establishes
+intentional operator cancellation, for which `GenericError` can be
+the expected VTS commit status, not a hardware diagnosis. Watchdog and
+programmatic exits remain separate. Preview-to-decision time is
+reported only when explicit `card_preview_ready` and decision events
+exist, never guessed from an unexplained timestamp gap.
+
+No proprietary logs are committed. All deterministic fixtures are
+synthetic, and imported data stays local/in memory.
+
+The emitter may omit `session_id` on an operation's `event=end`
+record. The analyzer resolves the missing session only through a
+matching, unique `operation_id` from an explicitly session-scoped
+start/step event. End records with no unique match are kept separate;
+time proximity is never treated as proof.
+
+#### Large LOG/TXT files use streaming
+
+A `WebClientProfiler_2026-10-30.log` of 35.7 MiB no longer gets
+excluded simply because it exceeds 16 MiB. Both **Select Logs folder**
+and **Select local LOG / TXT** parse file content line by line, retaining
+bounded dated events rather than accumulating the entire source text.
+Original physical line numbers remain available for Notepad++.
+
+**SKIPPED FILES** now means a real retained-event budget was exceeded.
+The list identifies affected sources without claiming they were
+analyzed. Choose a more focused folder/date range to analyze excluded
+files independently. Input is never silently truncated or uploaded.
+Invalid encodings and binary data still produce explicit errors.
+
+### Grouped anomaly evidence and recurring printer messages
+
+Anomaly Detection Lab now makes an important distinction between an
+individual WARN/ERROR/FATAL log event, a statistical **burst window**,
+and an actual diagnosed incident. A single repetitive `Purge() FAILED`
+message can produce many flagged time windows; these must not be called
+independent root causes.
+
+**Consolidated findings** group statistically flagged windows that have
+the same normalized *representative* log message. Each group shows the
+number of flagged windows, their first and last times, peak WARN/ERROR
+rate, and the original source file and line of the strongest example.
+Total problem events across these windows are clearly **not** presented
+as counts of that exact representative message. Some of the 24 display
+slots remain available for distinct rare-error patterns instead of
+being completely consumed by frequent printer cleanup messages.
+Findings scroll within a bounded-height area.
+
+The compact **Recurring warning / error patterns** panel independently
+counts actual recognized warning/error/fatal messages in the selected,
+deduplicated logs. It groups by explicit severity and normalized message
+(variable numbers and IDs are replaced), displays the top 12 by
+occurrence count, their first/last timestamps, number of source files,
+and offers an **Open example in Notepad++** action pointing to an exact
+original line. Distinct normalized patterns are **not automatically
+distinct hardware faults or root causes**.
+
+The **Exception / stack trace details** section reports the unchanged
+total event count but groups visually similar contexts by severity,
+normalized dated message and first continuation line. Each item shows
+the number of similarly formatted events, date range and latest
+original example. Later stack frames may differ, so these groups do
+not claim the entire exceptions are identical.
+
+Grouping is deterministic, entirely local, and recomputed after file
+Include/Exclude changes. No ignored profiler or otherwise excluded
+log source is counted as evidence. Real work logs and private code
+remain on the user's machine.
+
+
+#### Standalone card reads versus VTS transactions
+
+The structured `TOM_OP v=1` operation `CardInfoReadAndChecks` is a
+standalone card read/check flow. `transaction_id=-` is expected
+and does not indicate a missing or failed VTS transaction.
+Operation lifecycle explicitly labels this known independent flow
+**Card reading/checks**, rather than **Unlinked flow**.
+
+Because `CardInsertedCore` / `CardInfoReadAndChecks` is void, the emitter's
+`result=unknown` is simply a **no-return-value placeholder**, not a
+failure or an uncertain card read. For `event=end status=completed`,
+the analyzer reports **Card reading/checks completed**, suppressing
+that placeholder in the event details. Duration, `flow_id`, source and
+physical line remain visible. Explicit logged failures are still
+reported, while a missing end event never implies completion.
+
+Other unrecognized flow types remain **Unlinked flow** until their
+purpose is supported by evidence. A flow with other named operations
+is never automatically classified as an independent card read.

@@ -1,0 +1,536 @@
+<UserControl x:Class="BadWolfAIPlayground.App.Anomaly.AnomalyView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="{StaticResource PageBrush}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <StackPanel Margin="32,28,32,35" MaxWidth="1450">
+            <TextBlock Text="ANOMALY DETECTION LAB" FontSize="11" FontWeight="Bold"
+                       Foreground="#58B5FF"/>
+            <TextBlock Text="Discover unusual behavior in application logs."
+                       FontSize="27" FontWeight="Bold" Margin="0,7,0,8"/>
+            <TextBlock Text="Local statistics first. No codebase, Ollama, model download or cloud required."
+                       Foreground="#ABC6DF" FontSize="12" TextWrapping="Wrap"
+                       Margin="0,0,0,20"/>
+
+            <Border Background="#10243B" BorderBrush="#2A6189" BorderThickness="1"
+                    CornerRadius="12" Padding="18" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="WHAT YOU CAN LEARN WITHOUT THE SOURCE CODE"
+                               Foreground="#85D5FF" FontSize="11" FontWeight="SemiBold"
+                               Margin="0,0,0,9"/>
+                    <TextBlock Text="1. Find sudden increases in WARN, ERROR and FATAL events."
+                               Foreground="#D4E8FA" FontSize="12" Margin="0,0,0,6"/>
+                    <TextBlock Text="2. Discover rare normalized error message patterns."
+                               Foreground="#D4E8FA" FontSize="12" Margin="0,0,0,6"/>
+                    <TextBlock Text="3. Inspect the time, original log line and detection threshold."
+                               Foreground="#D4E8FA" FontSize="12" Margin="0,0,0,12"/>
+                    <TextBlock Text="This is anomaly detection, not root-cause diagnosis. Unknown error codes cannot be interpreted without project context. Work logs are read only in memory and never uploaded."
+                               Foreground="#94C6DB" FontSize="11" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+
+            <Grid Margin="0,0,0,17">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.3*"/>
+                    <ColumnDefinition Width="1*"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource Card}" Margin="0,0,8,0">
+                    <StackPanel>
+                        <TextBlock Text="1  Choose a file or the entire Logs folder"
+                                   FontSize="16" FontWeight="SemiBold" Margin="0,0,0,7"/>
+                        <TextBlock Text="For multi-component applications, select the Logs folder to include archived old/ files in the same timeline."
+                                   Foreground="#9AC6E1" FontSize="11"
+                                   TextWrapping="Wrap" Margin="0,0,0,11"/>
+                        <WrapPanel Margin="0,0,0,10">
+                            <Button x:Name="UseAnomalyDemoButton" Content="Use demo log"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding UseDemoCommand}" Margin="0,0,8,7"/>
+                            <Button x:Name="SelectAnomalyFolderButton"
+                                    Content="Select Logs folder"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding ChooseFolderCommand}"
+                                    Margin="0,0,8,7"/>
+                            <Button x:Name="SelectAnomalyLogButton" Content="Select local LOG / TXT"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding ChooseFileCommand}" Margin="0,0,8,7"/>
+                            <Button x:Name="ChooseAnomalySourceButton"
+                                    Content="Select local C# solution (optional)"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding ChooseSourceCommand}"
+                                    Margin="0,0,8,7"/>
+                            <Button Content="Cancel" Style="{StaticResource SecondaryButton}"
+                                    Command="{Binding CancelCommand}" Margin="0,0,0,7"/>
+                        </WrapPanel>
+                        <TextBlock Text="{Binding SourceContextStatus}"
+                                   Foreground="#8FD1BC" FontSize="10"
+                                   TextWrapping="Wrap" Margin="0,0,0,9"/>
+                        <TextBlock Text="{Binding SourceName}" Foreground="#77C5F6"
+                                   FontWeight="SemiBold" FontSize="11" TextWrapping="Wrap"/>
+                        <TextBlock Text="{Binding StatusText}" Foreground="#B8D2E6"
+                                   FontSize="11" TextWrapping="Wrap" Margin="0,6,0,10"/>
+                        <Expander x:Name="AnomalySkippedFilesExpander"
+                                  Header="SKIPPED FILES — NOT ANALYZED"
+                                  IsExpanded="True"
+                                  Visibility="{Binding SkippedFilesVisibility}"
+                                  Foreground="#F2C5A1" Background="#172237"
+                                  BorderBrush="#775740" BorderThickness="1"
+                                  Padding="9" Margin="0,0,0,10">
+                            <StackPanel Margin="2,7,2,3">
+                                <TextBlock Text="{Binding SkippedFilesSummary}"
+                                           Foreground="#F0D4C0" FontSize="11"
+                                           TextWrapping="Wrap" Margin="0,0,0,6"/>
+                                <ListBox x:Name="AnomalySkippedFileList"
+                                         ItemsSource="{Binding SkippedSourceFiles}"
+                                         MaxHeight="135" Background="Transparent"
+                                         BorderThickness="0"
+                                         ScrollViewer.CanContentScroll="True"
+                                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                         VirtualizingStackPanel.IsVirtualizing="True"
+                                         VirtualizingStackPanel.VirtualizationMode="Recycling">
+                                    <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Display}"
+                                                           FontFamily="Consolas" FontSize="10"
+                                                           Foreground="#DFCFBB" TextWrapping="Wrap"
+                                                           Margin="0,4,0,4"/>
+                                            </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </StackPanel>
+                        </Expander>
+                        <Border Background="#0A192A" CornerRadius="7"
+                                BorderBrush="#2E4E68" BorderThickness="1" Padding="10">
+                            <TextBlock Text="{Binding Preview}" Foreground="#C8E2F3"
+                                       FontFamily="Consolas" FontSize="10"
+                                       TextWrapping="Wrap" MaxHeight="75"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+                <Border Grid.Column="1" Style="{StaticResource Card}" Margin="8,0,0,0">
+                    <StackPanel>
+                        <TextBlock Text="2  Tune detection" FontSize="16"
+                                   FontWeight="SemiBold" Margin="0,0,0,8"/>
+                        <TextBlock Text="Higher sensitivity value = fewer flagged spikes."
+                                   FontSize="11" Style="{StaticResource MutedText}"
+                                   TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Threshold multiplier: " FontSize="11"/>
+                            <TextBlock Text="{Binding Sensitivity, StringFormat=F1}"
+                                       Foreground="#68D3C5" FontSize="11" FontWeight="Bold"/>
+                        </StackPanel>
+                        <Slider x:Name="AnomalySensitivitySlider" Minimum="1.5" Maximum="8"
+                                TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                Value="{Binding Sensitivity, Mode=TwoWay}"
+                                Margin="0,6,0,15"/>
+                        <Button x:Name="ReanalyzeLogButton" Content="Reanalyze"
+                                Command="{Binding AnalyzeCommand}"
+                                Style="{StaticResource PrimaryButton}" Margin="0,0,0,12"/>
+                        <TextBlock Text="{Binding Diagnostics}" Foreground="#9CBBD3"
+                                   FontSize="10" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="3  Analysis overview" FontSize="16"
+                               FontWeight="SemiBold" Margin="0,0,0,12"/>
+                    <UniformGrid Columns="4" Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="DATED EVENTS" Foreground="#91ACC6" FontSize="10"/>
+                            <TextBlock Text="{Binding EventCount}" FontSize="23" FontWeight="Bold"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="WARN / ERROR / FATAL" Foreground="#91ACC6" FontSize="10"/>
+                            <TextBlock Text="{Binding ProblemCount}" FontSize="23" FontWeight="Bold"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="FINDINGS" Foreground="#91ACC6" FontSize="10"/>
+                            <TextBlock Text="{Binding FindingCount}" FontSize="23" FontWeight="Bold"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <TextBlock Text="STACK CONTEXT" Foreground="#91ACC6" FontSize="10"/>
+                            <TextBlock Text="{Binding ExceptionCount}" FontSize="23" FontWeight="Bold"/>
+                        </StackPanel>
+                    </UniformGrid>
+                    <TextBlock Text="{Binding Summary}" Foreground="#BED5EA"
+                               FontSize="11" TextWrapping="Wrap"/>
+                    <Expander x:Name="AnomalyFilesExpander"
+                              Margin="0,15,0,0" Foreground="#D2E7F6"
+                              Background="#0B1D30">
+                        <Expander.Header>
+                            <TextBlock Text="FILES &amp; COMPONENTS"
+                                       FontWeight="SemiBold"
+                                       Foreground="#6BC5F6" FontSize="11"/>
+                        </Expander.Header>
+                        <StackPanel Margin="0,10,0,4">
+                            <TextBlock Text="{Binding SourceFilesSummary}"
+                                       Foreground="#B2CEDF" TextWrapping="Wrap"
+                                       FontSize="11" Margin="0,0,0,9"/>
+                            <WrapPanel Margin="0,0,0,10">
+                                <Button x:Name="EnableAllAnomalyLogsButton"
+                                        Content="Include all"
+                                        Command="{Binding SelectAllFilesCommand}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,8,6"/>
+                                <Button x:Name="DisableAllAnomalyLogsButton"
+                                        Content="Exclude all"
+                                        Command="{Binding SelectNoFilesCommand}"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Margin="0,0,8,6"/>
+                                <TextBlock Text="Changes update the chart and findings automatically."
+                                           Foreground="#8CB9D5" FontSize="10"
+                                           VerticalAlignment="Center" TextWrapping="Wrap"
+                                           Margin="0,0,0,6"/>
+                            </WrapPanel>
+                            <ListBox x:Name="AnomalySourceFiles"
+                                     IsEnabled="{Binding CanEditFiles}"
+                                     ItemsSource="{Binding SourceFiles}"
+                                     MaxHeight="230" Background="Transparent"
+                                     BorderThickness="0"
+                                     ScrollViewer.CanContentScroll="True"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     VirtualizingStackPanel.IsVirtualizing="True"
+                                     VirtualizingStackPanel.VirtualizationMode="Recycling">
+                                <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="#29445D"
+                                                    BorderThickness="0,0,0,1" Padding="4,7">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="4*"/>
+                                                        <ColumnDefinition Width="1.5*"/>
+                                                        <ColumnDefinition Width="1*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <CheckBox Grid.Column="0"
+                                                              Content="Include"
+                                                              IsChecked="{Binding Included, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                              Foreground="#B1D6E8"
+                                                              VerticalAlignment="Center"
+                                                              Margin="0,0,12,0"
+                                                              ToolTip="Exclude/include this log from all anomaly calculations"/>
+                                                    <StackPanel Grid.Column="1">
+                                                        <TextBlock Text="{Binding RelativePath}"
+                                                                   FontFamily="Consolas" FontSize="10"
+                                                                   Foreground="#C9E3F7"
+                                                                   TextWrapping="Wrap"/>
+                                                        <TextBlock Text="{Binding Component}"
+                                                                   Foreground="#83AFCE" FontSize="10"/>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="2" Margin="5,0,3,0">
+                                                        <TextBlock Text="DATED / WARN+"
+                                                                   Foreground="#8EACC7" FontSize="9"/>
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding DatedEvents}"
+                                                                       FontSize="11" Foreground="#D9E9F7"/>
+                                                            <TextBlock Text=" / " FontSize="11"
+                                                                       Foreground="#7D9DBA"/>
+                                                            <TextBlock Text="{Binding ProblemEvents}"
+                                                                       FontSize="11" Foreground="#EBA88E"/>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                    <StackPanel Grid.Column="3">
+                                                        <TextBlock Text="SKIPPED"
+                                                                   Foreground="#8EACC7" FontSize="9"/>
+                                                        <TextBlock Text="{Binding SkippedLines}"
+                                                                   FontSize="11" Foreground="#C3DCEF"/>
+                                                    </StackPanel>
+                                                    <Button Grid.Column="4" Content="Open"
+                                                            Style="{StaticResource SecondaryButton}"
+                                                            Command="{Binding DataContext.OpenLogFileCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                            CommandParameter="{Binding}"
+                                                            ToolTip="Open original file in Notepad++"
+                                                            VerticalAlignment="Center"
+                                                            Margin="10,0,0,0"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </StackPanel>
+                    </Expander>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="4  Exception / stack trace details" FontSize="16"
+                               FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <TextBlock Text="{Binding ExceptionSummary}"
+                               Foreground="#9BC4DA" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,0,0,12"/>
+                    <ScrollViewer MaxHeight="350" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyExceptionEntries"
+                                      ItemsSource="{Binding ExceptionEntries}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander BorderBrush="#314D68" BorderThickness="1"
+                                              Background="#0C1C30" Foreground="#CDE5F7"
+                                              Padding="9" Margin="0,0,0,8">
+                                        <Expander.Header>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Heading}"
+                                                           Foreground="#81CDF1" FontSize="11"
+                                                           FontFamily="Consolas"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding Message}"
+                                                           Foreground="#D3E6F5" FontSize="11"
+                                                           TextWrapping="Wrap" Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <StackPanel Margin="4,9,4,4">
+                                            <Border Background="#081625" CornerRadius="5" Padding="9">
+                                                <TextBlock Text="{Binding Context}"
+                                                           FontSize="10" FontFamily="Consolas"
+                                                           Foreground="#B9DFED" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <Button Content="Open in Notepad++"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding DataContext.OpenExceptionCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Open the original local log file at its dated event line"
+                                                    HorizontalAlignment="Left" Margin="0,9,0,0"/>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="5  Operation lifecycle (TOM_OP v=1)"
+                               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding OperationSummary}" Foreground="#A9CDE2"
+                               FontSize="11" TextWrapping="Wrap" Margin="0,0,0,9"/>
+                    <TextBlock Text="Only explicit transaction/session/flow evidence is joined. A user cancellation can legitimately commit GenericError; a successful VTS close does not prove receipt printing."
+                               Foreground="#8EB9D6" FontSize="10"
+                               TextWrapping="Wrap" Margin="0,0,0,11"/>
+                    <ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyOperationGroups"
+                                      ItemsSource="{Binding OperationGroups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander Background="#0C1C30" Foreground="#D4E9F8"
+                                              BorderBrush="#304E6D" BorderThickness="1"
+                                              Padding="8" Margin="0,0,0,8">
+                                        <Expander.Header>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Heading}" FontSize="11"
+                                                           Foreground="#90D4F2" TextWrapping="Wrap"
+                                                           FontFamily="Consolas"/>
+                                                <TextBlock Text="{Binding Outcome}" FontWeight="SemiBold"
+                                                           FontSize="12" Foreground="#E4D9A9"
+                                                           Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <StackPanel Margin="4,7,4,4">
+                                            <TextBlock Text="{Binding Explanation}" FontSize="11"
+                                                       Foreground="#D3E4F4" TextWrapping="Wrap"
+                                                       Margin="0,0,0,7"/>
+                                            <TextBlock Text="{Binding FlowSummary}" FontSize="10"
+                                                       Foreground="#95B8D1" TextWrapping="Wrap"
+                                                       Margin="0,0,0,9"/>
+                                            <ItemsControl ItemsSource="{Binding Events}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border BorderBrush="#29445D"
+                                                                BorderThickness="0,0,0,1"
+                                                                Padding="3,6">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <StackPanel Grid.Column="0">
+                                                                    <TextBlock Text="{Binding Display}"
+                                                                               FontFamily="Consolas" FontSize="10"
+                                                                               Foreground="#C5DFEF" TextWrapping="Wrap"/>
+                                                                    <TextBlock Text="{Binding Location}"
+                                                                               FontSize="9" Foreground="#8EBAD5"
+                                                                               TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                                                </StackPanel>
+                                                                <Button Grid.Column="1" Content="Open"
+                                                                        Style="{StaticResource SecondaryButton}"
+                                                                        Command="{Binding DataContext.OpenOperationEventCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                        CommandParameter="{Binding}"
+                                                                        ToolTip="Open the original log line in Notepad++"
+                                                                        VerticalAlignment="Center" Margin="9,0,0,0"/>
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="6  Warnings and errors over time" FontSize="16"
+                               FontWeight="SemiBold" Margin="0,0,0,5"/>
+                    <TextBlock Text="Orange bars show spikes across the imported logs. Hover to inspect counts."
+                               Foreground="#92B8D3" FontSize="11" Margin="0,0,0,14"/>
+                    <ScrollViewer Height="130" HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <ItemsControl x:Name="AnomalyTimeline" ItemsSource="{Binding Timeline}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Width="26" Margin="0,0,3,0"
+                                                ToolTip="{Binding Label}">
+                                        <Grid Height="88">
+                                            <Border Background="{Binding Color}" Width="17"
+                                                    Height="{Binding Height}"
+                                                    VerticalAlignment="Bottom"
+                                                    CornerRadius="3,3,0,0"/>
+                                        </Grid>
+                                        <TextBlock Text="{Binding Time}" FontSize="9"
+                                                   Foreground="#94B2CD"
+                                                   HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+
+            <Border Style="{StaticResource Card}" Margin="0,0,0,17">
+                <StackPanel>
+                    <TextBlock Text="7  Recurring warning / error patterns"
+                               FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="{Binding PatternSummary}" FontSize="11"
+                               Foreground="#9BC6DA" TextWrapping="Wrap" Margin="0,0,0,11"/>
+                    <ScrollViewer MaxHeight="370" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyPatterns" ItemsSource="{Binding Patterns}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander BorderBrush="#314D68" BorderThickness="1"
+                                              Background="#0C1C30" Foreground="#D3E6F5"
+                                              Margin="0,0,0,7" Padding="7">
+                                        <Expander.Header>
+                                            <TextBlock Text="{Binding Heading}" FontSize="11"
+                                                       FontFamily="Consolas" Foreground="#93CEE9"
+                                                       TextWrapping="Wrap"/>
+                                        </Expander.Header>
+                                        <StackPanel Margin="3,7,3,3">
+                                            <TextBlock Text="{Binding Summary}" FontSize="11"
+                                                       Foreground="#C4D6E5" TextWrapping="Wrap"/>
+                                            <Border Background="#081625" CornerRadius="5"
+                                                    Padding="8" Margin="0,8,0,7">
+                                                <TextBlock Text="{Binding Message}"
+                                                           Foreground="#D6E6F2" FontFamily="Consolas"
+                                                           FontSize="10" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <TextBlock Text="{Binding Location}"
+                                                       Foreground="#87D5EE" FontFamily="Consolas"
+                                                       FontSize="10" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding SourceHint}"
+                                                       Foreground="#A6D8B9" FontSize="10"
+                                                       TextWrapping="Wrap" Margin="0,5,0,8"/>
+                                            <Button Content="Open example in Notepad++"
+                                                    HorizontalAlignment="Left"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding DataContext.OpenPatternCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Open original source line for this example"/>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource Card}">
+                <StackPanel>
+                    <TextBlock Text="8  Consolidated findings with source evidence" FontSize="16"
+                               FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <TextBlock Text="Similar burst windows are grouped by normalized representative evidence. The example may not be the cause. These are investigation leads, not confirmed diagnoses."
+                               Style="{StaticResource MutedText}" FontSize="11"
+                               TextWrapping="Wrap" Margin="0,0,0,7"/>
+                    <WrapPanel Margin="0,0,0,11">
+                        <Button x:Name="LocateNotepadPlusPlusButton"
+                                Content="Locate Notepad++"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ChooseNotepadCommand}"
+                                Margin="0,0,9,6"/>
+                        <TextBlock Text="{Binding EditorStatus}"
+                                   Foreground="#9BC6DA" FontSize="10"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap" Margin="0,0,0,6"/>
+                    </WrapPanel>
+                    <ScrollViewer MaxHeight="650" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl x:Name="AnomalyFindings" ItemsSource="{Binding Findings}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#0C1C30" BorderBrush="#314D68"
+                                        BorderThickness="1" CornerRadius="7" Padding="12"
+                                        Margin="0,0,0,9">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Kind}" Foreground="#E4AB92"
+                                                   FontSize="10" FontWeight="Bold"/>
+                                        <TextBlock Text="{Binding Time}" Foreground="#9DB7CF"
+                                                   FontSize="10" Margin="0,4,0,5"/>
+                                        <TextBlock Text="{Binding Title}" FontSize="13"
+                                                   FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Explanation}" FontSize="11"
+                                                   Foreground="#C1D7EA" TextWrapping="Wrap"
+                                                   Margin="0,5,0,9"/>
+                                        <Border Background="#081625" CornerRadius="5"
+                                                Padding="8">
+                                            <TextBlock Text="{Binding Evidence}" FontSize="10"
+                                                       Foreground="#87D5EE" FontFamily="Consolas"
+                                                       TextWrapping="Wrap"/>
+                                        </Border>
+                                        <Expander Header="Exception / stack trace (original log)"
+                                                  Foreground="#B2DDF2" Background="#081625"
+                                                  Visibility="{Binding ContextVisibility}"
+                                                  Margin="0,8,0,0">
+                                            <Border Padding="8">
+                                                <ScrollViewer MaxHeight="180"
+                                                              VerticalScrollBarVisibility="Auto"
+                                                              HorizontalScrollBarVisibility="Auto">
+                                                    <TextBlock Text="{Binding Context}"
+                                                               Foreground="#C5E0F2" FontFamily="Consolas"
+                                                               FontSize="10" TextWrapping="NoWrap"/>
+                                                </ScrollViewer>
+                                            </Border>
+                                        </Expander>
+                                        <TextBlock Text="{Binding SourceHint}"
+                                                   Foreground="#A6D8B9" FontSize="10"
+                                                   TextWrapping="Wrap" Margin="0,9,0,9"/>
+                                        <Button Content="Open in Notepad++"
+                                                Style="{StaticResource SecondaryButton}"
+                                                HorizontalAlignment="Left"
+                                                Command="{Binding DataContext.OpenFindingCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="Open the original log at this exact source line"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
