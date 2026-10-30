@@ -534,3 +534,8 @@ preserves earlier results. It displays bounded groups/rows with
 typed source-file/line navigation using the existing Notepad++
 launcher. No local files, private source, or model input are persisted
 or transmitted.
+
+A second exact-ID pass resolves missing `session_id` on end records
+from the matching `operation_id` start record when that ID maps to
+exactly one session. This matches the observed TOM_OP wire format
+without ambiguous cross-session merging or timestamp heuristics.

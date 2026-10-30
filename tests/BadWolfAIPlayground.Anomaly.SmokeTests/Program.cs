@@ -504,7 +504,8 @@ static void StructuredOperationTimeline()
         "2026-10-30 16:00:10 INFO TOM_OP v=1 event=step step=card_preview_decision session_id=s1 transaction_id=- flow_id=issue category=cancel\n" +
         "2026-10-30 16:00:11 INFO TOM_OP v=1 event=end operation=TryOpenTransaction session_id=s1 transaction_id=2849 flow_id=issue result=true duration_ms=55\n" +
         "2026-10-30 16:00:12 INFO TOM_OP v=1 event=step step=card_commit_status session_id=s1 transaction_id=2849 flow_id=issue category=GenericError success=false\n" +
-        "2026-10-30 16:00:12 INFO TOM_OP v=1 event=end operation=CardEmissionCommit session_id=s1 transaction_id=2849 flow_id=issue result=true duration_ms=140\n" +
+        "2026-10-30 16:00:12 INFO TOM_OP v=1 event=start operation=CardEmissionCommit session_id=s1 transaction_id=2849 flow_id=issue operation_id=op-commit\n" +
+        "2026-10-30 16:00:12 INFO TOM_OP v=1 event=end operation=CardEmissionCommit operation_id=op-commit transaction_id=2849 flow_id=issue result=true duration_ms=140\n" +
         "2026-10-30 16:00:13 INFO TOM_OP v=1 event=end operation=TryCloseEmptyTransaction session_id=s1 transaction_id=2849 result=true duration_ms=113\n" +
         "2026-10-30 16:01:00 INFO TOM_OP v=1 event=step step=quick_reload_requested session_id=s1 transaction_id=- flow_id=sale\n" +
         "2026-10-30 16:01:01 INFO TOM_OP v=1 event=end operation=TryOpenTransaction session_id=s1 transaction_id=2847 flow_id=sale result=true\n" +
@@ -517,7 +518,7 @@ static void StructuredOperationTimeline()
         "2026-10-30 16:02:03 INFO TOM_OP v=1 event=dialog action=closed session_id=s1 transaction_id=- dialog=unkeyed response=Cancel\n";
     LogParseResult parsed = LogParser.Parse(raw, sourceFile: source);
     OperationTimelineReport report = OperationTimelineAnalyzer.Analyze(parsed);
-    Ensure(report.StructuredEvents == 16 && report.GroupCount == 4 &&
+    Ensure(report.StructuredEvents == 17 && report.GroupCount == 4 &&
            report.UnlinkedEvents == 1,
         "Structured events must use explicit IDs; unrelated dialog cannot be inferred.");
     OperationTimelineGroup issuing = report.Groups.Single(group =>
@@ -525,7 +526,7 @@ static void StructuredOperationTimeline()
     Ensure(issuing.Outcome == "Cancelled by operator" &&
            issuing.Explanation.Contains("GenericError was committed", StringComparison.Ordinal) &&
            issuing.Explanation.Contains("Preview-to-decision: 10.0 s", StringComparison.Ordinal) &&
-           issuing.Events.Count == 7 &&
+           issuing.Events.Count == 8 &&
            issuing.Events[0].SourceFile == source &&
            issuing.Events[0].SourceLine == 1,
         "User cancellation + VTS GenericError must not be reported as a technical failure.");
@@ -541,6 +542,7 @@ static void StructuredOperationTimeline()
            report.Groups.Single(group => group.TransactionId == "").FlowIds.Single() == "orphan",
         "The same transaction number in a different session must not be merged.");
     Ensure(issuing.Events.Any(e => e.Operation == "CardEmissionCommit" &&
+           e.EventKind == "end" && e.SessionId == "s1" &&
            e.Description.Contains("result=true", StringComparison.Ordinal)),
         "Commit API acknowledgement must remain visible separately from card status.");
 

@@ -542,3 +542,9 @@ exist, never guessed from an unexplained timestamp gap.
 
 No proprietary logs are committed. All deterministic fixtures are
 synthetic, and imported data stays local/in memory.
+
+The emitter may omit `session_id` on an operation's `event=end`
+record. The analyzer resolves the missing session only through a
+matching, unique `operation_id` from an explicitly session-scoped
+start/step event. End records with no unique match are kept separate;
+time proximity is never treated as proof.

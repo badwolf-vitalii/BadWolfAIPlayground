@@ -28,6 +28,35 @@ public static class OperationTimelineAnalyzer
                 events.Add(item);
         }
 
+        // Lifecycle end records do not always repeat session_id or process_id.
+        // Resolve their session only through the exact matching operation_id
+        // from a start/step record. Never derive it from a nearby timestamp.
+        var operationSessions = new Dictionary<string, HashSet<string>>(
+            StringComparer.Ordinal);
+        foreach (OperationTimelineEvent item in events)
+        {
+            if (!Known(item.OperationId) || !Known(item.SessionId))
+                continue;
+            if (!operationSessions.TryGetValue(item.OperationId,
+                    out HashSet<string>? sessions))
+                operationSessions[item.OperationId] =
+                    sessions = new HashSet<string>(StringComparer.Ordinal);
+            sessions.Add(item.SessionId);
+        }
+        for (int i = 0; i < events.Count; i++)
+        {
+            if ((i & 1023) == 0)
+                cancellationToken.ThrowIfCancellationRequested();
+
+            OperationTimelineEvent item = events[i];
+            if (!Known(item.SessionId) && Known(item.OperationId) &&
+                operationSessions.TryGetValue(item.OperationId,
+                    out HashSet<string>? sessions) && sessions.Count == 1)
+            {
+                events[i] = item with { SessionId = sessions.First() };
+            }
+        }
+
         // Correlate early, pre-transaction UI work only when a real
         // session+flow is explicitly present alongside a VTS ID later.
         // An ambiguous flow is never guessed from time or event order.
