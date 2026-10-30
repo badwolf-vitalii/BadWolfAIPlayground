@@ -12,6 +12,7 @@ var checks = new (string Name, Action Execute)[]
     ("Repeated burst windows collapse without hiding rare errors", GroupedBursts),
     ("Recurring message patterns count real events and preserve evidence", RecurringPatterns),
     ("Optional offline C# log-template source context", SourceContext),
+    ("Roslyn source investigations distinguish syntax evidence and ambiguity", RoslynSourceInvestigation),
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Large files stream safely without 16 MiB exclusion", FolderGuards),
     ("More than 512 log files remain individually importable", FolderFileCount),
@@ -275,6 +276,133 @@ static void SourceContext()
     }
 }
 
+
+
+static void RoslynSourceInvestigation()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-RoslynEvidence-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string first = Path.Combine(root, "PrinterWorker.cs");
+        File.WriteAllText(first,
+            """
+            namespace Synthetic;
+            class PrinterWorker
+            {
+                void RepairQueue(int cardId) { }
+                void Print(int cardId)
+                {
+                    if (cardId > 0)
+                    {
+                        logger.Error($"Retry timeout on connection {cardId}");
+                        RepairQueue(cardId);
+                    }
+                    logger.Info("Service initialization started");
+                }
+                void CardInfoReadAndChecks() { }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "SecondWorker.cs"),
+            """
+            class SecondWorker
+            {
+                void Run() { logger.Info("Service initialization started"); }
+            }
+            """);
+        Directory.CreateDirectory(Path.Combine(root, "obj"));
+        File.WriteAllText(Path.Combine(root, "obj", "Ignored.cs"),
+            "class Generated { void Run() { logger.Error(\"Ignored generated file\"); } }");
+
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        Ensure(index.FilesScanned == 2 && index.MethodsIndexed >= 4 &&
+               index.LoggingSites == 3,
+            "Only the explicitly chosen source files should be indexed with syntax.");
+        var matched = index.FindLogSites("Retry timeout on connection 9024");
+        Ensure(matched.Count == 1 &&
+               matched[0].Kind == SourceEvidenceKind.FormattedLoggingTemplate &&
+               matched[0].MethodName == "Print" &&
+               matched[0].TypeName == "PrinterWorker" &&
+               matched[0].Conditions.Contains("cardId > 0", StringComparison.Ordinal) &&
+               matched[0].DirectCalls.Contains("RepairQueue", StringComparison.Ordinal) &&
+               matched[0].Excerpt.Contains("Retry timeout", StringComparison.Ordinal),
+            "Roslyn must return the containing C# method, conditional evidence " +
+            "and possible direct calls without inferring runtime cause.");
+
+        var ambiguous = index.FindLogSites("Service initialization started");
+        Ensure(ambiguous.Count == 2 &&
+               ambiguous.All(c => c.Kind == SourceEvidenceKind.ExactLoggingLiteral),
+            "Two matching logging literals must be kept as distinct candidates.");
+        Ensure(index.FindLogSites("Unrelated message").Count == 0,
+            "No match must not be reported as a source link.");
+
+        var named = index.FindMethods("CardInfoReadAndChecks");
+        Ensure(named.Count == 1 &&
+               named[0].Kind == SourceEvidenceKind.OperationMethodName &&
+               named[0].MethodName == "CardInfoReadAndChecks",
+            "A known structured operation should match the exact C# declaration.");
+        Ensure(index.FindMethods("UnknownMethodName").Count == 0,
+            "Missing operation names are not inferred from timing.");
+
+        var stack = index.FindStackFrames(
+            @"at Synthetic.PrinterWorker.Print() in C:\checkout\PrinterWorker.cs:line 9");
+        Ensure(stack.Count == 1 &&
+               stack[0].Kind == SourceEvidenceKind.ExplicitStackFrame &&
+               stack[0].RelativePath == "PrinterWorker.cs" &&
+               stack[0].LineNumber == 9,
+            "Actual file/line metadata must be checked against scanned C# files.");
+
+        (string resolved, int line) = index.ResolveSourceLocation(matched[0]);
+        Ensure(resolved == Path.GetFullPath(first) && line == matched[0].LineNumber,
+            "Matching source should navigate to the original indexed physical line.");
+        bool rejected = false;
+        try
+        {
+            index.ResolveSourceLocation(matched[0] with
+            {
+                RelativePath = Path.Combine("..", "Outside.cs")
+            });
+        }
+        catch (InvalidOperationException) { rejected = true; }
+        Ensure(rejected, "A forged source path must not open outside the selected checkout.");
+
+        const string log =
+            "2026-10-30 18:00:00 ERROR Retry timeout on connection 9024\n" +
+            "2026-10-30 18:00:01 ERROR Service initialization started\n" +
+            "2026-10-30 18:00:02 INFO TOM_OP v=1 event=end " +
+            "operation=CardInfoReadAndChecks transaction_id=- " +
+            "flow_id=standalone-card duration_ms=4057 status=completed result=unknown\n";
+        LogParseResult parsed = LogParser.Parse(log, sourceFile: "Operations.log");
+        SourceInvestigationReport report = SourceInvestigationAnalyzer.Analyze(
+            AnomalyDetector.Analyze(parsed),
+            OperationTimelineAnalyzer.Analyze(parsed), index);
+        Ensure(report.Cases.Any(c =>
+                   c.Category == "LOG PATTERN" &&
+                   c.Evidence.Contains("Retry timeout", StringComparison.Ordinal) &&
+                   c.Candidates.Any(x => x.MethodName == "Print")) &&
+               report.Cases.Any(c =>
+                   c.Category == "LOG PATTERN" && c.Ambiguous &&
+                   c.Assessment.Contains("Ambiguous", StringComparison.Ordinal)) &&
+               report.Cases.Any(c =>
+                   c.Category == "TOM_OP METHOD" &&
+                   c.Candidates.Any(x => x.MethodName == "CardInfoReadAndChecks")) &&
+               report.Cases.All(c => c.LogLine > 0 && c.LogFile == "Operations.log"),
+            "Investigations must retain original log source lines and " +
+            "distinguish template matches from method-name hints.");
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        rejected = false;
+        try { SourceInvestigationIndex.Build(root, canceled.Token); }
+        catch (OperationCanceledException) { rejected = true; }
+        Ensure(rejected, "Cancellation must prevent indexing private source files.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
 
 static void FolderImport()
 {

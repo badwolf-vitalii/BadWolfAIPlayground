@@ -249,13 +249,10 @@ public sealed class SourceInvestigationIndex
                 token.ThrowIfCancellationRequested();
                 if (line > file.LineCount)
                     continue;
-                var method = _methods.Where(candidate =>
-                    string.Equals(candidate.RelativePath, file.RelativePath,
-                        StringComparison.OrdinalIgnoreCase) &&
-                    candidate.LineNumber <= line).LastOrDefault();
+                // A filename/line reference is not sufficient to choose the
+                // containing method without a verified source span.
                 results.Add(new SourceInvestigationCandidate(
-                    file.RelativePath, line, method?.TypeName ?? "",
-                    method?.MethodName ?? "<stack frame>",
+                    file.RelativePath, line, "", "<stack frame>",
                     SourceEvidenceKind.ExplicitStackFrame,
                     ReadLineExcerpt(file.RelativePath, line),
                     "Stack frame supplied a source filename and line; check the checkout revision.",
@@ -297,10 +294,9 @@ public sealed class SourceInvestigationIndex
             string path = Path.GetFullPath(Path.Combine(_root, relative));
             if (!File.Exists(path))
                 return "";
-            return string.Join(Environment.NewLine,
-                File.ReadLines(path).Skip(Math.Max(0, line - 2)).Take(3))
-                .Trim()[..Math.Min(480, string.Join(Environment.NewLine,
-                File.ReadLines(path).Skip(Math.Max(0, line - 2)).Take(3)).Trim().Length)];
+            string excerpt = string.Join(Environment.NewLine,
+                File.ReadLines(path).Skip(Math.Max(0, line - 2)).Take(3)).Trim();
+            return excerpt.Length > 480 ? excerpt[..480] + "..." : excerpt;
         }
         catch (IOException)
         {
@@ -326,7 +322,10 @@ public sealed class SourceInvestigationIndex
         if (excerpt.Length > 700)
             excerpt = excerpt[..700] + "...";
 
-        var guards = site.Ancestors().TakeWhile(node => node != callable)
+        IEnumerable<SyntaxNode> guardNodes = ReferenceEquals(site, callable)
+            ? callable.DescendantNodes().OfType<IfStatementSyntax>().Take(4)
+            : site.Ancestors().TakeWhile(node => node != callable);
+        var guards = guardNodes
             .Select(node => node switch
             {
                 IfStatementSyntax condition => "if (" +
@@ -341,13 +340,11 @@ public sealed class SourceInvestigationIndex
         if (conditions.Length == 0)
             conditions = "No enclosing if/catch guard established for this site.";
 
-        string calls = callable == site
-            ? "No call-chain inference from a method name."
-            : string.Join(", ", callable.DescendantNodes()
-                .OfType<InvocationExpressionSyntax>()
-                .Select(invocation => InvokedName(invocation.Expression))
-                .Where(name => name.Length > 0 && !LoggingNames.Contains(name))
-                .Distinct(StringComparer.Ordinal).Take(8));
+        string calls = string.Join(", ", callable.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>()
+            .Select(invocation => InvokedName(invocation.Expression))
+            .Where(name => name.Length > 0 && !LoggingNames.Contains(name))
+            .Distinct(StringComparer.Ordinal).Take(8));
         if (calls.Length == 0)
             calls = "No direct invocations established.";
         return new SourceInvestigationCandidate(
