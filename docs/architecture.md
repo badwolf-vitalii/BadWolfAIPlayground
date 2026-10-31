@@ -375,6 +375,60 @@ controls and that preview/prepare remain local without
 sending a request. Real-model behavior still requires
 manual verification on the user's own machine.
 
+### Code-aware local investigation, evidence audit and conservative claims (v0.5.0)
+
+The selected `SourceInvestigationCase` remains the **only source** of model
+context: no additional disk, private source, excluded LOG or cloud access is
+introduced. `InvestigationPromptBuilder` selects one original LOG record,
+at most six distinct related LOG lines, and at most three C# candidates.
+Candidate selection first diversifies across source evidence kinds (logger
+location, exact/formatted logging template, stack frame and method-name hint)
+so repetitive caller locations cannot evict all logging-template evidence.
+Only already indexed C# snippets are included, and the 7,200-character
+user-message limit is preserved.
+
+Each selected C# candidate carries its static method/symbol, a short site
+excerpt, already indexed enclosing `if`/`catch` conditions and possible
+direct invocation names. Conditions seen anywhere in a method-only match are
+explicitly labelled as **not proven reached**. Caller/stack locations are
+identified as location hints, not as the origin of an error. Only a few
+additional nearby indexed physical source lines are used; the prompt never
+loads a full method body or executes a C# call graph.
+
+The `InvestigationPrompt.Audit` string reports original/related LOG counts,
+included/indexed C# candidates, truncated evidence sets, absence of indexed
+source and ambiguities. WPF binds this audit separately from the exact
+read-only prompt preview. Editing the question or changing imported/source
+data invalidates the audit along with the preview; no automatic Ollama
+requests are made.
+
+The system instruction now distinguishes LOG observations from static
+source facts and unverified hypotheses, asks for discriminating checks on
+specific branches and variables, and asks for no hypothesis on weak evidence.
+This is complemented by a **structural parser gate** in
+`LocalOllamaInvestigationClient.ParseExplanation`: when the packet lacks
+both (a) a distinct related LOG observation and (b) an enclosing guard
+at an exact/formatted logging source site, model hypotheses are discarded.
+Its free-form summary is replaced with a deterministic location-only
+statement; limitations identify the missing corroboration. If no C#
+candidate was provided, an explicit missing-code note is always added.
+All cited IDs must still be valid, even if the final hypothesis is withheld.
+
+This gate cannot validate whether richer observations semantically prove a
+root cause. For a packet with multiple log observations or a code guard, the
+model's narrative remains unverified. No "printer disconnected" or similar
+explanation should ever be reported as an observed fact solely from an
+unqualified `Failed printing recharge card receipt: 0/2` entry.
+
+Regression coverage includes a synthetic Roslyn-indexed count guard and
+related invocation, two ambiguous C# template sites, redundant caller hints,
+a single-record receipt failure and adversarial JSON with invented printer
+causes. Windows WPF smoke asserts that the on-screen evidence audit is
+bound to the prepared packet and invalidates with question changes.
+CI continues to exercise stub local HTTP; **quality assessment against real
+installed Ollama models must be completed on the user's Windows machine**.
+
+
 
 
 

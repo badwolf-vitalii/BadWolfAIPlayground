@@ -399,7 +399,7 @@ public sealed class SourceInvestigationIndex
             if (!File.Exists(path))
                 return "";
             string excerpt = string.Join(Environment.NewLine,
-                File.ReadLines(path).Skip(Math.Max(0, line - 2)).Take(3)).Trim();
+                File.ReadLines(path).Skip(Math.Max(0, line - 3)).Take(5)).Trim();
             return excerpt.Length > 480 ? excerpt[..480] + "..." : excerpt;
         }
         catch (IOException)
@@ -443,6 +443,8 @@ public sealed class SourceInvestigationIndex
         string conditions = string.Join("; ", guards);
         if (conditions.Length == 0)
             conditions = "No enclosing if/catch guard established for this site.";
+        else if (ReferenceEquals(site, callable))
+            conditions = "Method contains (not proven reached): " + conditions;
 
         string calls = string.Join(", ", callable.DescendantNodes()
             .OfType<InvocationExpressionSyntax>()

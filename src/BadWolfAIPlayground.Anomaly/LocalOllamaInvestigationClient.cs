@@ -154,7 +154,45 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         }
 
         var checks = ReadTexts(json, "next_checks", 5, 500);
-        var unknowns = ReadTexts(json, "unknowns", 4, 500);
+        var unknowns = ReadTexts(json, "unknowns", 4, 500).ToList();
+        bool hasCode = evidence.Any(item => item.Id.StartsWith('C'));
+        bool hasRelatedLog = evidence.Count(item => item.Id.StartsWith('L')) > 1;
+        // A matching logger/catch location alone adds no new causal facts.
+        // Allow a code-based branch hypothesis only when the admitted excerpt
+        // actually identifies an enclosing guard at a logging template.
+        bool hasBranchContext = evidence.Any(item =>
+            item.Id.StartsWith('C') &&
+            (item.Kind.Contains("logging literal", StringComparison.OrdinalIgnoreCase) ||
+             item.Kind.Contains("logging template", StringComparison.OrdinalIgnoreCase)) &&
+            item.Excerpt.Contains("Enclosing guards", StringComparison.Ordinal) &&
+            !item.Excerpt.Contains("No enclosing if/catch guard",
+                StringComparison.Ordinal));
+
+        if (!hasCode)
+            unknowns.Insert(0, "No indexed C# source candidate was supplied. " +
+                "The application control flow was not verified.");
+
+        if (!hasRelatedLog && !hasBranchContext)
+        {
+            // A model can cite L1 while inventing a perfectly plausible cause.
+            // Refuse those hypotheses and replace its free-form summary with
+            // deterministic evidence inventory instead of laundering the guess
+            // into a statement of observed fact. This is a structural guard,
+            // not a general semantic hallucination detector.
+            claims.Clear();
+            InvestigationPromptEvidence? primary =
+                evidence.FirstOrDefault(item => item.Id == "L1");
+            summary = primary is null
+                ? "No primary LOG observation was supplied."
+                : "The available LOG evidence records an event at " +
+                    primary.Location + ". Its underlying cause is not established.";
+            unknowns.Insert(0, "Causal hypotheses were withheld: no separate " +
+                "related LOG observation or indexed enclosing C# branch " +
+                "supports a mechanism. Inspect the source branch and earlier " +
+                "operation state.");
+        }
+        if (unknowns.Count > 4)
+            unknowns.RemoveRange(4, unknowns.Count - 4);
         if (claims.Count == 0 && unknowns.Count == 0)
             throw new InvalidDataException(
                 "The model provided neither supported hypotheses nor limitations.");

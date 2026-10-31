@@ -29,7 +29,9 @@ var checks = new (string Name, Action Execute)[]
     ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline),
     ("Standalone card reads do not require VTS", StandaloneCardRead),
     ("Bounded AI investigation prompt includes only numbered evidence", InvestigationPrompt),
-    ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient)
+    ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient),
+    ("Source-aware AI includes branch conditions, calls and ambiguity audit", CodeAwareInvestigationQuality),
+    ("Sparse evidence suppresses unsupported causal model claims", SparseEvidenceRefusesCausalClaims)
 };
 
 int failed = 0;
@@ -1448,6 +1450,193 @@ static void OllamaInvestigationClient()
     catch (OperationCanceledException) { rejected = true; }
     Ensure(rejected && calls == 1,
         "Canceled requests must not issue a new HTTP call.");
+}
+
+
+static void CodeAwareInvestigationQuality()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-CodeAware-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        File.WriteAllText(Path.Combine(root, "ReceiptWorker.cs"),
+            """
+            namespace Synthetic;
+            class ReceiptWorker
+            {
+                void RetryReceipt() { }
+                void PrintReceipt(int printedCount, int expectedCount)
+                {
+                    if (printedCount < expectedCount)
+                    {
+                        logger.Error($"Failed printing recharge card receipt: {printedCount}/{expectedCount}");
+                        RetryReceipt();
+                    }
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "SecondWorker.cs"),
+            """
+            class SecondWorker
+            {
+                void Print(int printedCount, int expectedCount)
+                {
+                    if (printedCount < expectedCount)
+                        logger.Error($"Failed printing recharge card receipt: {printedCount}/{expectedCount}");
+                }
+            }
+            """);
+
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        var matches = index.FindLogSites("Failed printing recharge card receipt: 0/2");
+        Ensure(matches.Count == 2 &&
+               matches.All(item => item.Kind == SourceEvidenceKind.FormattedLoggingTemplate),
+            "Two real logging templates must stay distinct and ambiguous.");
+
+        SourceInvestigationCandidate branch = matches.Single(item =>
+            item.MethodName == "PrintReceipt");
+        Ensure(branch.Conditions.Contains("printedCount < expectedCount",
+                   StringComparison.Ordinal) &&
+               branch.DirectCalls.Contains("RetryReceipt", StringComparison.Ordinal),
+            "Roslyn must extract the static guard and nearby method invocation names.");
+
+        var source = new SourceInvestigationCase(
+            "LOG SEARCH", "Failed receipt print",
+            "Failed printing recharge card receipt: 0/2",
+            "App_2026-10-30.log", 4472, [branch], "One candidate logging site.");
+        InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+            source, "Which C# condition corresponds to this failure?");
+        Ensure(packet.Evidence.Count == 2 &&
+               packet.Evidence[1].Id == "C1" &&
+               packet.UserMessage.Contains("printedCount < expectedCount",
+                   StringComparison.Ordinal) &&
+               packet.UserMessage.Contains("RetryReceipt", StringComparison.Ordinal) &&
+               packet.UserMessage.Contains("not proven executed",
+                   StringComparison.Ordinal) &&
+               packet.Audit.Contains("1/1 indexed C#", StringComparison.Ordinal) &&
+               packet.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters,
+            "A selected source branch, static calls, provenance and uncertainty must " +
+            "fit in the exact previewed prompt.");
+
+        using JsonDocument answer = JsonDocument.Parse(
+            """
+            {"summary":"The receipt counter 0/2 was logged.",
+             "hypotheses":[{"claim":"The code contains a branch when printedCount is below expectedCount.",
+                            "evidence_ids":["L1","C1"]}],
+             "next_checks":["Inspect printedCount and expectedCount at the PrintReceipt branch before RetryReceipt."],
+             "unknowns":["Why the count was zero is not established."]}
+            """);
+        LocalInvestigationExplanation grounded =
+            LocalOllamaInvestigationClient.ParseExplanation(answer.RootElement, packet.Evidence);
+        Ensure(grounded.Hypotheses.Count == 1 &&
+               grounded.Hypotheses[0].References.Any(item => item.Id == "C1") &&
+               grounded.NextChecks.Single().Contains("printedCount",
+                   StringComparison.Ordinal),
+            "An explicit guard and log count may support a tentative branch hypothesis " +
+            "and a specific next check, without asserting a hardware root cause.");
+
+        SourceInvestigationCase ambiguous = source with { Candidates = matches };
+        InvestigationPrompt both = InvestigationPromptBuilder.Build(ambiguous,
+            "How many independent logging sites match?");
+        Ensure(both.Evidence.Count == 3 &&
+               both.Evidence.Count(item => item.Id.StartsWith('C')) == 2 &&
+               both.Audit.Contains("AMBIGUOUS", StringComparison.Ordinal) &&
+               both.UserMessage.Contains("2/2 indexed C#", StringComparison.Ordinal),
+            "A matching template in two methods is ambiguous rather than a proven call path.");
+
+        var dominated = source with
+        {
+            Candidates =
+            [
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 11 },
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 12 },
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 13 },
+                branch,
+                matches.Single(item => item.MethodName == "Print")
+            ]
+        };
+        InvestigationPrompt diversified = InvestigationPromptBuilder.Build(dominated,
+            "Can you inspect actual logging sites?");
+        Ensure(diversified.Evidence.Count(item => item.Id.StartsWith('C')) == 3 &&
+               diversified.Evidence.Any(item =>
+                   item.Kind.Contains("Formatted logging template", StringComparison.Ordinal)),
+            "Noisy caller locations must not evict every concrete logging template " +
+            "from the bounded model context.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+static void SparseEvidenceRefusesCausalClaims()
+{
+    var source = new SourceInvestigationCase(
+        "LOG SEARCH", "Receipt print failed",
+        "Failed printing recharge card receipt: 0/2",
+        "App_2026-10-30.log", 4472, [],
+        "No matching C# source found in the selected checkout.");
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(source,
+        "Why was the printer disconnected?");
+    Ensure(prompt.Evidence.Count == 1 &&
+           prompt.Audit.Contains("Only the primary LOG", StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("NO C# source candidate", StringComparison.Ordinal),
+        "Missing C# source and corroborating events must be disclosed before inference.");
+
+    using JsonDocument hallucinated = JsonDocument.Parse(
+        """
+        {"summary":"The printer was disconnected and the template was missing.",
+         "hypotheses":[{"claim":"Driver initialization failed.","evidence_ids":["L1"]}],
+         "next_checks":["Inspect printing count before the failure."],
+         "unknowns":["Printer state was not logged."]}
+        """);
+    LocalInvestigationExplanation guarded =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, prompt.Evidence);
+    Ensure(guarded.Hypotheses.Count == 0 &&
+           !guarded.Summary.Contains("disconnected", StringComparison.OrdinalIgnoreCase) &&
+           !guarded.Summary.Contains("template was missing", StringComparison.OrdinalIgnoreCase) &&
+           guarded.Unknowns.Any(item => item.Contains("No indexed C#",
+               StringComparison.Ordinal)) &&
+           guarded.Unknowns.Any(item => item.Contains("withheld",
+               StringComparison.Ordinal)),
+        "Single-line evidence must never promote generic printer guesses " +
+        "to observed facts or published causal hypotheses.");
+
+    InvestigationPrompt callerOnly = InvestigationPromptBuilder.Build(
+        source with { Candidates = SampleLocalInvestigation().Candidates },
+        "Did the logger cause the failure?");
+    LocalInvestigationExplanation callerGuarded =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, callerOnly.Evidence);
+    Ensure(callerGuarded.Hypotheses.Count == 0 &&
+           callerGuarded.Unknowns.Any(item => item.Contains("withheld",
+               StringComparison.Ordinal)),
+        "A source-matched catch/logger location alone is not evidence of a " +
+        "specific cause.");
+
+    var withIndependentEvent = source with
+    {
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(
+                new DateTimeOffset(2026, 10, 30, 10, 0, 0, TimeSpan.Zero),
+                LogSeverity.Debug, "Receipt counter before printing: 0/2",
+                "WebClient_2026-10-30.log", 147)
+        ],
+        RelatedEventCount = 1
+    };
+    InvestigationPrompt moreEvidence = InvestigationPromptBuilder.Build(
+        withIndependentEvent, "What does the second log prove?");
+    LocalInvestigationExplanation correlated =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, moreEvidence.Evidence);
+    Ensure(correlated.Hypotheses.Count == 1 &&
+           correlated.Unknowns.Any(item => item.Contains("No indexed C#",
+               StringComparison.Ordinal)),
+        "Two separately located LOG observations may support tentative " +
+        "hypotheses, but absence of C# source remains explicit.");
 }
 
 sealed class InvestigationHttpHandler(

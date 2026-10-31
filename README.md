@@ -76,6 +76,38 @@ generated responses are persisted by the application (Ollama itself
 may keep service logs according to its configuration). Missing
 Ollama/model does not break the deterministic log analyzer.
 
+### Code-aware, evidence-audited investigation (v0.5.0)
+
+The **Prepare** step now displays an evidence audit above the model selector:
+the primary LOG, the number of included versus available related LOG entries,
+the number of selected versus indexed C# candidates, and warnings when the
+source match is ambiguous or absent. The audit and all excerpts are strictly
+local until **Explain with local Ollama** is clicked.
+
+Each chosen C# source candidate now includes a short snippet plus **static**
+enclosing `if`/`catch` guards (where available) and other invocation names
+in its containing method. Source candidates are diversified to avoid filling
+the three-C# budget only with similar logger-location hints. These are
+**syntax observations, not a confirmed execution path**. A method-name match,
+logger/catch location or a condition within the selected checkout does not
+prove that that branch ran in production.
+
+The local model is instructed to keep observed LOG facts separate from
+hypotheses, use concrete code variables and branch checks, and say when the
+evidence does not justify a causal guess. The answer is labelled **unverified**.
+The response parser also applies a conservative structural safeguard: **with
+no separate related LOG observation and no indexed enclosing guard at an
+identified logging site, it withholds causal hypotheses** and replaces an
+unsupported free-form model summary with a deterministic, limited statement.
+Missing C# evidence is always called out in the unknowns. This does not solve
+semantic hallucination for richer evidence and is not a proof of root cause.
+
+The same explicit local-only flow, limits (one primary LOG, six related LOG,
+three C#, 7,200-character user prompt), no-cloud policy, input exclusions,
+strict citation IDs and cancellation behavior remain in place. This release
+does not add whole-repository retrieval or a runtime call graph.
+
+
 
 
 
