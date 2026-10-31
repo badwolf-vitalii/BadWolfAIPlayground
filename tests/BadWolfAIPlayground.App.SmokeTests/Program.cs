@@ -483,6 +483,39 @@ internal static class Program
                     "Real WPF controls must expose opt-in Ollama model, question, " +
                     "exact prompt preview and the explicit Explain action.");
 
+                // Keep model names readable in both the closed selector and popup.
+                // This explicitly guards against the Windows default white ComboBox
+                // surface combined with the anomaly panel's pale foreground.
+                var localModelSelector = (ComboBox)anomalyView.FindName("AnomalyOllamaModelSelector");
+                Assert(ReferenceEquals(localModelSelector.Style,
+                           application.Resources["DarkComboBox"]) &&
+                       ReferenceEquals(localModelSelector.ItemContainerStyle,
+                           application.Resources["DarkComboBoxItem"]) &&
+                       localModelSelector.Foreground is SolidColorBrush modelText &&
+                       modelText.Color.R > 190 && modelText.Color.G > 190 &&
+                       localModelSelector.Background is SolidColorBrush modelSurface &&
+                       modelSurface.Color.R < 70 && modelSurface.Color.G < 90,
+                    "Ollama model names must have light text on a dark selector and item surface.");
+                localModelSelector.ApplyTemplate();
+                Assert(localModelSelector.Template.FindName("DropDownToggle",
+                           localModelSelector) is ToggleButton &&
+                       localModelSelector.Template.FindName("ContentSite",
+                           localModelSelector) is ContentPresenter &&
+                       localModelSelector.Template.FindName("PART_Popup",
+                           localModelSelector) is Popup { Child: Border popupSurface } &&
+                       popupSurface.Background is SolidColorBrush popupBrush &&
+                       popupBrush.Color.R < 70 && popupBrush.Color.G < 90,
+                    "The selected name, dropdown arrow and popup must render with the dark template.");
+                analyzer.LocalOllamaModels.Add("qwen3:4b-instruct");
+                analyzer.SelectedLocalModel = "qwen3:4b-instruct";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                Assert(localModelSelector.SelectedItem is string selectedModel &&
+                       selectedModel == "qwen3:4b-instruct",
+                    "An installed model name must remain selected and visible in the ComboBox.");
+                analyzer.SelectedLocalModel = "";
+                analyzer.LocalOllamaModels.Clear();
+                Console.WriteLine("PASS high-contrast local Ollama model selector and popup");
+
                 Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
                        analyzer.LocalAiHypotheses.Count == 0 &&
                        (analyzer.LocalPromptPreview.Contains(

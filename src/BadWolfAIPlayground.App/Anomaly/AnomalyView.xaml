@@ -593,8 +593,8 @@
                                 <ComboBox x:Name="AnomalyOllamaModelSelector"
                                           ItemsSource="{Binding LocalOllamaModels}"
                                           SelectedItem="{Binding SelectedLocalModel, Mode=TwoWay}"
-                                          Width="250" MinHeight="33"
-                                          Foreground="#E6F5FC" Background="#162E47"/>
+                                          Width="250" Style="{StaticResource DarkComboBox}"
+                                          ToolTip="Installed local Ollama models; the selected name and dropdown options use the dark high-contrast theme."/>
                             </StackPanel>
                             <TextBlock Text="Question for the local model" Foreground="#B5D4E7"
                                        FontSize="11" Margin="0,0,0,5"/>
