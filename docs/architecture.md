@@ -414,6 +414,15 @@ statement; limitations identify the missing corroboration. If no C#
 candidate was provided, an explicit missing-code note is always added.
 All cited IDs must still be valid, even if the final hypothesis is withheld.
 
+A second validation layer removes individual hypotheses that cite only
+`L1` or non-guard logger/stack hints despite other supporting evidence
+being available. It requires a direct citation to a distinct related LOG
+entry (`L2` etc.) or to a logging-template C# candidate containing an
+indexed enclosing condition. Source correlation additionally deduplicates
+equal timestamp+message observations across log targets to avoid counting
+NLog mirrors as independent evidence. These are conservative structural
+safeguards, not general semantic entailment checks.
+
 This gate cannot validate whether richer observations semantically prove a
 root cause. For a packet with multiple log observations or a code guard, the
 model's narrative remains unverified. No "printer disconnected" or similar

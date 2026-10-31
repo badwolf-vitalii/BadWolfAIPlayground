@@ -91,12 +91,21 @@ public static class InvestigationPromptBuilder
         {
             source.LogFile + ":" + source.LogLine
         };
+        // Multiple NLog targets can mirror the very same event at the same
+        // instant. Such copies must not count as independent corroboration.
+        var knownObservations = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (source.ObservedAt is DateTimeOffset observed)
+            knownObservations.Add(observed.UtcDateTime.Ticks + "|" +
+                source.Evidence.Trim());
         int relatedUsed = 0;
         foreach (SourceInvestigationLogEvent entry in source.RelatedEvents)
         {
             if (relatedUsed >= MaxRelatedLogs)
                 break;
             if (!knownLines.Add(entry.SourceFile + ":" + entry.SourceLine))
+                continue;
+            if (!knownObservations.Add(entry.Timestamp.UtcDateTime.Ticks +
+                    "|" + entry.Message.Trim()))
                 continue;
             evidence.Add(new InvestigationPromptEvidence(
                 "L" + (relatedUsed + 2), "Related LOG entry (" + entry.Severity + ")",

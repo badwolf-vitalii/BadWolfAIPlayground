@@ -31,7 +31,8 @@ var checks = new (string Name, Action Execute)[]
     ("Bounded AI investigation prompt includes only numbered evidence", InvestigationPrompt),
     ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient),
     ("Source-aware AI includes branch conditions, calls and ambiguity audit", CodeAwareInvestigationQuality),
-    ("Sparse evidence suppresses unsupported causal model claims", SparseEvidenceRefusesCausalClaims)
+    ("Sparse evidence suppresses unsupported causal model claims", SparseEvidenceRefusesCausalClaims),
+    ("Mirrored log targets cannot manufacture independent AI evidence", MirroredLogsAreNotCorroboration)
 };
 
 int failed = 0;
@@ -1536,6 +1537,23 @@ static void CodeAwareInvestigationQuality()
             "An explicit guard and log count may support a tentative branch hypothesis " +
             "and a specific next check, without asserting a hardware root cause.");
 
+        using JsonDocument ungrounded = JsonDocument.Parse(
+            """
+            {"summary":"The printer driver broke.",
+             "hypotheses":[{"claim":"The printer driver broke.","evidence_ids":["L1"]}],
+             "next_checks":["Inspect the print counter branch."],
+             "unknowns":["Device state was not logged."]}
+            """);
+        LocalInvestigationExplanation unsupported =
+            LocalOllamaInvestigationClient.ParseExplanation(
+                ungrounded.RootElement, packet.Evidence);
+        Ensure(unsupported.Hypotheses.Count == 0 &&
+               !unsupported.Summary.Contains("driver broke", StringComparison.Ordinal) &&
+               unsupported.Unknowns.Any(item => item.Contains("only the primary",
+                   StringComparison.Ordinal)),
+            "A LOG-only citation cannot promote printer guesses even when " +
+            "a separate indexed C# guard exists in the packet.");
+
         SourceInvestigationCase ambiguous = source with { Candidates = matches };
         InvestigationPrompt both = InvestigationPromptBuilder.Build(ambiguous,
             "How many independent logging sites match?");
@@ -1629,14 +1647,92 @@ static void SparseEvidenceRefusesCausalClaims()
     };
     InvestigationPrompt moreEvidence = InvestigationPromptBuilder.Build(
         withIndependentEvent, "What does the second log prove?");
-    LocalInvestigationExplanation correlated =
+    LocalInvestigationExplanation unsupported =
         LocalOllamaInvestigationClient.ParseExplanation(
             hallucinated.RootElement, moreEvidence.Evidence);
+    Ensure(unsupported.Hypotheses.Count == 0 &&
+           unsupported.Unknowns.Any(item => item.Contains("only the primary",
+               StringComparison.Ordinal)),
+        "Even when additional LOG events are present, an L1-only citation " +
+        "does not support a causal hypothesis.");
+
+    using JsonDocument properlyCited = JsonDocument.Parse(
+        """
+        {"summary":"Two LOG entries mention the incomplete receipt count.",
+         "hypotheses":[{"claim":"The count remained below the requested amount.",
+                        "evidence_ids":["L1","L2"]}],
+         "next_checks":["Compare the receipt counter before and after printing."],
+         "unknowns":["The source code was not supplied."]}
+        """);
+    LocalInvestigationExplanation correlated =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            properlyCited.RootElement, moreEvidence.Evidence);
     Ensure(correlated.Hypotheses.Count == 1 &&
            correlated.Unknowns.Any(item => item.Contains("No indexed C#",
                StringComparison.Ordinal)),
-        "Two separately located LOG observations may support tentative " +
-        "hypotheses, but absence of C# source remains explicit.");
+        "Distinct LOG observations can support a tentative, specifically cited " +
+        "hypothesis while missing source code remains explicit.");
+}
+
+
+static void MirroredLogsAreNotCorroboration()
+{
+    var observedAt = new DateTimeOffset(2026, 10, 30, 16, 26, 53, TimeSpan.Zero);
+    var selected = new SourceInvestigationCase(
+        "LOG SEARCH", "Receipt error",
+        "Failed printing recharge card receipt: 0/2",
+        "App.log", 4472, [], "No matching source.")
+    {
+        ObservedAt = observedAt,
+        RelatedEventCount = 3,
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "App.log", 4472),
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "WebClient.log", 880),
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "Old/App.log", 100)
+        ]
+    };
+    InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+        selected, "Was this printed more than once?");
+    Ensure(packet.Evidence.Count == 1 &&
+           packet.Audit.Contains("0/3 visible related LOG", StringComparison.Ordinal),
+        "Same-timestamp, same-message mirroring must not be treated as " +
+        "independent evidence of another printing attempt.");
+
+    using JsonDocument invented = JsonDocument.Parse(
+        """
+        {"summary":"The printer failed three times.",
+         "hypotheses":[{"claim":"The driver crashed repeatedly.",
+                        "evidence_ids":["L1"]}],
+         "next_checks":["Examine the underlying print status."],
+         "unknowns":["No source code was supplied."]}
+        """);
+    LocalInvestigationExplanation explanation =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            invented.RootElement, packet.Evidence);
+    Ensure(explanation.Hypotheses.Count == 0 &&
+           !explanation.Summary.Contains("three times", StringComparison.Ordinal),
+        "Duplicated targets cannot justify repetition counts or causes.");
+
+    var distinct = selected with
+    {
+        RelatedEvents = selected.RelatedEvents.Concat(
+        [
+            new SourceInvestigationLogEvent(observedAt.AddSeconds(2),
+                LogSeverity.Debug, "Receipt counter before printing: 0/2",
+                "WebClient.log", 881)
+        ]).ToArray()
+    };
+    InvestigationPrompt added = InvestigationPromptBuilder.Build(
+        distinct, "Which distinct observations are available?");
+    Ensure(added.Evidence.Count == 2 &&
+           added.Evidence[1].Id == "L2" &&
+           added.Evidence[1].Excerpt.Contains("before printing",
+               StringComparison.Ordinal),
+        "Distinct DEBUG state evidence must survive mirror deduplication.");
 }
 
 sealed class InvestigationHttpHandler(

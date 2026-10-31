@@ -102,6 +102,13 @@ unsupported free-form model summary with a deterministic, limited statement.
 Missing C# evidence is always called out in the unknowns. This does not solve
 semantic hallucination for richer evidence and is not a proof of root cause.
 
+A duplicate event written to multiple log targets with the same timestamp
+and message is admitted only once; the extra file is not independent
+corroboration. A causal hypothesis must cite the particular related LOG
+entry or indexed logging-site guard supporting it: a reference to the
+primary error line `L1` alone is insufficient even when other evidence
+exists in the packet.
+
 The same explicit local-only flow, limits (one primary LOG, six related LOG,
 three C#, 7,200-character user prompt), no-cloud policy, input exclusions,
 strict citation IDs and cancellation behavior remain in place. This release

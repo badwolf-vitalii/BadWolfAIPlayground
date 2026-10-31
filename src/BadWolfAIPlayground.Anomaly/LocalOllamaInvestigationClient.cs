@@ -156,41 +156,46 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         var checks = ReadTexts(json, "next_checks", 5, 500);
         var unknowns = ReadTexts(json, "unknowns", 4, 500).ToList();
         bool hasCode = evidence.Any(item => item.Id.StartsWith('C'));
-        bool hasRelatedLog = evidence.Count(item => item.Id.StartsWith('L')) > 1;
-        // A matching logger/catch location alone adds no new causal facts.
-        // Allow a code-based branch hypothesis only when the admitted excerpt
-        // actually identifies an enclosing guard at a logging template.
-        bool hasBranchContext = evidence.Any(item =>
-            item.Id.StartsWith('C') &&
-            (item.Kind.Contains("logging literal", StringComparison.OrdinalIgnoreCase) ||
-             item.Kind.Contains("logging template", StringComparison.OrdinalIgnoreCase)) &&
-            item.Excerpt.Contains("Enclosing guards", StringComparison.Ordinal) &&
-            !item.Excerpt.Contains("No enclosing if/catch guard",
-                StringComparison.Ordinal));
+        // Cite an actual *supporting* entry, not just the primary L1 failure.
+        // A separate LOG line or an indexed guard at a matched logging
+        // template is a prerequisite, not proof that a proposed cause is true.
+        HashSet<string> supportingIds = evidence.Where(item =>
+            (item.Id.StartsWith('L') && item.Id != "L1") ||
+            (item.Id.StartsWith('C') &&
+             (item.Kind.Contains("logging literal", StringComparison.OrdinalIgnoreCase) ||
+              item.Kind.Contains("logging template", StringComparison.OrdinalIgnoreCase)) &&
+             item.Excerpt.Contains("Enclosing guards", StringComparison.Ordinal) &&
+             !item.Excerpt.Contains("No enclosing if/catch guard",
+                 StringComparison.Ordinal)))
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        int withheld = claims.RemoveAll(claim =>
+            !claim.References.Any(item => supportingIds.Contains(item.Id)));
 
         if (!hasCode)
             unknowns.Insert(0, "No indexed C# source candidate was supplied. " +
                 "The application control flow was not verified.");
 
-        if (!hasRelatedLog && !hasBranchContext)
+        if (supportingIds.Count == 0 || (withheld > 0 && claims.Count == 0))
         {
-            // A model can cite L1 while inventing a perfectly plausible cause.
-            // Refuse those hypotheses and replace its free-form summary with
-            // deterministic evidence inventory instead of laundering the guess
-            // into a statement of observed fact. This is a structural guard,
-            // not a general semantic hallucination detector.
-            claims.Clear();
+            // Avoid displaying an unsupported model narrative as an observed
+            // fact when all proposed causes lacked corroborating citations.
             InvestigationPromptEvidence? primary =
                 evidence.FirstOrDefault(item => item.Id == "L1");
             summary = primary is null
                 ? "No primary LOG observation was supplied."
                 : "The available LOG evidence records an event at " +
                     primary.Location + ". Its underlying cause is not established.";
+        }
+        if (supportingIds.Count == 0)
             unknowns.Insert(0, "Causal hypotheses were withheld: no separate " +
                 "related LOG observation or indexed enclosing C# branch " +
                 "supports a mechanism. Inspect the source branch and earlier " +
                 "operation state.");
-        }
+        else if (withheld > 0)
+            unknowns.Insert(0, "Causal hypotheses citing only the primary " +
+                "failure or non-guard source location were withheld. Inspect " +
+                "the relevant L#/C# evidence before inferring a cause.");
         if (unknowns.Count > 4)
             unknowns.RemoveRange(4, unknowns.Count - 4);
         if (claims.Count == 0 && unknowns.Count == 0)
