@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace BadWolfAIPlayground.Anomaly;
 
@@ -37,6 +38,19 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     public const int MaxResponseBytes = 64 * 1024;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
+
+    // A cited LOG location confirms that a message exists, not that one
+    // subsystem caused another to fail. When the model gives an unqualified
+    // causal statement, prefer withholding it over laundering the statement
+    // into an apparent diagnosis. This is intentionally a limited language
+    // guard, NOT a semantic entailment or root-cause validator.
+    private static readonly Regex DefiniteCauseClaim = new(
+        @"\b(?:due\s+to|because(?:\s+of)?|caused(?:\s+by)?|triggered(?:\s+by)?|" +
+        @"result(?:ed|ing)?\s+from|stemmed\s+from|responsible\s+for)\b" +
+        @"|\b(?:causato|causata|dovuto|dovuta)\s+(?:a|da|al)\b" +
+        @"|\b(?:через|спричинен[а-яіїє]*|внаслідок)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
 
     public LocalOllamaInvestigationClient(HttpClient? http = null)
     {
@@ -308,19 +322,33 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
                  StringComparison.Ordinal)))
             .Select(item => item.Id)
             .ToHashSet(StringComparer.Ordinal);
-        int withheld = claims.RemoveAll(claim =>
+        int unsupportedReferences = claims.RemoveAll(claim =>
             !claim.References.Any(item => supportingIds.Contains(item.Id)));
+        int definitiveClaims = claims.RemoveAll(claim =>
+            DefiniteCauseClaim.IsMatch(claim.Claim));
+        int withheld = unsupportedReferences + definitiveClaims;
+        bool assertedCauseInSummary = DefiniteCauseClaim.IsMatch(summary);
+        if (definitiveClaims > 0)
+            unknowns.Insert(0, definitiveClaims + " definitive causal claim(s) " +
+                "were withheld. Matching an L#/C# location does not establish " +
+                "which component caused this failure.");
 
         if (!hasCode)
             unknowns.Insert(0, "No indexed C# source candidate was supplied. " +
                 "The application control flow was not verified.");
+        else if (evidence.Where(item => item.Id.StartsWith('C'))
+                     .All(item => item.Kind.Contains("Method name only",
+                         StringComparison.Ordinal)))
+            unknowns.Insert(0, "C# method names are static hints only. " +
+                "No evidence establishes that any matching method executed.");
 
         if (evidence.Any(item => item.Kind.StartsWith(
                 "Nearby same-file LOG context", StringComparison.Ordinal)))
             unknowns.Insert(0, "Nearby same-file LOG entries provide context only. " +
                 "They do not establish a shared operation or a causal sequence.");
 
-        if (supportingIds.Count == 0 || (withheld > 0 && claims.Count == 0))
+        if (assertedCauseInSummary || supportingIds.Count == 0 ||
+            (withheld > 0 && claims.Count == 0))
         {
             // Avoid displaying an unsupported model narrative as an observed
             // fact when all proposed causes lacked corroborating citations.
@@ -336,10 +364,14 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
                 "related LOG observation or indexed enclosing C# branch " +
                 "supports a mechanism. Inspect the source branch and earlier " +
                 "operation state.");
-        else if (withheld > 0)
-            unknowns.Insert(0, "Causal hypotheses citing only the primary " +
-                "failure or non-guard source location were withheld. Inspect " +
+        else if (unsupportedReferences > 0)
+            unknowns.Insert(0, "Claims citing only the primary failure " +
+                "or a non-guard source location were withheld. Inspect " +
                 "the relevant L#/C# evidence before inferring a cause.");
+        if (assertedCauseInSummary)
+            unknowns.Insert(0, "A definitive causal assertion in the model " +
+                "summary was replaced by a location-only statement. " +
+                "The provided excerpts do not establish a root cause.");
         if (unknowns.Count > 4)
             unknowns.RemoveRange(4, unknowns.Count - 4);
         if (claims.Count == 0 && unknowns.Count == 0)

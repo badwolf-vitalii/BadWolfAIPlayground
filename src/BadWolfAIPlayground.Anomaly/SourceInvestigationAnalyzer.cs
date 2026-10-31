@@ -25,6 +25,9 @@ public sealed record SourceInvestigationCase(
     // Same-file nearby entries are local context only, never operation_id
     // correlation or evidence that a method/operation actually executed.
     public IReadOnlyList<SourceInvestigationLogEvent> NearbyEvents { get; init; } = [];
+    // Null is unknown (e.g. user-built test case), false means no checkout
+    // was loaded, true means a source index was available for this case.
+    public bool? SourceCheckoutIndexed { get; init; }
     public DateTimeOffset? ObservedAt { get; init; }
 }
 
@@ -215,7 +218,9 @@ public static partial class SourceInvestigationAnalyzer
             string id = ReadOperationId(item.SampleMessage);
             correlated.TryGetValue(id, out CorrelatedEvents? linked);
             SourceInvestigationCandidate[] candidates = CombineCandidates(
-                index.FindLogSites(item.SampleMessage, token: cancellationToken),
+                index.FindLogSites(item.SampleMessage, token: cancellationToken)
+                    .Concat(index.FindNamedFailureMethods(item.SampleMessage,
+                        token: cancellationToken)),
                 linked, index, cancellationToken);
             cases.Add(Create("LOG PATTERN",
                 $"{item.Severity}: {item.Occurrences:N0} occurrences",
@@ -262,6 +267,8 @@ public static partial class SourceInvestigationAnalyzer
                 index.FindStackFrames(finding.Continuation,
                     token: cancellationToken)
                     .Concat(index.FindLogSites(finding.Evidence,
+                        token: cancellationToken))
+                    .Concat(index.FindNamedFailureMethods(finding.Evidence,
                         token: cancellationToken)),
                 linked, index, cancellationToken);
             cases.Add(Create("STACK / FINDING", finding.Title,
@@ -357,7 +364,8 @@ public static partial class SourceInvestigationAnalyzer
         {
             OperationId = linked is null ? "" : operationId,
             RelatedEventCount = linked?.Count ?? 0,
-            RelatedEvents = linked?.Visible() ?? []
+            RelatedEvents = linked?.Visible() ?? [],
+            SourceCheckoutIndexed = true
         };
     }
 }

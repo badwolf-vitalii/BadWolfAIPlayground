@@ -44,6 +44,12 @@ public static class InvestigationPromptBuilder
         The summary must contain only facts explicitly observed in supplied
         LOG entries. Never state a proposed cause or a number of attempts as
         an observed fact unless those facts are independently logged.
+        An operation_id proves only that records share an identifier;
+        an earlier related LOG error does not prove a later step failed
+        BECAUSE OF that error. Do not say "failed due to", "caused by" or
+        "triggered by" without independent, explicit causal proof.
+        Cite separate observations as tentative leads and describe what
+        must be verified in C# before attributing an error to a component.
         A C# logging template establishes only a possible logging site.
         A logger/catch/stack location does NOT identify the origin of a fault.
         A NEARBY same-file LOG entry is context, NOT proof that events belong
@@ -172,8 +178,17 @@ public static class InvestigationPromptBuilder
         text.AppendLine("Source match assessment (static hint, not a diagnosis):");
         text.AppendLine(Limit(source.Assessment, 260));
         if (codeCandidates.Count == 0)
+        {
             text.AppendLine("NO C# source candidate was included. The application " +
                 "control flow has NOT been inspected by this model.");
+            if (source.SourceCheckoutIndexed == false)
+                text.AppendLine("No C# solution was loaded. The user must choose " +
+                    "a local Visual Studio solution (.sln) to index source.");
+            else if (source.SourceCheckoutIndexed == true)
+                text.AppendLine("A C# checkout was indexed, but no matching " +
+                    "logging site, caller location or explicit method hint " +
+                    "was identified for this case.");
+        }
         if (nearbyUsed > 0)
             text.AppendLine("The nearby same-file LOG excerpts show only " +
                 "physical/time proximity, NOT operation correlation or causation.");
@@ -314,8 +329,15 @@ public static class InvestigationPromptBuilder
                 " correlated entries in total; a bounded sample was selected " +
                 "around the investigated event, with limited early/late context.";
         if (source.Candidates.Count == 0)
-            summary += " No matching indexed C# site for this case; " +
-                "the checkout may be missing or no site matched.";
+            summary += source.SourceCheckoutIndexed switch
+            {
+                false => " No C# solution loaded. Use Choose Source (.sln) " +
+                    "to index the application's C# files.",
+                true => " C# checkout indexed, but no source site or " +
+                    "exact method-name hint matched this LOG case.",
+                _ => " No matching indexed C# site for this case; " +
+                    "the checkout may be missing or no site matched."
+            };
         else if (source.Candidates.Count > 1)
             summary += " Multiple source candidates exist; matching is AMBIGUOUS, " +
                 "and none is a verified runtime root cause.";

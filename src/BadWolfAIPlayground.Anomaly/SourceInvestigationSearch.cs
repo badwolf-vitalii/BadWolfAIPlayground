@@ -157,6 +157,8 @@ public static partial class SourceInvestigationAnalyzer
                         .Concat(index.FindStackFrames(entry.Continuation,
                             token: cancellationToken))
                         .Concat(index.FindLogSites(entry.Message,
+                            token: cancellationToken))
+                        .Concat(index.FindNamedFailureMethods(entry.Message,
                             token: cancellationToken)),
                         linked, index, cancellationToken);
                 SourceInvestigationCase result = Create(
@@ -169,6 +171,7 @@ public static partial class SourceInvestigationAnalyzer
                     id, linked) with
                 {
                     ObservedAt = entry.Timestamp,
+                    SourceCheckoutIndexed = index is not null,
                     NearbyEvents = id.Length == 0
                         ? CollectNearby(entry, nearbyByFile)
                         : []

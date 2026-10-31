@@ -118,6 +118,34 @@ validated only against the selected local C# checkout, when provided.
 No new network/file access, automatic model call or extra context budget
 has been introduced.
 
+### Causal-claim safeguards and explicit C# method hints (v0.5.0)
+
+Real local-model comparisons found that `qwen2.5:1.5b-instruct`
+sometimes asserted `"operation failed due to GetValue()"` merely because
+`GetValue` errors and `Purge() FAILED` shared an `operation_id`.
+Shared IDs validate correlation, not causation. The parser now **withholds
+unqualified direct-cause claims** (including common English, Italian and
+Ukrainian causal wording), even when the model attached valid `L#` IDs.
+A definitive causal assertion in the generated summary is replaced with
+a deterministic, source-location-only statement. Tentative, clearly
+qualified leads such as `"the NoCDM lookup may have contributed"` and
+specific diagnostic checks remain available.
+
+This is an intentionally conservative **wording safeguard**, not
+semantic validation: it can suppress legitimate statements or miss
+unsupported claims expressed differently. The original LOG/C# excerpts,
+unknowns and citation links remain the evidence to inspect.
+
+When a LOG explicitly says `Method() FAILED`, the offline Roslyn index
+can now look for **exactly named method declarations** in a user-selected
+C# checkout, even if no logging template matches. The resulting
+candidates are labeled **method name only (static hint)** and may be
+ambiguous; neither matching a method declaration nor its enclosing
+conditions proves it executed. The causal citation gate does not treat
+such candidates as runtime proof. The evidence audit now distinguishes
+**no Visual Studio solution loaded** (choose a `.sln` and index it)
+from **checkout indexed, but no source candidate matched**.
+
 ### Robust local model responses (v0.5.0)
 
 Ollama now receives a bounded response **JSON Schema**, with valid evidence

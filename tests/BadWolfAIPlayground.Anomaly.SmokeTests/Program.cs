@@ -38,7 +38,9 @@ var checks = new (string Name, Action Execute)[]
     ("Legacy JSON mode can retry a rejected schema without changing messages", LegacyLocalModelFormatRetry),
     ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback),
     ("ID-less same-file LOG context is bounded, labeled and never causally linked", SameFileLogContext),
-    ("Long operations preserve pre-failure context, outcome and source hints", FocusedLongOperationSampling)
+    ("Long operations preserve pre-failure context, outcome and source hints", FocusedLongOperationSampling),
+    ("Assertive model causal claims are withheld without losing tentative leads", AssertiveModelCausalityGuard),
+    ("Exact failure-method hints require selected source and do not prove execution", ExplicitFailureMethodHints)
 };
 
 int failed = 0;
@@ -2119,6 +2121,195 @@ static void FocusedLongOperationSampling()
                StringComparison.Ordinal),
         "Include/Exclude recomputation must remove all disabled-component " +
         "event references, even from a long correlated operation.");
+}
+
+
+static void AssertiveModelCausalityGuard()
+{
+    var start = new DateTimeOffset(2026, 10, 30, 16, 26, 50, TimeSpan.Zero);
+    var source = new SourceInvestigationCase(
+        "STACK / FINDING", "Purge() FAILED",
+        "Purge() FAILED | operation_id=5b8a87e4e4194e2084bb884b22d0a652",
+        "CardPrinter_2026-10-30.log", 14880, [],
+        "No matching C# checkout source.")
+    {
+        ObservedAt = start.AddSeconds(3),
+        RelatedEventCount = 2,
+        SourceCheckoutIndexed = false,
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(start, LogSeverity.Error,
+                "GetValue(CLReaderCustomSection, NoCDM) failed",
+                "CfgMan_2026-10-30.log", 271),
+            new SourceInvestigationLogEvent(start.AddSeconds(1), LogSeverity.Error,
+                "GetValue(CLReaderCustomSection, NoCDM) failed again",
+                "CfgMan_2026-10-30.log", 272)
+        ]
+    };
+    InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+        source, "What is established about the purge failure?");
+    Ensure(packet.Evidence.Count == 3 &&
+           packet.Audit.Contains("No C# solution loaded", StringComparison.Ordinal) &&
+           packet.UserMessage.Contains("C# solution was loaded",
+               StringComparison.Ordinal),
+        "Prompt must explicitly distinguish a missing source checkout from a failed index match.");
+
+    using JsonDocument answer = JsonDocument.Parse(
+        """
+        {"summary":"The purge operation failed due to the GetValue() call.",
+         "hypotheses":[
+            {"claim":"The operation failed due to a GetValue() call.",
+             "evidence_ids":["L2","L3"]},
+            {"claim":"The repeated NoCDM configuration errors may have contributed.",
+             "evidence_ids":["L2","L3"]}],
+         "next_checks":["Inspect the config entry and the Purge() prerequisites."],
+         "unknowns":["Whether either configuration error affected the purge is unknown."]}
+        """);
+    LocalInvestigationExplanation parsed =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            answer.RootElement, packet.Evidence);
+    Ensure(parsed.Hypotheses.Count == 1 &&
+           parsed.Hypotheses[0].Claim.Contains("may have contributed",
+               StringComparison.Ordinal) &&
+           !parsed.Summary.Contains("due to", StringComparison.OrdinalIgnoreCase) &&
+           parsed.Unknowns.Any(x => x.Contains("definitive causal",
+               StringComparison.Ordinal)) &&
+           parsed.Unknowns.Any(x => x.Contains("summary", StringComparison.Ordinal)) &&
+           parsed.NextChecks.Single().Contains("Purge()", StringComparison.Ordinal),
+        "An L# reference proves the log exists, not that GetValue() CAUSED " +
+        "a later failure; retain tentative observations and next checks.");
+
+    using JsonDocument plainFacts = JsonDocument.Parse(
+        """
+        {"summary":"A Purge() failure and two earlier configuration errors are logged.",
+         "hypotheses":[],
+         "next_checks":["Verify exact event sequence."],
+         "unknowns":["Runtime causal relationship not established."]}
+        """);
+    LocalInvestigationExplanation facts =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            plainFacts.RootElement, packet.Evidence);
+    Ensure(facts.Summary.Contains("two earlier configuration errors",
+               StringComparison.Ordinal) &&
+           facts.Hypotheses.Count == 0,
+        "An observation-only model summary must remain readable.");
+
+    Ensure(packet.SystemMessage.Contains("An operation_id proves only",
+        StringComparison.Ordinal),
+        "Prompt must explicitly prohibit converting shared operation IDs into cause.");
+}
+
+static void ExplicitFailureMethodHints()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-MethodHints-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        File.WriteAllText(Path.Combine(root, "CardPrinter.cs"),
+            """
+            class CardPrinter
+            {
+                void Purge()
+                {
+                    if (deviceReady)
+                        SubmitPurge();
+                }
+                void SubmitPurge() { }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "OldPrinter.cs"),
+            """
+            class OldPrinter
+            {
+                void Purge() { }
+                void GetValue() { }
+            }
+            """);
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        var hints = index.FindNamedFailureMethods("Purge() FAILED");
+        Ensure(hints.Count == 2 &&
+               hints.All(x => x.Kind == SourceEvidenceKind.OperationMethodName &&
+                        x.MethodName == "Purge") &&
+               index.FindNamedFailureMethods("Purge() succeeded").Count == 0 &&
+               index.FindNamedFailureMethods("GetValue(NoCDM) FAILED").Count == 0 &&
+               index.FindNamedFailureMethods("Unrelated failure").Count == 0,
+            "Only exact Method() FAILED tokens can retrieve already indexed " +
+            "declarations, without guessing parameterized calls or methods.");
+
+        const string log = "2026-10-30 16:26:53 ERROR Purge() FAILED | " +
+            "operation_id=5b8a87e4e4194e2084bb884b22d0a652";
+        LogParseResult parsedLog = LogParser.Parse(log, sourceFile: "CardPrinter.log");
+        SourceInvestigationCase matched = SourceInvestigationAnalyzer.Search(
+            parsedLog, index, "Purge() FAILED").Cases.Single();
+        Ensure(matched.SourceCheckoutIndexed == true &&
+               matched.Candidates.Count == 2 && matched.Ambiguous &&
+               matched.Candidates.All(x =>
+                   x.Kind == SourceEvidenceKind.OperationMethodName),
+            "Selected source method names may surface as ambiguous, static " +
+            "hints even when no logger.Error(...) literal matches.");
+
+        SourceInvestigationCase noSource = SourceInvestigationAnalyzer.Search(
+            parsedLog, null, "Purge() FAILED").Cases.Single();
+        InvestigationPrompt without = InvestigationPromptBuilder.Build(
+            noSource, "What source was inspected?");
+        Ensure(noSource.SourceCheckoutIndexed == false &&
+               without.Evidence.Count == 1 &&
+               without.Audit.Contains("Use Choose Source (.sln)", StringComparison.Ordinal),
+            "Without a selected solution the UI must say no C# was indexed.");
+
+        InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+            matched, "Did CardPrinter.Purge execute?");
+        Ensure(packet.Evidence.Count == 3 &&
+               packet.Evidence.Skip(1).All(x =>
+                   x.Kind.Contains("Method name only", StringComparison.Ordinal)) &&
+               packet.UserMessage.Contains("Method conditions (not proven executed)",
+                   StringComparison.Ordinal),
+            "Method-name matches are never disguised as an executed C# branch.");
+
+        using JsonDocument guessed = JsonDocument.Parse(
+            """
+            {"summary":"Purge() failed.",
+             "hypotheses":[{"claim":"A method with this name caused the failure.",
+                            "evidence_ids":["C1"]}],
+             "next_checks":["Examine the possible Purge implementations."],
+             "unknowns":["The executed method is unknown."]}
+            """);
+        LocalInvestigationExplanation guarded =
+            LocalOllamaInvestigationClient.ParseExplanation(
+                guessed.RootElement, packet.Evidence);
+        Ensure(guarded.Hypotheses.Count == 0 &&
+               guarded.Unknowns.Any(x => x.Contains("static hints",
+                   StringComparison.Ordinal)) &&
+               guarded.NextChecks.Single().Contains("Purge",
+                   StringComparison.Ordinal),
+            "A name-only C# candidate cannot establish method execution or " +
+            "satisfy the causal support gate.");
+
+        LogEvent original = parsedLog.Events.Single();
+        var finding = new AnomalyFinding(
+            AnomalyKind.RareErrorPattern, original.Timestamp,
+            "Purge failure", "Synthetic source search",
+            original.Message, original.LineNumber, 1, 0, 1)
+        {
+            SourceFile = original.SourceFile
+        };
+        SourceInvestigationReport report = SourceInvestigationAnalyzer.Analyze(
+            AnomalyDetector.Analyze(parsedLog) with
+            {
+                Findings = [finding],
+                TopMessagePatterns = []
+            },
+            OperationTimelineAnalyzer.Analyze(parsedLog), index);
+        Ensure(report.Cases.Single(x => x.Category == "STACK / FINDING")
+                   .Candidates.Count == 2,
+            "Default anomaly investigation must also discover explicit " +
+            "Purge() FAILED method-name hints.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
 }
 
 sealed class InvestigationHttpHandler(

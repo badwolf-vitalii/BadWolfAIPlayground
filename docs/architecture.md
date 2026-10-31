@@ -446,6 +446,45 @@ isolation, correct audit labels, non-causal citation enforcement, and
 refreshing the prompt from a reduced included-only event set. CI does
 not exercise proprietary production logs.
 
+### Guarding model causal assertions and named failure-method hints (v0.5.0)
+
+A real two-model comparison of a `Purge() FAILED` operation with
+`NoCDM` configuration errors revealed a gap: the existing
+`LocalOllamaInvestigationClient.ParseExplanation` validated that
+`L4`/`L6` existed but could not verify a claimed relationship between
+`GetValue()` and `Purge()`. The new **conservative, bounded
+wording filter** withholds unqualified causal statements (e.g.
+`failed due to`, `caused by`, Italian `dovuto a`, Ukrainian
+`спричинено`) from candidate hypotheses, including otherwise
+validly cited ones. Definitive causal statements in model summaries
+are replaced with the location-only LOG fallback. The UI still
+receives tentative leads and next checks when supported by cited
+related LOGs. Withheld-claim limitations explicitly say an evidence
+reference cannot establish a runtime cause. This is NOT a semantic
+implication checker and does not eliminate every possible hallucination.
+It is intentionally overcautious when wording is ambiguous.
+
+`SourceInvestigationIndex.FindNamedFailureMethods` also resolves only
+explicit `Method() FAILED`/`ERROR`/`FAILURE` tokens against *exact*
+already-indexed Roslyn method declarations. No free-text method guessing,
+compile/load, disk scan outside the selected checkout or inferred call
+graph is added. The source-aware search, LOG PATTERN and STACK/FINDING
+paths can expose these results as `OperationMethodName` candidates.
+Different declarations are preserved as ambiguous, and the C# prompt
+marks their conditions as **not proven executed**. Only a logged
+caller/stack file/line or logging template is stronger location evidence;
+a name-only hint does not satisfy the existing parser's causal-support
+criterion.
+
+`SourceInvestigationCase.SourceCheckoutIndexed` explicitly records
+whether a local source index was available (nullable for externally
+constructed cases). `InvestigationPromptBuilder` uses it to distinguish
+**solution not loaded** from **source checkout indexed but no match**.
+Regression coverage includes the observed direct `GetValue()` causal
+assertion and a tentative `NoCDM` lead, source-only name-hint ambiguity,
+no-index UI guidance, default finding/search integration, and rejection
+of unsupported method-name-only causal references.
+
 ### Local Ollama structured-response interoperability (v0.5.0 follow-up)
 
 `LocalOllamaInvestigationClient.ExplainAsync` now sends a JSON Schema
