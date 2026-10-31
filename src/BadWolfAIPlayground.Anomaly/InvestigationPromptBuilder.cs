@@ -76,9 +76,10 @@ public static class InvestigationPromptBuilder
         {
             source.LogFile + ":" + source.LogLine
         };
+        int acceptedRelatedLogs = 0;
         foreach (SourceInvestigationLogEvent entry in source.RelatedEvents)
         {
-            if (evidence.Count(item => item.Kind == "Related LOG event") >= MaxRelatedLogs)
+            if (acceptedRelatedLogs >= MaxRelatedLogs)
                 break;
             if (!knownLines.Add(entry.SourceFile + ":" + entry.SourceLine))
                 continue;
@@ -87,6 +88,7 @@ public static class InvestigationPromptBuilder
                 "Related LOG event (" + entry.Severity + ")",
                 SafeLocation(entry.SourceFile), Math.Max(0, entry.SourceLine),
                 Limit(entry.Message, MaxExcerptCharacters)));
+            acceptedRelatedLogs++;
         }
 
         int nextCodeId = 1;
