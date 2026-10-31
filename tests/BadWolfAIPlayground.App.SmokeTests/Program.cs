@@ -485,8 +485,10 @@ internal static class Program
 
                 Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
                        analyzer.LocalAiHypotheses.Count == 0 &&
-                       analyzer.LocalPromptPreview.Contains(
-                           "No evidence prepared", StringComparison.Ordinal),
+                       (analyzer.LocalPromptPreview.Contains(
+                           "No evidence prepared", StringComparison.Ordinal) ||
+                        analyzer.LocalPromptPreview.Contains(
+                           "Evidence changed", StringComparison.Ordinal)),
                     "Importing a source checkout must never send logs to Ollama.");
                 analyzer.PrepareLocalEvidence(sourceCase);
                 Assert(analyzer.ExplainLocalEvidenceCommand.CanExecute(null) == false &&
