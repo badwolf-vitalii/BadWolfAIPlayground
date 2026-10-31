@@ -328,7 +328,55 @@ mentions. Test coverage includes the user's exact fox-name
 introductory sentence and the later chunk-2 citation.
 
 
-## Anomaly Detection Lab (v0.3.0 development)
+## Anomaly Detection Lab (v0.3.0)
+
+### Opt-in local Ollama explanation of source-aware evidence (v0.4.0)
+
+InvestigationPromptBuilder.Build uses the already selected
+SourceInvestigationCase to create an in-memory evidence packet:
+primary LOG line L1, at most six related LOG entries L2-L7 and
+three indexed C# candidates C1-C3. All preserve original
+file/physical-line references and bounded excerpts, with a
+7,200-character maximum user message. It never loads entire
+files or includes disabled/unimported sources. Untrusted log
+strings and C# comments are explicitly identified as data,
+not instructions. The exact system and user message text is
+rendered in a read-only WPF preview before the request.
+
+LocalOllamaInvestigationClient uses the same loopback Ollama
+HTTP /api/chat protocol as Smart Search Lab, with non-streamed
+JSON responses, num_ctx=8192 and a limited output budget.
+The default HttpClient uses only 127.0.0.1:11434, with proxies
+and redirects disabled; non-loopback injected clients are
+rejected. Responses exceeding 64 KiB, malformed JSON and
+unknown or absent evidence citations are refused. Every
+hypothesis must cite a genuine packet ID, but even a valid
+ID cannot establish the truth of a suggested root cause.
+A no-hypothesis reply can legitimately explain missing evidence.
+
+The new LocalInvestigationViewModel partial class adds an
+explicit per-case Prepare button, installed model selection
+via the existing OllamaRuntimeClient, question editing,
+prompt preview, Explain button, and separate model
+hypotheses, next checks and unknowns. Importing logs,
+selecting source, preparing evidence or browsing models
+**never** runs a chat inference call. Changing evidence
+(Include/Exclude, import, source context, reanalysis)
+invalidates the previous packet and model output.
+Question editing also invalidates the preview so the
+transmitted text always matches what the user reviewed.
+The existing Cancel command interrupts the local request.
+
+Synthetic engine smoke tests use a fake loopback HTTP handler,
+check exact outgoing JSON, prompt limits, real and invented
+citations, honest uncertainty, unsafe endpoints and
+cancellation. Windows WPF smoke tests verify actual UI
+controls and that preview/prepare remain local without
+sending a request. Real-model behavior still requires
+manual verification on the user's own machine.
+
+
+
 
 `BadWolfAIPlayground.Anomaly` is a dependency-free .NET 8 module with
 records, a conservative timestamp/severity log parser, a robust
@@ -429,9 +477,9 @@ log location uses the independent Logs-folder allowlist. Both are
 passed as structured Notepad++ arguments, never concatenated into
 shell commands.
 
-This is deterministic groundwork for a *later* optional local LLM
-explanation feature. No user logs or private C# files are bundled,
-committed, transmitted to a server or shared with Ollama.
+This deterministic index feeds the **optional user-triggered**
+local Ollama explanation (above); logs and C# are never published,
+committed, or sent automatically.
 Synthetic engine and real Windows WPF smoke tests cover exact
 and formatted logging sites, method declarations, ambiguous
 literals, unmatched evidence, stack references, source navigation

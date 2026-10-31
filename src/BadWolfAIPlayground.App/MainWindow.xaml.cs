@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Reflection;
 using BadWolfAIPlayground.App.Services;
 using BadWolfAIPlayground.App.Search;
 using BadWolfAIPlayground.App.Anomaly;
@@ -12,6 +13,14 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Use assembly metadata instead of a hard-coded sidebar release label.
+        var assembly = typeof(MainWindow).Assembly;
+        string? informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+        string version = informationalVersion?.Split('+')[0] ??
+            assembly.GetName().Version?.ToString(3) ?? "unknown";
+        AppVersionText.Text = $"v{version}  ·  .NET 8";
         DataContext = new MainViewModel(new ModelFileService());
         Closed += (_, _) =>
         {

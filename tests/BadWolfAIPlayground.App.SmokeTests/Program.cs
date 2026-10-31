@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -36,6 +37,17 @@ internal static class Program
             window.Show();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
             window.UpdateLayout();
+
+            var appAssembly = typeof(MainWindow).Assembly;
+            string? informationalVersion = appAssembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            string expectedVersion = informationalVersion?.Split('+')[0] ??
+                appAssembly.GetName().Version?.ToString(3) ?? "unknown";
+            Assert(window.FindName("AppVersionText") is TextBlock versionText &&
+                   versionText.Text == $"v{expectedVersion}  ·  .NET 8",
+                "The sidebar version must match the application assembly version.");
+            Console.WriteLine("PASS sidebar app version matches assembly metadata");
 
             if (window.DataContext is not MainViewModel viewModel)
             {
@@ -474,6 +486,75 @@ internal static class Program
                     row.Candidates.Any(candidate =>
                         candidate.Source.RelativePath == "DemoWorker.cs")),
                     "Source investigation candidates must render in real WPF expanders.");
+                Assert(anomalyView.FindName("AnomalyLocalOllamaPanel") is Expander &&
+                       anomalyView.FindName("AnomalyOllamaRefreshModels") is Button &&
+                       anomalyView.FindName("AnomalyOllamaModelSelector") is ComboBox &&
+                       anomalyView.FindName("AnomalyOllamaQuestion") is TextBox &&
+                       anomalyView.FindName("AnomalyOllamaExplainButton") is Button &&
+                       anomalyView.FindName("AnomalyOllamaPromptPreview") is TextBox,
+                    "Real WPF controls must expose opt-in Ollama model, question, " +
+                    "exact prompt preview and the explicit Explain action.");
+
+                // Keep model names readable in both the closed selector and popup.
+                // This explicitly guards against the Windows default white ComboBox
+                // surface combined with the anomaly panel's pale foreground.
+                var localModelSelector = (ComboBox)anomalyView.FindName("AnomalyOllamaModelSelector");
+                Assert(ReferenceEquals(localModelSelector.Style,
+                           application.Resources["DarkComboBox"]) &&
+                       ReferenceEquals(localModelSelector.ItemContainerStyle,
+                           application.Resources["DarkComboBoxItem"]) &&
+                       localModelSelector.Foreground is SolidColorBrush modelText &&
+                       modelText.Color.R > 190 && modelText.Color.G > 190 &&
+                       localModelSelector.Background is SolidColorBrush modelSurface &&
+                       modelSurface.Color.R < 70 && modelSurface.Color.G < 90,
+                    "Ollama model names must have light text on a dark selector and item surface.");
+                localModelSelector.ApplyTemplate();
+                Assert(localModelSelector.Template.FindName("DropDownToggle",
+                           localModelSelector) is ToggleButton &&
+                       localModelSelector.Template.FindName("ContentSite",
+                           localModelSelector) is ContentPresenter &&
+                       localModelSelector.Template.FindName("PART_Popup",
+                           localModelSelector) is Popup { Child: Border popupSurface } &&
+                       popupSurface.Background is SolidColorBrush popupBrush &&
+                       popupBrush.Color.R < 70 && popupBrush.Color.G < 90,
+                    "The selected name, dropdown arrow and popup must render with the dark template.");
+                analyzer.LocalOllamaModels.Add("qwen3:4b-instruct");
+                analyzer.SelectedLocalModel = "qwen3:4b-instruct";
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.DataBind);
+                Assert(localModelSelector.SelectedItem is string selectedModel &&
+                       selectedModel == "qwen3:4b-instruct",
+                    "An installed model name must remain selected and visible in the ComboBox.");
+                analyzer.SelectedLocalModel = "";
+                analyzer.LocalOllamaModels.Clear();
+                Console.WriteLine("PASS high-contrast local Ollama model selector and popup");
+
+                Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
+                       analyzer.LocalAiHypotheses.Count == 0 &&
+                       (analyzer.LocalPromptPreview.Contains(
+                           "No evidence prepared", StringComparison.Ordinal) ||
+                        analyzer.LocalPromptPreview.Contains(
+                           "Evidence changed", StringComparison.Ordinal)),
+                    "Importing a source checkout must never send logs to Ollama.");
+                analyzer.PrepareLocalEvidence(sourceCase);
+                Assert(analyzer.ExplainLocalEvidenceCommand.CanExecute(null) == false &&
+                       analyzer.LocalAiExpanded &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "[BEGIN EVIDENCE L1]", StringComparison.Ordinal) &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "DemoWorker.cs", StringComparison.Ordinal) &&
+                       analyzer.LocalAiHypotheses.Count == 0,
+                    "Preparing a bounded prompt is local and requires a separately " +
+                    "chosen chat model and explicit Explain click.");
+                analyzer.InvestigationQuestion = "What can this synthetic log prove?";
+                Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "Question edited", StringComparison.Ordinal),
+                    "Changing the question invalidates previously previewed prompt bytes.");
+                analyzer.PrepareLocalEvidence(sourceCase);
+                Assert(analyzer.LocalPromptPreview.Contains(
+                           "What can this synthetic log prove?", StringComparison.Ordinal),
+                    "Preparing again must incorporate the new question.");
+
             }
             finally
             {

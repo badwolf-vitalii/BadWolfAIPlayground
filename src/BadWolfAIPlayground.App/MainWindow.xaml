@@ -58,7 +58,7 @@
                         <TextBlock Text="No API keys. No cloud. Just C# and experiments."
                                    TextWrapping="Wrap" FontSize="12" Margin="0,9,0,9"
                                    Foreground="#A2B8D0" />
-                        <TextBlock Text="v0.3.0  ·  .NET 8" FontSize="10"
+                        <TextBlock x:Name="AppVersionText" FontSize="10"
                                    Foreground="#7088A6" />
                     </StackPanel>
                 </Border>

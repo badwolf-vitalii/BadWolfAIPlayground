@@ -13,7 +13,7 @@ using Microsoft.Win32;
 namespace BadWolfAIPlayground.App.Anomaly;
 
 /// <summary>Only explicitly selected local files or synthetic data are analyzed.</summary>
-public sealed class AnomalyViewModel : ObservableObject, IDisposable
+public sealed partial class AnomalyViewModel : ObservableObject, IDisposable
 {
     private const int MaxDisplayedExceptions = 40;
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
@@ -68,7 +68,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private int _events, _problems, _findings, _exceptions;
     private bool _disposed;
 
-    public AnomalyViewModel()
+    public AnomalyViewModel(
+        OllamaRuntimeClient? modelRuntime = null,
+        LocalOllamaInvestigationClient? investigationClient = null)
     {
         _demo = new RelayCommand(async () => await UseDemoAsync(), () => !Busy);
         _open = new RelayCommand(async () => await ChooseFileAsync(), () => !Busy);
@@ -113,6 +115,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openRelatedLog = new ParameterRelayCommand<AnomalyRelatedLogRow>(
             item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
+        InitializeLocalInvestigation(modelRuntime, investigationClient);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
@@ -259,6 +262,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _selectNone.NotifyCanExecuteChanged();
                 _findInvestigation.NotifyCanExecuteChanged();
                 _clearInvestigationSearch.NotifyCanExecuteChanged();
+                NotifyLocalInvestigationCommands();
                 OnPropertyChanged(nameof(CanEditFiles));
             }
         }
@@ -873,6 +877,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         {
             OperationId = item.OperationId,
             ObservedAt = item.ObservedAt,
+            SourceCase = item,
             RelatedEventCount = item.RelatedEventCount,
             RelatedLogs = item.RelatedEvents.Select(entry =>
                 new AnomalyRelatedLogRow(
@@ -885,6 +890,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     private void Apply(AnomalyReport report, OperationTimelineReport operations)
     {
+        ResetLocalInvestigation();
         _lastReport = report;
         _lastOperations = operations;
         Findings.Clear();
@@ -1150,6 +1156,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         _disposed = true;
         _active?.Cancel();
+        DisposeLocalInvestigation();
         ClearFileRows();
         _folderImport = null;
     }
@@ -1196,6 +1203,7 @@ public sealed record AnomalyInvestigationRow(
         (OperationId.Length > 0 ? "  |  operation_id=" + OperationId : "") +
         $"  |  {Candidates.Count:N0} C# candidate(s)";
     public DateTimeOffset? ObservedAt { get; init; }
+    public SourceInvestigationCase? SourceCase { get; init; }
     private static string CompactHeadline(string value, int limit)
     {
         string text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();

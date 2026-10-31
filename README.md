@@ -29,7 +29,55 @@ A fully connected neural network implemented from scratch in C#, with **no exter
 - Reusable `BadWolfAIPlayground.Search` library independent of WPF; no external NuGet packages.
 
 
-### Anomaly Detection Lab (v0.3.0 development)
+### Anomaly Detection Lab (v0.3.0)
+
+### Local Ollama investigation (v0.4.0, optional)
+
+**Anomaly Detection Lab works without Ollama.** Log import, searches,
+cross-file operation_id correlation, source-code navigation and
+statistical anomaly detection still work entirely locally without a model.
+
+**To explain one selected error or operation:**
+
+1. Start Ollama on your computer and install a local chat/instruction model,
+   for example by running: **ollama pull qwen3:4b-instruct**. The EmbeddingGemma
+   embedding model cannot generate explanations.
+2. Search or expand a case in **9 — Source-aware log investigation**, then
+   click **Prepare AI explanation from this case**.
+3. Under **Local Ollama — explain selected evidence**, choose
+   **Refresh installed models** and select an installed chat model.
+   Optionally edit the question, then prepare the evidence again.
+4. Review the **Exact messages and evidence prepared for Ollama** text.
+   **Only an explicit Explain with local Ollama click transmits that preview**
+   to the loopback HTTP API at http://127.0.0.1:11434/api/chat. There
+   is no cloud endpoint, automatic model download or API key.
+5. Inspect the separate model summary, hypotheses with original LOG/C#
+   evidence IDs, diagnostic checks and unknowns. These are **unverified
+   hypotheses, not confirmed diagnoses**.
+
+The prompt includes only one primary selected LOG entry, up to **six
+explicitly related LOG events** and **three indexed C# excerpts**,
+all clipped to bounded lengths. Its entire user message is limited
+to **7,200 characters**. It never automatically reads or sends whole
+log/source files. Skipped, excluded or unimported files cannot be
+included. The preview shows the **exact** system and user message
+bodies to be submitted. A model or question change cannot silently
+replace the chosen evidence; reanalysis, new logs or Include/Exclude
+discard the prepared prompt and any previous AI explanation.
+
+The response is requested as structured JSON. Each proposed hypothesis
+must reference one or more actual labeled evidence IDs; fabricated
+references, absent citations, malformed JSON and oversized replies
+are **rejected**. Source-ID validation guarantees provenance, not
+the semantic correctness of the model's conclusion: inspect the
+original referenced lines. The UI shows next checks and remaining
+unknowns separately and supports cancellation. No prompts or
+generated responses are persisted by the application (Ollama itself
+may keep service logs according to its configuration). Missing
+Ollama/model does not break the deterministic log analyzer.
+
+
+
 
 The third lab performs **local, explainable statistical analysis** of
 timestamped application logs without Ollama, codebase access, cloud
@@ -473,9 +521,8 @@ all source snippets exist only in this program's memory. Source
 relationships are recomputed when log file filters or the selected
 source checkout change.
 
-This stage intentionally does **not** ask Ollama to interpret evidence.
-That will be an optional later step once reliable, inspectable source
-references are available.
+The source index remains deterministic; the separate optional local
+Ollama workflow (described above) only runs on an explicit user click.
 
 
 

@@ -1,4 +1,8 @@
 using BadWolfAIPlayground.Anomaly;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 
 var checks = new (string Name, Action Execute)[]
 {
@@ -23,7 +27,9 @@ var checks = new (string Name, Action Execute)[]
     ("Multiline exception context is bounded and does not invent events", MultilineContext),
     ("Findings retain original exception evidence", FindingExceptionContext),
     ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline),
-    ("Standalone card reads do not require VTS", StandaloneCardRead)
+    ("Standalone card reads do not require VTS", StandaloneCardRead),
+    ("Bounded AI investigation prompt includes only numbered evidence", InvestigationPrompt),
+    ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient)
 };
 
 int failed = 0;
@@ -1230,3 +1236,229 @@ static void Ensure(bool expression, string message)
 {
     if (!expression) throw new InvalidOperationException(message);
 }
+
+
+static SourceInvestigationCase SampleLocalInvestigation()
+{
+    const string id = "41d14983730d4ac6b1c491fc232b77de";
+    var candidates = new[]
+    {
+        new SourceInvestigationCandidate(
+            "src/AFCS.TOM.UCUILib/Views/UCCardInfoView.xaml.cs", 1840,
+            "UCCardInfoView", "CardInfoReadAndChecks",
+            SourceEvidenceKind.LoggedCallerLocation,
+            "catch (Exception ex) { BLogic.Helper.LogException(Logger, ex); }",
+            "catch (Exception)", "LogException")
+    };
+    return new SourceInvestigationCase(
+        "LOG SEARCH", "I/O failure",
+        "Unable to read data from transport connection. | operation_id=" + id,
+        "App_2026-10-30.log", 3403, candidates,
+        "Logger location is not the root cause.")
+    {
+        OperationId = id,
+        RelatedEventCount = 2,
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(
+                new DateTimeOffset(2026, 10, 30, 16, 26, 53, TimeSpan.Zero),
+                LogSeverity.Error, "Transport I/O failure", "App_2026-10-30.log", 3403),
+            new SourceInvestigationLogEvent(
+                new DateTimeOffset(2026, 10, 30, 16, 26, 53, TimeSpan.Zero),
+                LogSeverity.Debug, "C# caller at UCCardInfoView.xaml.cs:1840",
+                "WebClient_2026-10-30.log", 9712)
+        ]
+    };
+}
+
+static void InvestigationPrompt()
+{
+    SourceInvestigationCase sample = SampleLocalInvestigation();
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        sample, "What caused this network error?");
+    Ensure(prompt.UserMessage.Contains("[BEGIN EVIDENCE L1]", StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("[BEGIN EVIDENCE L2]", StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("[BEGIN EVIDENCE C1]", StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("operation_id=41d14983730d4ac6b1c491fc232b77de",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("WebClient_2026-10-30.log:9712",
+               StringComparison.Ordinal) &&
+           prompt.Evidence.Count == 3 &&
+           prompt.Evidence.Select(e => e.Id).SequenceEqual(["L1", "L2", "C1"]) &&
+           prompt.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters &&
+           prompt.SystemMessage.Contains("UNTRUSTED DATA", StringComparison.Ordinal) &&
+           prompt.Display.Contains(prompt.UserMessage, StringComparison.Ordinal),
+        "Only selected and bounded, numbered LOG/C# evidence may enter the local prompt.");
+
+    var huge = sample with
+    {
+        Evidence = new string('X', 100_000),
+        RelatedEvents = Enumerable.Range(0, 40).Select(i =>
+            new SourceInvestigationLogEvent(
+                DateTimeOffset.UtcNow, LogSeverity.Info, new string('Y', 30_000),
+                "Noise.log", i + 1)).ToArray(),
+        Candidates = Enumerable.Range(0, 20).Select(i => sample.Candidates[0]
+            with { LineNumber = 100 + i, Excerpt = new string('Z', 50_000) }).ToArray()
+    };
+    InvestigationPrompt trimmed = InvestigationPromptBuilder.Build(
+        huge, "What happened?");
+    Ensure(trimmed.Evidence.Count <= 1 +
+               InvestigationPromptBuilder.MaxRelatedLogs +
+               InvestigationPromptBuilder.MaxCodeCandidates &&
+           trimmed.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters &&
+           !trimmed.UserMessage.Contains(new string('X', 2000), StringComparison.Ordinal) &&
+           !trimmed.UserMessage.Contains(new string('Z', 2000), StringComparison.Ordinal),
+        "Huge source files or noisy log operations cannot overflow Ollama's context.");
+
+    bool tooLong = false;
+    try
+    {
+        InvestigationPromptBuilder.Build(sample, new string('Q',
+            InvestigationPromptBuilder.MaxQuestionCharacters + 1));
+    }
+    catch (ArgumentException) { tooLong = true; }
+    Ensure(tooLong, "Unbounded developer questions must be rejected before HTTP.");
+}
+
+static void OllamaInvestigationClient()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What happened?");
+    int calls = 0;
+    var handler = new InvestigationHttpHandler(async (request, token) =>
+    {
+        calls++;
+        Ensure(request.RequestUri?.ToString() ==
+                   "http://127.0.0.1:11434/api/chat" &&
+               request.Method == HttpMethod.Post,
+            "Investigation chat must go ONLY to the local Ollama endpoint.");
+        using JsonDocument data = JsonDocument.Parse(
+            await request.Content!.ReadAsStringAsync(token));
+        JsonElement root = data.RootElement;
+        Ensure(root.GetProperty("model").GetString() == "qwen3:4b-instruct" &&
+               !root.GetProperty("stream").GetBoolean() &&
+               root.GetProperty("format").GetString() == "json" &&
+               root.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192 &&
+               root.GetProperty("messages")[0].GetProperty("role").GetString() == "system" &&
+               root.GetProperty("messages")[1].GetProperty("content").GetString() ==
+                   prompt.UserMessage,
+            "The explicit prompt preview must be exactly the transmitted user message.");
+        var inner = new
+        {
+            summary = "A transport error was logged; the cause is not proven.",
+            hypotheses = new[]
+            {
+                new { claim = "The request may have been canceled.",
+                      evidence_ids = new[] { "L1", "L2" } }
+            },
+            next_checks = new[] { "Inspect cancellation and timeout events." },
+            unknowns = new[] { "Origin of the cancellation is unknown." }
+        };
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(JsonSerializer.Serialize(
+                new { message = new { content = JsonSerializer.Serialize(inner) } }),
+                Encoding.UTF8, "application/json")
+        };
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    Ensure(calls == 0, "Creating an investigation client must not send work logs.");
+
+    LocalInvestigationExplanation answer = client.ExplainAsync(
+        prompt, "qwen3:4b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 1 && answer.Hypotheses.Count == 1 &&
+           answer.Hypotheses[0].References.Count == 2 &&
+           answer.Hypotheses[0].ReferencesText.Contains("App_2026-10-30.log:3403",
+               StringComparison.Ordinal) &&
+           answer.NextChecks.Single().Contains("cancellation", StringComparison.Ordinal) &&
+           answer.Unknowns.Count == 1 &&
+           answer.Notice.Contains("NOT verified root cause", StringComparison.Ordinal),
+        "The model's suggested check may be shown only with source references and caveats.");
+
+    // Validate and refuse invented, absent or misleading citation IDs.
+    using JsonDocument invented = JsonDocument.Parse(
+        """{"summary":"Unknown.","hypotheses":[{"claim":"Wrong site","evidence_ids":["C999"]}],"next_checks":[],"unknowns":["No proof"]}""");
+    bool rejected = false;
+    try
+    {
+        LocalOllamaInvestigationClient.ParseExplanation(invented.RootElement,
+            prompt.Evidence);
+    }
+    catch (InvalidDataException) { rejected = true; }
+    Ensure(rejected, "Fabricated citations cannot be published as model findings.");
+
+    using JsonDocument uncited = JsonDocument.Parse(
+        """{"summary":"Possible problem.","hypotheses":[{"claim":"Maybe cause","evidence_ids":[]}],"next_checks":[],"unknowns":[]}""");
+    rejected = false;
+    try
+    {
+        LocalOllamaInvestigationClient.ParseExplanation(uncited.RootElement,
+            prompt.Evidence);
+    }
+    catch (InvalidDataException) { rejected = true; }
+    Ensure(rejected, "Uncited hypotheses must never appear in the UI.");
+
+    using JsonDocument honestUnknown = JsonDocument.Parse(
+        """{"summary":"Insufficient evidence.","hypotheses":[],"next_checks":["Collect earlier logs."],"unknowns":["Original cancellation source unknown."]}""");
+    Ensure(LocalOllamaInvestigationClient.ParseExplanation(
+               honestUnknown.RootElement, prompt.Evidence).Hypotheses.Count == 0,
+        "Honest lack of evidence must be accepted without inventing a diagnosis.");
+
+    using var external = new HttpClient(new InvestigationHttpHandler((_, _) =>
+        Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))))
+    {
+        BaseAddress = new Uri("https://example.com/")
+    };
+    rejected = false;
+    try { using var unsafeClient = new LocalOllamaInvestigationClient(external); }
+    catch (ArgumentException) { rejected = true; }
+    Ensure(rejected, "A remote or cloud endpoint must be refused.");
+
+    using var redirectHandler = new InvestigationHttpHandler((_, _) =>
+        Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)
+        {
+            Headers = { Location = new Uri("https://example.org/") }
+        }));
+    using var redirectHttp = new HttpClient(redirectHandler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var redirectClient = new LocalOllamaInvestigationClient(redirectHttp);
+    rejected = false;
+    try
+    {
+        redirectClient.ExplainAsync(prompt, "qwen3:4b-instruct")
+            .GetAwaiter().GetResult();
+    }
+    catch (InvalidOperationException) { rejected = true; }
+    Ensure(rejected, "Redirect responses must not be followed into an external service.");
+
+    using var canceled = new CancellationTokenSource();
+    canceled.Cancel();
+    rejected = false;
+    try
+    {
+        client.ExplainAsync(prompt, "qwen3:4b-instruct", canceled.Token)
+            .GetAwaiter().GetResult();
+    }
+    catch (OperationCanceledException) { rejected = true; }
+    Ensure(rejected && calls == 1,
+        "Canceled requests must not issue a new HTTP call.");
+}
+
+sealed class InvestigationHttpHandler(
+    Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> reply)
+    : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return reply(request, cancellationToken);
+    }
+}
+
