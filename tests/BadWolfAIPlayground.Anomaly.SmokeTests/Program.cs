@@ -1713,7 +1713,7 @@ static void MirroredLogsAreNotCorroboration()
     InvestigationPrompt packet = InvestigationPromptBuilder.Build(
         selected, "Was this printed more than once?");
     Ensure(packet.Evidence.Count == 1 &&
-           packet.Audit.Contains("0/3 visible related LOG", StringComparison.Ordinal),
+           packet.Audit.Contains("0/3 operation-correlated LOG entries", StringComparison.Ordinal),
         "Same-timestamp, same-message mirroring must not be treated as " +
         "independent evidence of another printing attempt.");
 
