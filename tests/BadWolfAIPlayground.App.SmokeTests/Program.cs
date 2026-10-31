@@ -491,7 +491,8 @@ internal static class Program
                        anomalyView.FindName("AnomalyOllamaModelSelector") is ComboBox &&
                        anomalyView.FindName("AnomalyOllamaQuestion") is TextBox &&
                        anomalyView.FindName("AnomalyOllamaExplainButton") is Button &&
-                       anomalyView.FindName("AnomalyOllamaPromptPreview") is TextBox,
+                       anomalyView.FindName("AnomalyOllamaPromptPreview") is TextBox &&
+                       anomalyView.FindName("AnomalyEvidenceAudit") is TextBlock,
                     "Real WPF controls must expose opt-in Ollama model, question, " +
                     "exact prompt preview and the explicit Explain action.");
 
@@ -542,13 +543,21 @@ internal static class Program
                            "[BEGIN EVIDENCE L1]", StringComparison.Ordinal) &&
                        analyzer.LocalPromptPreview.Contains(
                            "DemoWorker.cs", StringComparison.Ordinal) &&
+                       analyzer.LocalEvidenceAudit.Contains(
+                           "1 primary LOG", StringComparison.Ordinal) &&
+                       analyzer.LocalEvidenceAudit.Contains(
+                           "indexed C# candidates", StringComparison.Ordinal) &&
+                       anomalyView.FindName("AnomalyEvidenceAudit") is TextBlock auditLabel &&
+                       auditLabel.Text == analyzer.LocalEvidenceAudit &&
                        analyzer.LocalAiHypotheses.Count == 0,
                     "Preparing a bounded prompt is local and requires a separately " +
                     "chosen chat model and explicit Explain click.");
                 analyzer.InvestigationQuestion = "What can this synthetic log prove?";
                 Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
                        analyzer.LocalPromptPreview.Contains(
-                           "Question edited", StringComparison.Ordinal),
+                           "Question edited", StringComparison.Ordinal) &&
+                       analyzer.LocalEvidenceAudit.Contains(
+                           "Prepare evidence again", StringComparison.Ordinal),
                     "Changing the question invalidates previously previewed prompt bytes.");
                 analyzer.PrepareLocalEvidence(sourceCase);
                 Assert(analyzer.LocalPromptPreview.Contains(

@@ -29,7 +29,18 @@ var checks = new (string Name, Action Execute)[]
     ("TOM_OP lifecycle correlation, cancellation and receipts", StructuredOperationTimeline),
     ("Standalone card reads do not require VTS", StandaloneCardRead),
     ("Bounded AI investigation prompt includes only numbered evidence", InvestigationPrompt),
-    ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient)
+    ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient),
+    ("Source-aware AI includes branch conditions, calls and ambiguity audit", CodeAwareInvestigationQuality),
+    ("Sparse evidence suppresses unsupported causal model claims", SparseEvidenceRefusesCausalClaims),
+    ("Mirrored log targets cannot manufacture independent AI evidence", MirroredLogsAreNotCorroboration),
+    ("Small chat models may exceed the display item counts without breaking analysis", ExtraLocalModelItems),
+    ("Truncated Qwen output retries with unchanged previewed LOG/C# evidence", TruncatedLocalModelRetry),
+    ("Legacy JSON mode can retry a rejected schema without changing messages", LegacyLocalModelFormatRetry),
+    ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback),
+    ("ID-less same-file LOG context is bounded, labeled and never causally linked", SameFileLogContext),
+    ("Long operations preserve pre-failure context, outcome and source hints", FocusedLongOperationSampling),
+    ("Assertive model causal claims are withheld without losing tentative leads", AssertiveModelCausalityGuard),
+    ("Exact failure-method hints require selected source and do not prove execution", ExplicitFailureMethodHints)
 };
 
 int failed = 0;
@@ -1337,8 +1348,18 @@ static void OllamaInvestigationClient()
         JsonElement root = data.RootElement;
         Ensure(root.GetProperty("model").GetString() == "qwen3:4b-instruct" &&
                !root.GetProperty("stream").GetBoolean() &&
-               root.GetProperty("format").GetString() == "json" &&
+               root.GetProperty("format").GetProperty("type").GetString() == "object" &&
+               root.GetProperty("format").GetProperty("properties")
+                   .GetProperty("hypotheses").GetProperty("maxItems").GetInt32() == 3 &&
+               root.GetProperty("format").GetProperty("properties")
+                   .GetProperty("hypotheses").GetProperty("items")
+                   .GetProperty("properties").GetProperty("evidence_ids")
+                   .GetProperty("items").GetProperty("enum").EnumerateArray()
+                   .Select(item => item.GetString())
+                   .SequenceEqual(prompt.Evidence.Select(item => item.Id)) &&
+               !root.GetProperty("think").GetBoolean() &&
                root.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192 &&
+               root.GetProperty("options").GetProperty("num_predict").GetInt32() == 1400 &&
                root.GetProperty("messages")[0].GetProperty("role").GetString() == "system" &&
                root.GetProperty("messages")[1].GetProperty("content").GetString() ==
                    prompt.UserMessage,
@@ -1448,6 +1469,847 @@ static void OllamaInvestigationClient()
     catch (OperationCanceledException) { rejected = true; }
     Ensure(rejected && calls == 1,
         "Canceled requests must not issue a new HTTP call.");
+}
+
+
+static void CodeAwareInvestigationQuality()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-CodeAware-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        File.WriteAllText(Path.Combine(root, "ReceiptWorker.cs"),
+            """
+            namespace Synthetic;
+            class ReceiptWorker
+            {
+                void RetryReceipt() { }
+                void PrintReceipt(int printedCount, int expectedCount)
+                {
+                    if (printedCount < expectedCount)
+                    {
+                        logger.Error($"Failed printing recharge card receipt: {printedCount}/{expectedCount}");
+                        RetryReceipt();
+                    }
+                }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "SecondWorker.cs"),
+            """
+            class SecondWorker
+            {
+                void Print(int printedCount, int expectedCount)
+                {
+                    if (printedCount < expectedCount)
+                        logger.Error($"Failed printing recharge card receipt: {printedCount}/{expectedCount}");
+                }
+            }
+            """);
+
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        var matches = index.FindLogSites("Failed printing recharge card receipt: 0/2");
+        Ensure(matches.Count == 2 &&
+               matches.All(item => item.Kind == SourceEvidenceKind.FormattedLoggingTemplate),
+            "Two real logging templates must stay distinct and ambiguous.");
+
+        SourceInvestigationCandidate branch = matches.Single(item =>
+            item.MethodName == "PrintReceipt");
+        Ensure(branch.Conditions.Contains("printedCount < expectedCount",
+                   StringComparison.Ordinal) &&
+               branch.DirectCalls.Contains("RetryReceipt", StringComparison.Ordinal),
+            "Roslyn must extract the static guard and nearby method invocation names.");
+
+        var source = new SourceInvestigationCase(
+            "LOG SEARCH", "Failed receipt print",
+            "Failed printing recharge card receipt: 0/2",
+            "App_2026-10-30.log", 4472, [branch], "One candidate logging site.");
+        InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+            source, "Which C# condition corresponds to this failure?");
+        Ensure(packet.Evidence.Count == 2 &&
+               packet.Evidence[1].Id == "C1" &&
+               packet.UserMessage.Contains("printedCount < expectedCount",
+                   StringComparison.Ordinal) &&
+               packet.UserMessage.Contains("RetryReceipt", StringComparison.Ordinal) &&
+               packet.UserMessage.Contains("not proven executed",
+                   StringComparison.Ordinal) &&
+               packet.Audit.Contains("1/1 indexed C#", StringComparison.Ordinal) &&
+               packet.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters,
+            "A selected source branch, static calls, provenance and uncertainty must " +
+            "fit in the exact previewed prompt.");
+
+        using JsonDocument answer = JsonDocument.Parse(
+            """
+            {"summary":"The receipt counter 0/2 was logged.",
+             "hypotheses":[{"claim":"The code contains a branch when printedCount is below expectedCount.",
+                            "evidence_ids":["L1","C1"]}],
+             "next_checks":["Inspect printedCount and expectedCount at the PrintReceipt branch before RetryReceipt."],
+             "unknowns":["Why the count was zero is not established."]}
+            """);
+        LocalInvestigationExplanation grounded =
+            LocalOllamaInvestigationClient.ParseExplanation(answer.RootElement, packet.Evidence);
+        Ensure(grounded.Hypotheses.Count == 1 &&
+               grounded.Hypotheses[0].References.Any(item => item.Id == "C1") &&
+               grounded.NextChecks.Single().Contains("printedCount",
+                   StringComparison.Ordinal),
+            "An explicit guard and log count may support a tentative branch hypothesis " +
+            "and a specific next check, without asserting a hardware root cause.");
+
+        using JsonDocument ungrounded = JsonDocument.Parse(
+            """
+            {"summary":"The printer driver broke.",
+             "hypotheses":[{"claim":"The printer driver broke.","evidence_ids":["L1"]}],
+             "next_checks":["Inspect the print counter branch."],
+             "unknowns":["Device state was not logged."]}
+            """);
+        LocalInvestigationExplanation unsupported =
+            LocalOllamaInvestigationClient.ParseExplanation(
+                ungrounded.RootElement, packet.Evidence);
+        Ensure(unsupported.Hypotheses.Count == 0 &&
+               !unsupported.Summary.Contains("driver broke", StringComparison.Ordinal) &&
+               unsupported.Unknowns.Any(item => item.Contains("only the primary",
+                   StringComparison.Ordinal)),
+            "A LOG-only citation cannot promote printer guesses even when " +
+            "a separate indexed C# guard exists in the packet.");
+
+        SourceInvestigationCase ambiguous = source with { Candidates = matches };
+        InvestigationPrompt both = InvestigationPromptBuilder.Build(ambiguous,
+            "How many independent logging sites match?");
+        Ensure(both.Evidence.Count == 3 &&
+               both.Evidence.Count(item => item.Id.StartsWith('C')) == 2 &&
+               both.Audit.Contains("AMBIGUOUS", StringComparison.Ordinal) &&
+               both.UserMessage.Contains("2/2 indexed C#", StringComparison.Ordinal),
+            "A matching template in two methods is ambiguous rather than a proven call path.");
+
+        var dominated = source with
+        {
+            Candidates =
+            [
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 11 },
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 12 },
+                branch with { Kind = SourceEvidenceKind.LoggedCallerLocation, LineNumber = 13 },
+                branch,
+                matches.Single(item => item.MethodName == "Print")
+            ]
+        };
+        InvestigationPrompt diversified = InvestigationPromptBuilder.Build(dominated,
+            "Can you inspect actual logging sites?");
+        Ensure(diversified.Evidence.Count(item => item.Id.StartsWith('C')) == 3 &&
+               diversified.Evidence.Any(item =>
+                   item.Kind.Contains("Formatted logging template", StringComparison.Ordinal)),
+            "Noisy caller locations must not evict every concrete logging template " +
+            "from the bounded model context.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+static void SparseEvidenceRefusesCausalClaims()
+{
+    var source = new SourceInvestigationCase(
+        "LOG SEARCH", "Receipt print failed",
+        "Failed printing recharge card receipt: 0/2",
+        "App_2026-10-30.log", 4472, [],
+        "No matching C# source found in the selected checkout.");
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(source,
+        "Why was the printer disconnected?");
+    Ensure(prompt.Evidence.Count == 1 &&
+           prompt.Audit.Contains("Only the primary LOG", StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("NO C# source candidate", StringComparison.Ordinal),
+        "Missing C# source and corroborating events must be disclosed before inference.");
+
+    using JsonDocument hallucinated = JsonDocument.Parse(
+        """
+        {"summary":"The printer was disconnected and the template was missing.",
+         "hypotheses":[{"claim":"Driver initialization failed.","evidence_ids":["L1"]}],
+         "next_checks":["Inspect printing count before the failure."],
+         "unknowns":["Printer state was not logged."]}
+        """);
+    LocalInvestigationExplanation guarded =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, prompt.Evidence);
+    Ensure(guarded.Hypotheses.Count == 0 &&
+           !guarded.Summary.Contains("disconnected", StringComparison.OrdinalIgnoreCase) &&
+           !guarded.Summary.Contains("template was missing", StringComparison.OrdinalIgnoreCase) &&
+           guarded.Unknowns.Any(item => item.Contains("No indexed C#",
+               StringComparison.Ordinal)) &&
+           guarded.Unknowns.Any(item => item.Contains("withheld",
+               StringComparison.Ordinal)),
+        "Single-line evidence must never promote generic printer guesses " +
+        "to observed facts or published causal hypotheses.");
+
+    InvestigationPrompt callerOnly = InvestigationPromptBuilder.Build(
+        source with { Candidates = SampleLocalInvestigation().Candidates },
+        "Did the logger cause the failure?");
+    LocalInvestigationExplanation callerGuarded =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, callerOnly.Evidence);
+    Ensure(callerGuarded.Hypotheses.Count == 0 &&
+           callerGuarded.Unknowns.Any(item => item.Contains("withheld",
+               StringComparison.Ordinal)),
+        "A source-matched catch/logger location alone is not evidence of a " +
+        "specific cause.");
+
+    var withIndependentEvent = source with
+    {
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(
+                new DateTimeOffset(2026, 10, 30, 10, 0, 0, TimeSpan.Zero),
+                LogSeverity.Debug, "Receipt counter before printing: 0/2",
+                "WebClient_2026-10-30.log", 147)
+        ],
+        RelatedEventCount = 1
+    };
+    InvestigationPrompt moreEvidence = InvestigationPromptBuilder.Build(
+        withIndependentEvent, "What does the second log prove?");
+    LocalInvestigationExplanation unsupported =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            hallucinated.RootElement, moreEvidence.Evidence);
+    Ensure(unsupported.Hypotheses.Count == 0 &&
+           unsupported.Unknowns.Any(item => item.Contains("only the primary",
+               StringComparison.Ordinal)),
+        "Even when additional LOG events are present, an L1-only citation " +
+        "does not support a causal hypothesis.");
+
+    using JsonDocument properlyCited = JsonDocument.Parse(
+        """
+        {"summary":"Two LOG entries mention the incomplete receipt count.",
+         "hypotheses":[{"claim":"The count remained below the requested amount.",
+                        "evidence_ids":["L1","L2"]}],
+         "next_checks":["Compare the receipt counter before and after printing."],
+         "unknowns":["The source code was not supplied."]}
+        """);
+    LocalInvestigationExplanation correlated =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            properlyCited.RootElement, moreEvidence.Evidence);
+    Ensure(correlated.Hypotheses.Count == 1 &&
+           correlated.Unknowns.Any(item => item.Contains("No indexed C#",
+               StringComparison.Ordinal)),
+        "Distinct LOG observations can support a tentative, specifically cited " +
+        "hypothesis while missing source code remains explicit.");
+}
+
+
+static void MirroredLogsAreNotCorroboration()
+{
+    var observedAt = new DateTimeOffset(2026, 10, 30, 16, 26, 53, TimeSpan.Zero);
+    var selected = new SourceInvestigationCase(
+        "LOG SEARCH", "Receipt error",
+        "Failed printing recharge card receipt: 0/2",
+        "App.log", 4472, [], "No matching source.")
+    {
+        ObservedAt = observedAt,
+        RelatedEventCount = 3,
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "App.log", 4472),
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "WebClient.log", 880),
+            new SourceInvestigationLogEvent(observedAt, LogSeverity.Error,
+                "Failed printing recharge card receipt: 0/2", "Old/App.log", 100)
+        ]
+    };
+    InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+        selected, "Was this printed more than once?");
+    Ensure(packet.Evidence.Count == 1 &&
+           packet.Audit.Contains("0/3 operation-correlated LOG entries", StringComparison.Ordinal),
+        "Same-timestamp, same-message mirroring must not be treated as " +
+        "independent evidence of another printing attempt.");
+
+    using JsonDocument invented = JsonDocument.Parse(
+        """
+        {"summary":"The printer failed three times.",
+         "hypotheses":[{"claim":"The driver crashed repeatedly.",
+                        "evidence_ids":["L1"]}],
+         "next_checks":["Examine the underlying print status."],
+         "unknowns":["No source code was supplied."]}
+        """);
+    LocalInvestigationExplanation explanation =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            invented.RootElement, packet.Evidence);
+    Ensure(explanation.Hypotheses.Count == 0 &&
+           !explanation.Summary.Contains("three times", StringComparison.Ordinal),
+        "Duplicated targets cannot justify repetition counts or causes.");
+
+    var distinct = selected with
+    {
+        RelatedEvents = selected.RelatedEvents.Concat(
+        [
+            new SourceInvestigationLogEvent(observedAt.AddSeconds(2),
+                LogSeverity.Debug, "Receipt counter before printing: 0/2",
+                "WebClient.log", 881)
+        ]).ToArray()
+    };
+    InvestigationPrompt added = InvestigationPromptBuilder.Build(
+        distinct, "Which distinct observations are available?");
+    Ensure(added.Evidence.Count == 2 &&
+           added.Evidence[1].Id == "L2" &&
+           added.Evidence[1].Excerpt.Contains("before printing",
+               StringComparison.Ordinal),
+        "Distinct DEBUG state evidence must survive mirror deduplication.");
+}
+
+static void ExtraLocalModelItems()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What facts are recorded?");
+    using JsonDocument tooMany = JsonDocument.Parse(JsonSerializer.Serialize(new
+    {
+        summary = "A transport failure was recorded.",
+        hypotheses = Enumerable.Range(1, 6).Select(number => new
+        {
+            claim = "Tentative pattern " + number,
+            evidence_ids = new[] { "L1", "L2" }
+        }),
+        next_checks = Enumerable.Range(1, 9)
+            .Select(number => "Review diagnostic check " + number),
+        unknowns = Enumerable.Range(1, 7)
+            .Select(number => "Unknown condition " + number)
+    }));
+
+    LocalInvestigationExplanation answer =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            tooMany.RootElement, prompt.Evidence);
+    Ensure(answer.Hypotheses.Count == 3 &&
+           answer.Hypotheses.All(item => item.References.Any(reference =>
+               reference.Id == "L2")) &&
+           answer.NextChecks.Count == 5 &&
+           answer.Unknowns.Count <= 4 &&
+           answer.Unknowns.Any(item => item.Contains("extra model hypothesis",
+               StringComparison.Ordinal)),
+        "Small-model overproduction must be capped, not rejected, without " +
+        "publishing unvalidated evidence references.");
+}
+
+static void TruncatedLocalModelRetry()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What happened?");
+    int calls = 0;
+    string[] exactMessages = [prompt.SystemMessage, prompt.UserMessage];
+    var handler = new InvestigationHttpHandler(async (request, token) =>
+    {
+        calls++;
+        using JsonDocument sent = JsonDocument.Parse(
+            await request.Content!.ReadAsStringAsync(token));
+        JsonElement payload = sent.RootElement;
+        Ensure(request.RequestUri?.ToString() ==
+                   "http://127.0.0.1:11434/api/chat" &&
+               payload.GetProperty("format").ValueKind == JsonValueKind.Object &&
+               payload.GetProperty("think").GetBoolean() == false &&
+               payload.GetProperty("messages").EnumerateArray()
+                   .Select(item => item.GetProperty("content").GetString())
+                   .SequenceEqual(exactMessages) &&
+               payload.GetProperty("options").GetProperty("num_predict").GetInt32() ==
+                   (calls == 1 ? 1400 : 2200),
+            "Each local retry must use exactly the previewed messages and " +
+            "increase only the output-token budget.");
+        if (calls == 1)
+            return LocalChatReply("{\"summary\": \"incomplete", "length");
+        string valid = """
+            {"summary":"A transport error was logged.",
+             "hypotheses":[{"claim":"A different state may explain it.",
+                            "evidence_ids":["L2"]}],
+             "next_checks":["Check the operation state."],
+             "unknowns":["Failure cause remains unknown."]}
+            """;
+        string fence = new((char)96, 3);
+        return LocalChatReply(fence + "json\n" + valid + "\n" + fence);
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation result = client.ExplainAsync(
+        prompt, "qwen3:4b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && result.RequestsMade == 2 &&
+           !result.IsEvidenceOnly && result.Hypotheses.Count == 1 &&
+           result.Hypotheses[0].References.Single().Id == "L2",
+        "Truncated Qwen output must be retried at most once and the " +
+        "second fenced JSON reply must still pass citation checks.");
+}
+
+static void LegacyLocalModelFormatRetry()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "Explain the logged failure.");
+    int calls = 0;
+    var handler = new InvestigationHttpHandler(async (request, token) =>
+    {
+        calls++;
+        using JsonDocument sent = JsonDocument.Parse(
+            await request.Content!.ReadAsStringAsync(token));
+        JsonElement payload = sent.RootElement;
+        Ensure(payload.GetProperty("messages")[1]
+                   .GetProperty("content").GetString() == prompt.UserMessage &&
+               payload.GetProperty("messages")[0]
+                   .GetProperty("content").GetString() == prompt.SystemMessage,
+            "A format compatibility retry must preserve both exact messages.");
+        if (calls == 1)
+        {
+            Ensure(payload.GetProperty("format").ValueKind == JsonValueKind.Object,
+                "The first request must use a bounded response JSON Schema.");
+            return new HttpResponseMessage(HttpStatusCode.BadRequest);
+        }
+        Ensure(payload.GetProperty("format").GetString() == "json",
+            "Only the single compatibility retry may use legacy JSON mode.");
+        return LocalChatReply("""
+            {"summary":"The network request failed.",
+             "hypotheses":[],
+             "next_checks":["Check earlier request events."],
+             "unknowns":["Causal origin is unknown."]}
+            """);
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation answer = client.ExplainAsync(
+        prompt, "qwen2.5:1.5b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && answer.RequestsMade == 2 &&
+           !answer.IsEvidenceOnly && answer.Hypotheses.Count == 0,
+        "Older JSON-only Ollama should work without a third request.");
+}
+
+static void InvalidLocalModelFallback()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What caused this failure?");
+    int calls = 0;
+    var handler = new InvestigationHttpHandler((_, _) =>
+    {
+        calls++;
+        return Task.FromResult(LocalChatReply(
+            "{\"summary\":\"Printer hardware broken\", \"hypotheses\": ["));
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation answer = client.ExplainAsync(
+        prompt, "qwen3:4b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && answer.RequestsMade == 2 &&
+           answer.IsEvidenceOnly && answer.Hypotheses.Count == 0 &&
+           answer.Notice.Contains("no AI diagnosis", StringComparison.Ordinal) &&
+           !answer.Summary.Contains("hardware broken",
+               StringComparison.OrdinalIgnoreCase) &&
+           answer.Unknowns.Any(value => value.Contains("two bounded attempts",
+               StringComparison.Ordinal)),
+        "Two invalid JSON responses must never publish model assertions " +
+        "or issue additional requests.");
+}
+
+static HttpResponseMessage LocalChatReply(string content, string reason = "stop")
+{
+    return new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(new
+        {
+            message = new { role = "assistant", content },
+            done = true,
+            done_reason = reason
+        }), Encoding.UTF8, "application/json")
+    };
+}
+
+
+static void SameFileLogContext()
+{
+    const string name = "CardPrinter_2026-10-30.log";
+    const string otherName = "WebClient_2026-10-30.log";
+    const string messages = """
+        2026-10-30 16:20:00 INFO Stale device state from six minutes earlier
+        2026-10-30 16:26:50 INFO Purge operation requested
+        2026-10-30 16:26:51 DEBUG Receipt queue size 3
+        2026-10-30 16:26:51 DEBUG Unrelated operation | operation_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        2026-10-30 16:26:52 ERROR Purge failed without a detailed reason
+        2026-10-30 16:26:53 DEBUG Printer state after request: offline flag not logged
+        2026-10-30 16:26:54 INFO Purge request finished
+        2026-10-30 16:30:00 INFO Future event outside two-minute context window
+        """;
+    LogParseResult parsed = LogParser.Parse(messages, sourceFile: name);
+    LogEvent primary = parsed.Events.Single(e => e.Message.Contains(
+        "Purge failed", StringComparison.Ordinal));
+    LogEvent unrelatedFile = new(primary.Timestamp, LogSeverity.Debug,
+        "Another component recorded unrelated IO data", 3)
+    {
+        SourceFile = otherName
+    };
+    LogParseResult mixed = parsed with
+    {
+        Events = parsed.Events.Append(unrelatedFile).ToArray()
+    };
+    SourceInvestigationCase selected = SourceInvestigationAnalyzer.Search(
+        mixed, null, "Purge failed").Cases.Single();
+
+    Ensure(selected.OperationId.Length == 0 &&
+           selected.RelatedEvents.Count == 0 &&
+           selected.NearbyEvents.Count == 4 &&
+           selected.NearbyEvents.All(e => e.SourceFile == name) &&
+           selected.NearbyEvents.Select(e => e.SourceLine).SequenceEqual([2, 3, 6, 7]) &&
+           !selected.NearbyEvents.Any(e => e.Message.Contains("Unrelated operation",
+               StringComparison.Ordinal)) &&
+           !selected.NearbyEvents.Any(e => e.Message.Contains("Stale device",
+               StringComparison.Ordinal)),
+        "Nearby context must be same-file, tightly bounded by line/time, " +
+        "and must never borrow different explicit operation IDs or other files.");
+
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        selected, "What do the nearby records show?");
+    Ensure(prompt.Evidence.Count == 5 &&
+           prompt.Evidence.Skip(1).All(e =>
+               e.Kind.StartsWith("Nearby same-file LOG context",
+                   StringComparison.Ordinal)) &&
+           prompt.Audit.Contains("4/4 nearby same-file LOG context entries",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("Purge operation requested",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("Receipt queue size 3",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("NOT operation-correlated",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters,
+        "The exact Ollama preview must contain the useful nearby state " +
+        "without mislabeling same-file neighbors as operation-correlated.");
+
+    using JsonDocument unsupported = JsonDocument.Parse(
+        """
+        {"summary":"The printer was disconnected.",
+         "hypotheses":[{"claim":"A disconnected printer caused the purge error.",
+                        "evidence_ids":["L2"]}],
+         "next_checks":["Inspect printer status before the purge."],
+         "unknowns":["The failure cause remains unverified."]}
+        """);
+    LocalInvestigationExplanation result =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            unsupported.RootElement, prompt.Evidence);
+    Ensure(result.Hypotheses.Count == 0 &&
+           !result.Summary.Contains("disconnected",
+               StringComparison.OrdinalIgnoreCase) &&
+           result.Unknowns.Any(text => text.Contains("context only",
+               StringComparison.OrdinalIgnoreCase)),
+        "Citing a neighboring LOG line must not turn time proximity into " +
+        "a confirmed runtime cause.");
+
+    LogParseResult onlyPrimary = mixed with { Events = [primary] };
+    SourceInvestigationCase filtered = SourceInvestigationAnalyzer.Search(
+        onlyPrimary, null, "Purge failed").Cases.Single();
+    Ensure(filtered.NearbyEvents.Count == 0 &&
+           InvestigationPromptBuilder.Build(filtered, "What happened?")
+               .Evidence.Count == 1,
+        "Excluded/unretained log files and events must never reappear " +
+        "as model evidence.");
+
+    var manyEvents = Enumerable.Range(0, 30).Select(i =>
+        new LogEvent(primary.Timestamp.AddMilliseconds(i - 15),
+            LogSeverity.Debug, "Synthetic neighbor #" + i, 50 + i)
+        {
+            SourceFile = name
+        }).Append(primary with { LineNumber = 90 })
+          .OrderBy(e => e.LineNumber).ToArray();
+    LogParseResult noisy = new(manyEvents, manyEvents.Length, 0, 0);
+    SourceInvestigationCase limited = SourceInvestigationAnalyzer.Search(
+        noisy, null, "Purge failed").Cases.Single();
+    Ensure(limited.NearbyEvents.Count <=
+               SourceInvestigationAnalyzer.MaxNearbyContextEvents &&
+           InvestigationPromptBuilder.Build(limited, "Investigate.")
+               .Evidence.Count <= 1 + InvestigationPromptBuilder.MaxRelatedLogs,
+        "Large files cannot expand the bounded same-file context beyond six LOG records.");
+}
+
+static void FocusedLongOperationSampling()
+{
+    const string id = "5b8a87e4e4194e2084bb884b22d0a652";
+    const string unrelatedId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const string mainFile = "App_2026-10-30.log";
+    const string printerFile = "CardPrinter_2026-10-30.log";
+    var start = new DateTimeOffset(2026, 10, 30, 16, 25, 0, TimeSpan.Zero);
+    var entries = new List<LogEvent>();
+    for (int i = 0; i < 72; i++)
+    {
+        string message = i switch
+        {
+            0 => "CheckCardIssuing started",
+            66 => "UCCardIssuing.xaml.cs: line 1200",
+            67 => "CheckCardIssuing parsed the card structure",
+            68 => "Purge() requested",
+            69 => "Purge() FAILED",
+            70 => "Receipt printing was skipped after the error",
+            71 => "CheckCardIssuing ended with unsuccessful status",
+            _ => "Read-card diagnostic step " + i
+        };
+        LogSeverity severity = i == 69 ? LogSeverity.Error :
+            i == 71 ? LogSeverity.Warning : LogSeverity.Debug;
+        entries.Add(new LogEvent(start.AddMilliseconds(i * 100),
+            severity, message + " | operation_id=" + id, 1500 + i)
+        {
+            SourceFile = i % 2 == 0 ? printerFile : mainFile
+        });
+    }
+    entries.Add(new LogEvent(start.AddMilliseconds(69 * 100),
+        LogSeverity.Error, "An unrelated operation failed | operation_id=" +
+            unrelatedId, 10000) { SourceFile = printerFile });
+    LogParseResult all = new(
+        entries.OrderBy(entry => entry.Timestamp).ToArray(),
+        entries.Count, 0, 0);
+
+    SourceInvestigationSearchResult search =
+        SourceInvestigationAnalyzer.Search(all, null, "Purge() FAILED");
+    SourceInvestigationCase selected = search.Cases.Single();
+    Ensure(selected.RelatedEventCount == 72 &&
+           selected.OperationId == id &&
+           selected.RelatedEvents.Count <=
+               SourceInvestigationAnalyzer.MaxRelatedEventsDisplayed &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("Purge() requested", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("CheckCardIssuing started", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("unsuccessful status", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.All(item =>
+               !item.Message.Contains(unrelatedId, StringComparison.Ordinal)),
+        "A 72-record operation must retain its real initial and terminal " +
+        "state plus the failure neighborhood without cross-operation joining.");
+
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(selected,
+        "Which checked stages preceded Purge() FAILED?");
+    Ensure(prompt.Evidence.Count == 1 +
+               InvestigationPromptBuilder.MaxRelatedLogs &&
+           prompt.Evidence[0].Excerpt.Contains("Purge() FAILED",
+               StringComparison.Ordinal) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("Purge() requested", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("parsed the card structure", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("unsuccessful status", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("CheckCardIssuing started", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains(".cs: line 1200", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).All(item =>
+               item.Kind.StartsWith("Related LOG entry", StringComparison.Ordinal) &&
+               item.Kind.Contains("timestamp", StringComparison.Ordinal)) &&
+           prompt.Audit.Contains("72 correlated entries in total",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters &&
+           prompt.SystemMessage.Contains("bounded six-entry sample",
+               StringComparison.Ordinal),
+        "The six selected LOG excerpts must be relevant to the failure " +
+        "rather than the six earliest DEBUG events; the model must see " +
+        "timestamps and understand that omitted events can still exist.");
+
+    LogParseResult includedOnly = all with
+    {
+        Events = all.Events.Where(entry => entry.SourceFile == mainFile).ToArray()
+    };
+    SourceInvestigationCase filtered =
+        SourceInvestigationAnalyzer.Search(includedOnly, null,
+            "Purge() FAILED").Cases.Single();
+    InvestigationPrompt afterFilter = InvestigationPromptBuilder.Build(filtered,
+        "Which events can still be inspected?");
+    Ensure(filtered.RelatedEventCount == 36 &&
+           afterFilter.Evidence.All(item => item.SourceFile == mainFile) &&
+           !afterFilter.UserMessage.Contains("Purge() requested",
+               StringComparison.Ordinal),
+        "Include/Exclude recomputation must remove all disabled-component " +
+        "event references, even from a long correlated operation.");
+}
+
+
+static void AssertiveModelCausalityGuard()
+{
+    var start = new DateTimeOffset(2026, 10, 30, 16, 26, 50, TimeSpan.Zero);
+    var source = new SourceInvestigationCase(
+        "STACK / FINDING", "Purge() FAILED",
+        "Purge() FAILED | operation_id=5b8a87e4e4194e2084bb884b22d0a652",
+        "CardPrinter_2026-10-30.log", 14880, [],
+        "No matching C# checkout source.")
+    {
+        ObservedAt = start.AddSeconds(3),
+        RelatedEventCount = 2,
+        SourceCheckoutIndexed = false,
+        RelatedEvents =
+        [
+            new SourceInvestigationLogEvent(start, LogSeverity.Error,
+                "GetValue(CLReaderCustomSection, NoCDM) failed",
+                "CfgMan_2026-10-30.log", 271),
+            new SourceInvestigationLogEvent(start.AddSeconds(1), LogSeverity.Error,
+                "GetValue(CLReaderCustomSection, NoCDM) failed again",
+                "CfgMan_2026-10-30.log", 272)
+        ]
+    };
+    InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+        source, "What is established about the purge failure?");
+    Ensure(packet.Evidence.Count == 3 &&
+           packet.Audit.Contains("No C# solution loaded", StringComparison.Ordinal) &&
+           packet.UserMessage.Contains("C# solution was loaded",
+               StringComparison.Ordinal),
+        "Prompt must explicitly distinguish a missing source checkout from a failed index match.");
+
+    using JsonDocument answer = JsonDocument.Parse(
+        """
+        {"summary":"The purge operation failed due to the GetValue() call.",
+         "hypotheses":[
+            {"claim":"The operation failed due to a GetValue() call.",
+             "evidence_ids":["L2","L3"]},
+            {"claim":"The repeated NoCDM configuration errors may have contributed.",
+             "evidence_ids":["L2","L3"]}],
+         "next_checks":["Inspect the config entry and the Purge() prerequisites."],
+         "unknowns":["Whether either configuration error affected the purge is unknown."]}
+        """);
+    LocalInvestigationExplanation parsed =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            answer.RootElement, packet.Evidence);
+    Ensure(parsed.Hypotheses.Count == 1 &&
+           parsed.Hypotheses[0].Claim.Contains("may have contributed",
+               StringComparison.Ordinal) &&
+           !parsed.Summary.Contains("due to", StringComparison.OrdinalIgnoreCase) &&
+           parsed.Unknowns.Any(x => x.Contains("definitive causal",
+               StringComparison.Ordinal)) &&
+           parsed.Unknowns.Any(x => x.Contains("summary", StringComparison.Ordinal)) &&
+           parsed.NextChecks.Single().Contains("Purge()", StringComparison.Ordinal),
+        "An L# reference proves the log exists, not that GetValue() CAUSED " +
+        "a later failure; retain tentative observations and next checks.");
+
+    using JsonDocument plainFacts = JsonDocument.Parse(
+        """
+        {"summary":"A Purge() failure and two earlier configuration errors are logged.",
+         "hypotheses":[],
+         "next_checks":["Verify exact event sequence."],
+         "unknowns":["Runtime causal relationship not established."]}
+        """);
+    LocalInvestigationExplanation facts =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            plainFacts.RootElement, packet.Evidence);
+    Ensure(facts.Summary.Contains("two earlier configuration errors",
+               StringComparison.Ordinal) &&
+           facts.Hypotheses.Count == 0,
+        "An observation-only model summary must remain readable.");
+
+    Ensure(packet.SystemMessage.Contains("An operation_id proves only",
+        StringComparison.Ordinal),
+        "Prompt must explicitly prohibit converting shared operation IDs into cause.");
+}
+
+static void ExplicitFailureMethodHints()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-MethodHints-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        File.WriteAllText(Path.Combine(root, "CardPrinter.cs"),
+            """
+            class CardPrinter
+            {
+                void Purge()
+                {
+                    if (deviceReady)
+                        SubmitPurge();
+                }
+                void SubmitPurge() { }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "OldPrinter.cs"),
+            """
+            class OldPrinter
+            {
+                void Purge() { }
+                void GetValue() { }
+            }
+            """);
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        var hints = index.FindNamedFailureMethods("Purge() FAILED");
+        Ensure(hints.Count == 2 &&
+               hints.All(x => x.Kind == SourceEvidenceKind.OperationMethodName &&
+                        x.MethodName == "Purge") &&
+               index.FindNamedFailureMethods("Purge() succeeded").Count == 0 &&
+               index.FindNamedFailureMethods("GetValue(NoCDM) FAILED").Count == 0 &&
+               index.FindNamedFailureMethods("Unrelated failure").Count == 0,
+            "Only exact Method() FAILED tokens can retrieve already indexed " +
+            "declarations, without guessing parameterized calls or methods.");
+
+        const string log = "2026-10-30 16:26:53 ERROR Purge() FAILED | " +
+            "operation_id=5b8a87e4e4194e2084bb884b22d0a652";
+        LogParseResult parsedLog = LogParser.Parse(log, sourceFile: "CardPrinter.log");
+        SourceInvestigationCase matched = SourceInvestigationAnalyzer.Search(
+            parsedLog, index, "Purge() FAILED").Cases.Single();
+        Ensure(matched.SourceCheckoutIndexed == true &&
+               matched.Candidates.Count == 2 && matched.Ambiguous &&
+               matched.Candidates.All(x =>
+                   x.Kind == SourceEvidenceKind.OperationMethodName),
+            "Selected source method names may surface as ambiguous, static " +
+            "hints even when no logger.Error(...) literal matches.");
+
+        SourceInvestigationCase noSource = SourceInvestigationAnalyzer.Search(
+            parsedLog, null, "Purge() FAILED").Cases.Single();
+        InvestigationPrompt without = InvestigationPromptBuilder.Build(
+            noSource, "What source was inspected?");
+        Ensure(noSource.SourceCheckoutIndexed == false &&
+               without.Evidence.Count == 1 &&
+               without.Audit.Contains("Use Choose Source (.sln)", StringComparison.Ordinal),
+            "Without a selected solution the UI must say no C# was indexed.");
+
+        InvestigationPrompt packet = InvestigationPromptBuilder.Build(
+            matched, "Did CardPrinter.Purge execute?");
+        Ensure(packet.Evidence.Count == 3 &&
+               packet.Evidence.Skip(1).All(x =>
+                   x.Kind.Contains("Method name only", StringComparison.Ordinal)) &&
+               packet.UserMessage.Contains("Method conditions (not proven executed)",
+                   StringComparison.Ordinal),
+            "Method-name matches are never disguised as an executed C# branch.");
+
+        using JsonDocument guessed = JsonDocument.Parse(
+            """
+            {"summary":"Purge() failed.",
+             "hypotheses":[{"claim":"A method with this name caused the failure.",
+                            "evidence_ids":["C1"]}],
+             "next_checks":["Examine the possible Purge implementations."],
+             "unknowns":["The executed method is unknown."]}
+            """);
+        LocalInvestigationExplanation guarded =
+            LocalOllamaInvestigationClient.ParseExplanation(
+                guessed.RootElement, packet.Evidence);
+        Ensure(guarded.Hypotheses.Count == 0 &&
+               guarded.Unknowns.Any(x => x.Contains("static hints",
+                   StringComparison.Ordinal)) &&
+               guarded.NextChecks.Single().Contains("Purge",
+                   StringComparison.Ordinal),
+            "A name-only C# candidate cannot establish method execution or " +
+            "satisfy the causal support gate.");
+
+        LogEvent original = parsedLog.Events.Single();
+        var finding = new AnomalyFinding(
+            AnomalyKind.RareErrorPattern, original.Timestamp,
+            "Purge failure", "Synthetic source search",
+            original.Message, original.LineNumber, 1, 0, 1)
+        {
+            SourceFile = original.SourceFile
+        };
+        SourceInvestigationReport report = SourceInvestigationAnalyzer.Analyze(
+            AnomalyDetector.Analyze(parsedLog) with
+            {
+                Findings = [finding],
+                TopMessagePatterns = []
+            },
+            OperationTimelineAnalyzer.Analyze(parsedLog), index);
+        Ensure(report.Cases.Single(x => x.Category == "STACK / FINDING")
+                   .Candidates.Count == 2,
+            "Default anomaly investigation must also discover explicit " +
+            "Purge() FAILED method-name hints.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
 }
 
 sealed class InvestigationHttpHandler(

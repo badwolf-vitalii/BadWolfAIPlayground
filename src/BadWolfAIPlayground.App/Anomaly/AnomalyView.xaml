@@ -579,11 +579,15 @@
                               BorderBrush="#335474" BorderThickness="1"
                               Padding="11" Margin="0,3,0,12">
                         <StackPanel>
-                            <TextBlock Text="Only an explicit Explain click sends the previewed excerpts to http://127.0.0.1:11434. Local model output is a hypothesis, not an established diagnosis."
+                            <TextBlock Text="Only Explain sends previewed excerpts to local Ollama (127.0.0.1:11434). Invalid JSON may trigger one repeat with the SAME previewed evidence. Model explanations are unverified."
                                        FontSize="11" Foreground="#D9BF9C"
                                        TextWrapping="Wrap" Margin="0,0,0,9"/>
                             <TextBlock Text="{Binding PreparedEvidenceTitle}" Foreground="#A8DBF1"
-                                       TextWrapping="Wrap" FontSize="11" Margin="0,0,0,8"/>
+                                       TextWrapping="Wrap" FontSize="11" Margin="0,0,0,5"/>
+                            <TextBlock x:Name="AnomalyEvidenceAudit"
+                                       Text="{Binding LocalEvidenceAudit, Mode=OneWay}"
+                                       Foreground="#BBDCBF" FontSize="11"
+                                       TextWrapping="Wrap" Margin="0,0,0,10"/>
                             <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
                                 <Button x:Name="AnomalyOllamaRefreshModels"
                                         Content="Refresh installed models"
@@ -626,13 +630,13 @@
                                      VerticalScrollBarVisibility="Auto"
                                      MaxHeight="230" MinHeight="80"
                                      Padding="8" Margin="0,0,0,12"/>
-                            <TextBlock Text="Model explanation (unverified)"
+                            <TextBlock Text="Investigation summary (AI content unverified)"
                                        FontWeight="SemiBold" FontSize="12"
                                        Foreground="#E7D6BD" Margin="0,0,0,5"/>
                             <TextBlock Text="{Binding LocalAnswerSummary}" TextWrapping="Wrap"
                                        Foreground="#E6F2F9" FontSize="11"
                                        Margin="0,0,0,9"/>
-                            <TextBlock Text="Possible explanations (evidence IDs required)"
+                            <TextBlock Text="Tentative explanations (evidence IDs do not prove causes)"
                                        FontWeight="SemiBold" Foreground="#C9DEEE"
                                        Margin="0,0,0,4"/>
                             <ItemsControl ItemsSource="{Binding LocalAiHypotheses}">

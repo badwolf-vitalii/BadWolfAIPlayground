@@ -376,6 +376,212 @@ sending a request. Real-model behavior still requires
 manual verification on the user's own machine.
 
 
+### Failure-focused bounded sample of large operation_id groups (v0.5.0)
+
+Earlier the `CorrelatedEvents` aggregator kept the first few matching
+events; `InvestigationPromptBuilder` then transmitted the first six,
+which hid near-failure state for long operations (e.g., 72 events and a
+late `Purge() FAILED`). The aggregator now maintains **bounded**
+first/recent/late-problem/caller pools and (for explicit search results)
+a rolling window of three correlated records on either side of the
+selected original `LogEvent`. All candidates share the **exact**
+operation_id. This is evidence correlation, not an inferred runtime
+call graph. Source caller discovery also considers recent and focus-window
+caller locations, which still must validate against the indexed checkout.
+
+The UI retains at most twelve distinct events, sorted by timestamp,
+from a diversified operation sample. The prompt builder independently
+selects up to six distinct supporting LOG records, prioritizing the
+two nearest preceding records, the next record, a C# caller location,
+a late warning/error, and a beginning/outcome anchor; remaining slots
+are filled by time proximity or late events. The original selected
+failure is excluded from L2+ as a duplicate of L1. Mirror copies with
+equal timestamp+message are still deduplicated, and no other operation
+IDs or excluded LOG files can be included. Original observation
+timestamps (ISO 8601) accompany numbered evidence to avoid suggesting
+a cross-file ordering without showing actual times.
+
+Both in-memory group sampling and Ollama prompts remain bounded. The
+system instruction now explicitly warns that a six-event excerpt is
+**not an exhaustive audit** of a much larger operation. The selection
+does not establish that a C# method executed or that a later error was
+caused by an earlier event. New synthetic regression coverage uses a
+72-entry card-issuing/Purge failure with relevant pre-/post-failure
+events, a source caller, foreign operation ID, and included-only
+filtering to guard against first-six bias and incorrect correlation.
+
+### Bounded local context for ID-less log investigations (v0.5.0)
+
+`SourceInvestigationAnalyzer.Search` retains its strict operation_id-only
+**cross-component correlation**. For a selected record with no operation_id,
+a separate same-file context pass indexes only the already enabled/retained
+`LogParseResult.Events` for the chosen original source files. It gathers at
+most three prior and three subsequent parsed entries within 60 physical
+lines and +/-120 seconds. Entries with an unrelated explicit operation_id
+are excluded, and no same-timestamp entries from a different file are
+joined. It does not open any new file or inspect unimported records.
+The per-file lookup is built once per bounded search rather than rescanned
+separately for every selected case.
+
+These entries are stored on `SourceInvestigationCase.NearbyEvents`, not in
+`RelatedEvents`. `InvestigationPromptBuilder` admits up to six additional
+LOG entries shared between true operation-correlated events and nearby
+context, deduplicating timestamp+message mirrored observations. The
+read-only audit and exact Ollama prompt label each nearby record explicitly
+as **NOT operation-correlated**. The model's system instruction forbids
+treating physical/time proximity as a runtime call, shared transaction or
+cause, and forbids claiming missing logs do not exist.
+
+`LocalOllamaInvestigationClient` additionally restricts L2+ citations
+eligible to support a proposed *causal* hypothesis to actual
+`Related LOG` evidence. Same-file context entries are not qualifying
+corroboration merely by being adjacent. They can, however, inform the
+model's suggested next diagnostic checks. A deterministic unknown notes
+the limitation. Every hypothesis continues to require an actual allowed
+citation, and no semantic root cause is proven by this policy.
+
+A synthetic regression case tests same-file previous/next inclusion,
+window bounds, explicit foreign operation exclusion, different-file
+isolation, correct audit labels, non-causal citation enforcement, and
+refreshing the prompt from a reduced included-only event set. CI does
+not exercise proprietary production logs.
+
+### Guarding model causal assertions and named failure-method hints (v0.5.0)
+
+A real two-model comparison of a `Purge() FAILED` operation with
+`NoCDM` configuration errors revealed a gap: the existing
+`LocalOllamaInvestigationClient.ParseExplanation` validated that
+`L4`/`L6` existed but could not verify a claimed relationship between
+`GetValue()` and `Purge()`. The new **conservative, bounded
+wording filter** withholds unqualified causal statements (e.g.
+`failed due to`, `caused by`, Italian `dovuto a`, Ukrainian
+`спричинено`) from candidate hypotheses, including otherwise
+validly cited ones. Definitive causal statements in model summaries
+are replaced with the location-only LOG fallback. The UI still
+receives tentative leads and next checks when supported by cited
+related LOGs. Withheld-claim limitations explicitly say an evidence
+reference cannot establish a runtime cause. This is NOT a semantic
+implication checker and does not eliminate every possible hallucination.
+It is intentionally overcautious when wording is ambiguous.
+
+`SourceInvestigationIndex.FindNamedFailureMethods` also resolves only
+explicit `Method() FAILED`/`ERROR`/`FAILURE` tokens against *exact*
+already-indexed Roslyn method declarations. No free-text method guessing,
+compile/load, disk scan outside the selected checkout or inferred call
+graph is added. The source-aware search, LOG PATTERN and STACK/FINDING
+paths can expose these results as `OperationMethodName` candidates.
+Different declarations are preserved as ambiguous, and the C# prompt
+marks their conditions as **not proven executed**. Only a logged
+caller/stack file/line or logging template is stronger location evidence;
+a name-only hint does not satisfy the existing parser's causal-support
+criterion.
+
+`SourceInvestigationCase.SourceCheckoutIndexed` explicitly records
+whether a local source index was available (nullable for externally
+constructed cases). `InvestigationPromptBuilder` uses it to distinguish
+**solution not loaded** from **source checkout indexed but no match**.
+Regression coverage includes the observed direct `GetValue()` causal
+assertion and a tentative `NoCDM` lead, source-only name-hint ambiguity,
+no-index UI guidance, default finding/search integration, and rejection
+of unsupported method-name-only causal references.
+
+### Local Ollama structured-response interoperability (v0.5.0 follow-up)
+
+`LocalOllamaInvestigationClient.ExplainAsync` now sends a JSON Schema
+as `format` on the first `/api/chat` request. The schema requires
+`summary`, `hypotheses`, `next_checks` and `unknowns`, constrains
+array sizes, and enumerates the *actual selected packet IDs* as the only
+valid evidence reference values. The request sets `think=false`
+(avoiding Qwen3 reasoning-token starvation), `temperature=0`,
+`num_predict=1400` and `num_ctx=8192`. A second local attempt
+uses the exact same previewed system/user message bodies and raises
+`num_predict` to 2200. An HTTP 400 on the schema request can
+trigger a single compatibility retry with `format="json"`.
+
+The parser accepts an otherwise valid JSON answer wrapped in a single
+Markdown code fence, and bounds overlong model arrays to three visible
+hypotheses, five checks and four unknowns. It validates the citations
+of **every published hypothesis**, including the existing L2/C# guard
+support requirement. Surplus unshown model entries never become claims.
+Raw responses remain capped at 64 KiB and neither an invalid citation
+nor a malformed/partial JSON message can be published as an AI finding.
+
+One user-initiated click can therefore send **at most two** local
+loopback requests containing precisely the already previewed evidence.
+If both attempts fail to produce a valid structured answer, the
+client supplies a separately labelled **deterministic evidence-only
+fallback**, with no AI-generated hypotheses and no false diagnosis.
+The WPF status lists the request count and makes this distinction
+visible. All retries support cancellation. CI covers mock Qwen3
+truncation and fenced JSON, excessive arrays from small models,
+HTTP 400 compatibility, and persistent malformed output; **actual
+Ollama model quality requires manual Windows validation**.
+
+### Code-aware local investigation, evidence audit and conservative claims (v0.5.0)
+
+The selected `SourceInvestigationCase` remains the **only source** of model
+context: no additional disk, private source, excluded LOG or cloud access is
+introduced. `InvestigationPromptBuilder` selects one original LOG record,
+at most six additional LOG entries (operation-correlated or nearby same-file
+context), and at most three C# candidates.
+Candidate selection first diversifies across source evidence kinds (logger
+location, exact/formatted logging template, stack frame and method-name hint)
+so repetitive caller locations cannot evict all logging-template evidence.
+Only already indexed C# snippets are included, and the 7,200-character
+user-message limit is preserved.
+
+Each selected C# candidate carries its static method/symbol, a short site
+excerpt, already indexed enclosing `if`/`catch` conditions and possible
+direct invocation names. Conditions seen anywhere in a method-only match are
+explicitly labelled as **not proven reached**. Caller/stack locations are
+identified as location hints, not as the origin of an error. Only a few
+additional nearby indexed physical source lines are used; the prompt never
+loads a full method body or executes a C# call graph.
+
+The `InvestigationPrompt.Audit` string reports original/related LOG counts,
+included/indexed C# candidates, truncated evidence sets, absence of indexed
+source and ambiguities. WPF binds this audit separately from the exact
+read-only prompt preview. Editing the question or changing imported/source
+data invalidates the audit along with the preview; no automatic Ollama
+requests are made.
+
+The system instruction now distinguishes LOG observations from static
+source facts and unverified hypotheses, asks for discriminating checks on
+specific branches and variables, and asks for no hypothesis on weak evidence.
+This is complemented by a **structural parser gate** in
+`LocalOllamaInvestigationClient.ParseExplanation`: when the packet lacks
+both (a) a distinct related LOG observation and (b) an enclosing guard
+at an exact/formatted logging source site, model hypotheses are discarded.
+Its free-form summary is replaced with a deterministic location-only
+statement; limitations identify the missing corroboration. If no C#
+candidate was provided, an explicit missing-code note is always added.
+All cited IDs must still be valid, even if the final hypothesis is withheld.
+
+A second validation layer removes individual hypotheses that cite only
+`L1` or non-guard logger/stack hints despite other supporting evidence
+being available. It requires a direct citation to a distinct related LOG
+entry (`L2` etc.) or to a logging-template C# candidate containing an
+indexed enclosing condition. Source correlation additionally deduplicates
+equal timestamp+message observations across log targets to avoid counting
+NLog mirrors as independent evidence. These are conservative structural
+safeguards, not general semantic entailment checks.
+
+This gate cannot validate whether richer observations semantically prove a
+root cause. For a packet with multiple log observations or a code guard, the
+model's narrative remains unverified. No "printer disconnected" or similar
+explanation should ever be reported as an observed fact solely from an
+unqualified `Failed printing recharge card receipt: 0/2` entry.
+
+Regression coverage includes a synthetic Roslyn-indexed count guard and
+related invocation, two ambiguous C# template sites, redundant caller hints,
+a single-record receipt failure and adversarial JSON with invented printer
+causes. Windows WPF smoke asserts that the on-screen evidence audit is
+bound to the prepared packet and invalidates with question changes.
+CI continues to exercise stub local HTTP; **quality assessment against real
+installed Ollama models must be completed on the user's Windows machine**.
+
+
+
 
 
 `BadWolfAIPlayground.Anomaly` is a dependency-free .NET 8 module with

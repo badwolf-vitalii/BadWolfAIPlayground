@@ -22,6 +22,12 @@ public sealed record SourceInvestigationCase(
     public string OperationId { get; init; } = "";
     public int RelatedEventCount { get; init; }
     public IReadOnlyList<SourceInvestigationLogEvent> RelatedEvents { get; init; } = [];
+    // Same-file nearby entries are local context only, never operation_id
+    // correlation or evidence that a method/operation actually executed.
+    public IReadOnlyList<SourceInvestigationLogEvent> NearbyEvents { get; init; } = [];
+    // Null is unknown (e.g. user-built test case), false means no checkout
+    // was loaded, true means a source index was available for this case.
+    public bool? SourceCheckoutIndexed { get; init; }
     public DateTimeOffset? ObservedAt { get; init; }
 }
 
@@ -44,6 +50,9 @@ public static partial class SourceInvestigationAnalyzer
     public const int MaxRelatedEventsDisplayed = 12;
     private const int MaxSampleEventsPerId = 8;
     private const int MaxCallerEventsPerId = 6;
+    private const int MaxRecentEventsPerId = 8;
+    private const int MaxRecentProblemsPerId = 4;
+    private const int MaxFocusSideEvents = 3;
 
     private sealed class CorrelatedEvents
     {
@@ -53,28 +62,94 @@ public static partial class SourceInvestigationAnalyzer
         public List<LogEvent> Samples { get; } = [];
         public List<LogEvent> CallerLocations { get; } = [];
 
+        // Bound storage even for a very long operation. The first events
+        // alone are a poor representation of a 72-entry operation that
+        // finally fails at Purge().
+        private readonly List<LogEvent> _recent = [];
+        private readonly List<LogEvent> _recentProblems = [];
+        private readonly List<LogEvent> _recentCallerLocations = [];
+        private readonly Queue<LogEvent> _precedingFocus = new();
+        private readonly List<LogEvent> _focusWindow = [];
+        private readonly LogEvent? _focus;
+        private int _remainingAfterFocus;
+
+        public CorrelatedEvents(LogEvent? focus = null) => _focus = focus;
+
         public void Add(LogEvent entry)
         {
             Count++;
             Sources.Add(entry.SourceFile);
             if (Samples.Count < MaxSampleEventsPerId)
                 Samples.Add(entry);
-            // Keep real caller locations even if a noisy logger produced
-            // many earlier error entries for this same operation.
-            if (CallerLocations.Count < MaxCallerEventsPerId &&
-                entry.Message.Contains(".cs: line", StringComparison.OrdinalIgnoreCase))
-                CallerLocations.Add(entry);
+
+            Remember(_recent, entry, MaxRecentEventsPerId);
+            if (entry.Severity >= LogSeverity.Warning)
+                Remember(_recentProblems, entry, MaxRecentProblemsPerId);
+
+            if (entry.Message.Contains(".cs: line", StringComparison.OrdinalIgnoreCase))
+            {
+                if (CallerLocations.Count < MaxCallerEventsPerId)
+                    CallerLocations.Add(entry);
+                Remember(_recentCallerLocations, entry, MaxCallerEventsPerId);
+            }
+
+            // The representative search hit is already known before the
+            // correlation pass. Retain a bounded actual neighborhood of
+            // SAME-operation entries, not a timestamp-only cross-file join.
+            if (_focus is not null)
+            {
+                if (ReferenceEquals(entry, _focus))
+                {
+                    _focusWindow.AddRange(_precedingFocus);
+                    _focusWindow.Add(entry);
+                    _remainingAfterFocus = MaxFocusSideEvents;
+                }
+                else if (_remainingAfterFocus > 0)
+                {
+                    _focusWindow.Add(entry);
+                    _remainingAfterFocus--;
+                }
+                _precedingFocus.Enqueue(entry);
+                if (_precedingFocus.Count > MaxFocusSideEvents)
+                    _precedingFocus.Dequeue();
+            }
         }
+
+        private static void Remember(List<LogEvent> list, LogEvent entry, int max)
+        {
+            if (list.Count == max)
+                list.RemoveAt(0);
+            list.Add(entry);
+        }
+
+        public IEnumerable<LogEvent> CallerHints =>
+            _focusWindow.Where(entry =>
+                entry.Message.Contains(".cs: line", StringComparison.OrdinalIgnoreCase))
+            .Concat(_recentCallerLocations)
+            .Concat(CallerLocations)
+            .DistinctBy(entry =>
+                (entry.SourceFile.ToUpperInvariant(), entry.LineNumber))
+            .Take(MaxCallerEventsPerId);
 
         public IReadOnlyList<SourceInvestigationLogEvent> Visible()
         {
-            return Samples.Take(6).Concat(CallerLocations)
+            // Build a deliberately diversified and bounded candidate pool.
+            // Focus on the selected failure, but retain start/end, severe
+            // events and real logger-reported source locations when present.
+            return _focusWindow
+                .Concat(_recentCallerLocations.TakeLast(1))
+                .Concat(_recentProblems.TakeLast(2))
+                .Concat(Samples.Take(1))
+                .Concat(_recent.TakeLast(2))
+                .Concat(CallerLocations.Take(1))
+                .Concat(Samples)
+                .Concat(_recent)
                 .DistinctBy(item =>
                     (item.SourceFile.ToUpperInvariant(), item.LineNumber))
+                .Take(MaxRelatedEventsDisplayed)
                 .OrderBy(item => item.Timestamp)
                 .ThenBy(item => item.SourceFile, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(item => item.LineNumber)
-                .Take(MaxRelatedEventsDisplayed)
                 .Select(item => new SourceInvestigationLogEvent(
                     item.Timestamp, item.Severity,
                     item.Message.Length > 450
@@ -143,7 +218,9 @@ public static partial class SourceInvestigationAnalyzer
             string id = ReadOperationId(item.SampleMessage);
             correlated.TryGetValue(id, out CorrelatedEvents? linked);
             SourceInvestigationCandidate[] candidates = CombineCandidates(
-                index.FindLogSites(item.SampleMessage, token: cancellationToken),
+                index.FindLogSites(item.SampleMessage, token: cancellationToken)
+                    .Concat(index.FindNamedFailureMethods(item.SampleMessage,
+                        token: cancellationToken)),
                 linked, index, cancellationToken);
             cases.Add(Create("LOG PATTERN",
                 $"{item.Severity}: {item.Occurrences:N0} occurrences",
@@ -190,6 +267,8 @@ public static partial class SourceInvestigationAnalyzer
                 index.FindStackFrames(finding.Continuation,
                     token: cancellationToken)
                     .Concat(index.FindLogSites(finding.Evidence,
+                        token: cancellationToken))
+                    .Concat(index.FindNamedFailureMethods(finding.Evidence,
                         token: cancellationToken)),
                 linked, index, cancellationToken);
             cases.Add(Create("STACK / FINDING", finding.Title,
@@ -236,7 +315,7 @@ public static partial class SourceInvestigationAnalyzer
     {
         IEnumerable<SourceInvestigationCandidate> callers = linked is null
             ? []
-            : linked.CallerLocations.SelectMany(entry =>
+            : linked.CallerHints.SelectMany(entry =>
                 index.FindLoggedCallerLocations(entry.Message, token: token));
         return callers.Concat(direct)
             .OrderBy(candidate => candidate.Kind switch
@@ -285,7 +364,8 @@ public static partial class SourceInvestigationAnalyzer
         {
             OperationId = linked is null ? "" : operationId,
             RelatedEventCount = linked?.Count ?? 0,
-            RelatedEvents = linked?.Visible() ?? []
+            RelatedEvents = linked?.Visible() ?? [],
+            SourceCheckoutIndexed = true
         };
     }
 }

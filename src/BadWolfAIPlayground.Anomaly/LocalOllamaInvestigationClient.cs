@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace BadWolfAIPlayground.Anomaly;
 
@@ -16,9 +17,14 @@ public sealed record LocalInvestigationExplanation(
     string Summary, IReadOnlyList<LocalInvestigationHypothesis> Hypotheses,
     IReadOnlyList<string> NextChecks, IReadOnlyList<string> Unknowns)
 {
-    public string Notice =>
-        "Model-generated hypotheses, NOT verified root cause. " +
-        "Evidence IDs refer to original imported logs and local indexed C# excerpts.";
+    public bool IsEvidenceOnly { get; init; }
+    public int RequestsMade { get; init; } = 1;
+
+    public string Notice => IsEvidenceOnly
+        ? "Evidence-only fallback: the local model failed to return usable " +
+          "structured JSON; no AI diagnosis was published."
+        : "Model-generated hypotheses, NOT verified root cause. " +
+          "Evidence IDs refer to original imported logs and local indexed C# excerpts.";
 }
 
 /// <summary>
@@ -32,6 +38,19 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     public const int MaxResponseBytes = 64 * 1024;
     private readonly HttpClient _http;
     private readonly bool _ownsHttp;
+
+    // A cited LOG location confirms that a message exists, not that one
+    // subsystem caused another to fail. When the model gives an unqualified
+    // causal statement, prefer withholding it over laundering the statement
+    // into an apparent diagnosis. This is intentionally a limited language
+    // guard, NOT a semantic entailment or root-cause validator.
+    private static readonly Regex DefiniteCauseClaim = new(
+        @"\b(?:due\s+to|because(?:\s+of)?|caused(?:\s+by)?|triggered(?:\s+by)?|" +
+        @"result(?:ed|ing)?\s+from|stemmed\s+from|responsible\s+for)\b" +
+        @"|\b(?:causato|causata|dovuto|dovuta)\s+(?:a|da|al)\b" +
+        @"|\b(?:через|спричинен[а-яіїє]*|внаслідок)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
 
     public LocalOllamaInvestigationClient(HttpClient? http = null)
     {
@@ -61,6 +80,11 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
                 "Investigation chat is restricted to http://127.0.0.1:11434/.");
     }
 
+    /// <summary>
+    /// One explicit click makes at most two loopback requests. Both requests
+    /// contain the exact same previewed system and user messages; the second
+    /// attempt only adjusts generation limits or JSON-format compatibility.
+    /// </summary>
     public async Task<LocalInvestigationExplanation> ExplainAsync(
         InvestigationPrompt prompt, string model, CancellationToken token = default)
     {
@@ -71,53 +95,175 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
             throw new ArgumentException("Invalid local Ollama model name.", nameof(model));
         ValidateEndpoint(_http.BaseAddress);
 
-        var payload = new
-        {
-            model,
-            stream = false,
-            format = "json",
-            messages = new[]
-            {
-                new { role = "system", content = prompt.SystemMessage },
-                new { role = "user", content = prompt.UserMessage }
-            },
-            options = new
-            {
-                temperature = 0.0,
-                num_predict = 700,
-                num_ctx = 8192
-            }
-        };
+        object responseSchema = BuildResponseSchema(prompt);
+        bool legacyJsonFormat = false;
         try
         {
-            using HttpResponseMessage response = await _http.PostAsJsonAsync(
-                "api/chat", payload, token).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.NotFound)
-                throw new InvalidOperationException(
-                    $"Local model '{model}' was not found. Install it using Ollama.");
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException(
-                    $"Local Ollama investigation failed (HTTP {(int)response.StatusCode}).");
-            string jsonText = await ReadBoundedAsync(response.Content, token)
-                .ConfigureAwait(false);
-            using JsonDocument envelope = JsonDocument.Parse(jsonText);
-            if (!envelope.RootElement.TryGetProperty("message", out JsonElement message) ||
-                !message.TryGetProperty("content", out JsonElement content) ||
-                content.ValueKind != JsonValueKind.String)
-                throw new InvalidDataException("Ollama returned no chat message.");
-            using JsonDocument answer = JsonDocument.Parse(content.GetString() ?? "");
-            return ParseExplanation(answer.RootElement, prompt.Evidence);
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                var payload = new
+                {
+                    model,
+                    stream = false,
+                    // Qwen3 can otherwise spend its entire output allowance
+                    // on thinking instead of producing valid response.content.
+                    think = false,
+                    format = legacyJsonFormat ? (object)"json" : responseSchema,
+                    messages = new[]
+                    {
+                        new { role = "system", content = prompt.SystemMessage },
+                        new { role = "user", content = prompt.UserMessage }
+                    },
+                    options = new
+                    {
+                        temperature = 0.0,
+                        num_predict = attempt == 1 ? 1400 : 2200,
+                        num_ctx = 8192
+                    }
+                };
+                using HttpResponseMessage response = await _http.PostAsJsonAsync(
+                    "api/chat", payload, token).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    throw new InvalidOperationException(
+                        $"Local model '{model}' was not found. Install it using Ollama.");
+                if (response.StatusCode == HttpStatusCode.BadRequest && attempt == 1)
+                {
+                    // Older local Ollama installations may support format:"json"
+                    // but not a schema object. Try once with the same messages.
+                    legacyJsonFormat = true;
+                    continue;
+                }
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException(
+                        $"Local Ollama investigation failed (HTTP {(int)response.StatusCode}).");
+
+                try
+                {
+                    string envelopeText = await ReadBoundedAsync(response.Content, token)
+                        .ConfigureAwait(false);
+                    using JsonDocument envelope = JsonDocument.Parse(envelopeText);
+                    JsonElement root = envelope.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object ||
+                        !root.TryGetProperty("message", out JsonElement message) ||
+                        message.ValueKind != JsonValueKind.Object ||
+                        !message.TryGetProperty("content", out JsonElement content) ||
+                        content.ValueKind != JsonValueKind.String)
+                        throw new InvalidDataException("Ollama returned no chat message.");
+
+                    // Ollama reports "length" when the model runs out of
+                    // prediction tokens; never publish a partial answer.
+                    if (root.TryGetProperty("done_reason", out JsonElement reason) &&
+                        reason.ValueKind == JsonValueKind.String &&
+                        reason.GetString() == "length")
+                        throw new InvalidDataException("The local model ran out of output tokens.");
+
+                    string modelText = UnwrapJsonFence(content.GetString() ?? "");
+                    using JsonDocument answer = JsonDocument.Parse(modelText);
+                    LocalInvestigationExplanation validated =
+                        ParseExplanation(answer.RootElement, prompt.Evidence);
+                    return validated with { RequestsMade = attempt };
+                }
+                catch (JsonException)
+                {
+                    // A malformed JSON reply is untrusted and never published.
+                    // Retry at most once using the same user-reviewed messages.
+                }
+                catch (InvalidDataException)
+                {
+                    // Wrong structure, invalid citations, truncated responses
+                    // and size violations are also never shown as AI findings.
+                }
+            }
+            // Show a clearly labeled deterministic fallback rather than
+            // silently presenting an empty UI or a malformed model claim.
+            return EvidenceOnlyFallback(prompt);
         }
         catch (HttpRequestException ex)
         {
             throw new InvalidOperationException(
                 "Cannot connect to local Ollama on http://127.0.0.1:11434/.", ex);
         }
-        catch (JsonException ex)
+    }
+
+    private static object BuildResponseSchema(InvestigationPrompt prompt)
+    {
+        string[] allowedIds = prompt.Evidence.Select(item => item.Id).ToArray();
+        return new
         {
-            throw new InvalidDataException(
-                "The local model returned invalid structured JSON; no diagnosis was published.", ex);
-        }
+            type = "object",
+            properties = new
+            {
+                summary = new { type = "string" },
+                hypotheses = new
+                {
+                    type = "array",
+                    maxItems = 3,
+                    items = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            claim = new { type = "string" },
+                            evidence_ids = new
+                            {
+                                type = "array",
+                                minItems = 1,
+                                maxItems = 4,
+                                items = new { type = "string", @enum = allowedIds }
+                            }
+                        },
+                        required = new[] { "claim", "evidence_ids" }
+                    }
+                },
+                next_checks = new
+                {
+                    type = "array",
+                    maxItems = 5,
+                    items = new { type = "string" }
+                },
+                unknowns = new
+                {
+                    type = "array",
+                    maxItems = 4,
+                    items = new { type = "string" }
+                }
+            },
+            required = new[] { "summary", "hypotheses", "next_checks", "unknowns" }
+        };
+    }
+
+    private static string UnwrapJsonFence(string content)
+    {
+        string trimmed = content.Trim();
+        string fence = new((char)96, 3);
+        if (!trimmed.StartsWith(fence, StringComparison.Ordinal) ||
+            !trimmed.EndsWith(fence, StringComparison.Ordinal))
+            return trimmed;
+        int newline = trimmed.IndexOf('\n');
+        return newline < 0
+            ? trimmed : trimmed.Substring(newline + 1,
+                trimmed.Length - newline - 4).Trim();
+    }
+
+    private static LocalInvestigationExplanation EvidenceOnlyFallback(
+        InvestigationPrompt prompt)
+    {
+        InvestigationPromptEvidence? primary =
+            prompt.Evidence.FirstOrDefault(item => item.Id == "L1");
+        string summary = primary is null
+            ? "Evidence-only: no primary LOG line was available."
+            : "Evidence-only: a LOG event was recorded at " + primary.Location +
+              ". The underlying cause remains undetermined.";
+        return new LocalInvestigationExplanation(
+            summary, [],
+            ["Inspect the original LOG line and the preceding operation state."],
+            ["The local model did not provide a valid structured answer after " +
+             "two bounded attempts. No model-generated diagnosis was accepted."])
+        {
+            IsEvidenceOnly = true,
+            RequestsMade = 2
+        };
     }
 
     public static LocalInvestigationExplanation ParseExplanation(
@@ -129,18 +275,21 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
 
         string summary = ReadText(json, "summary", 1000);
         var evidenceById = evidence.ToDictionary(e => e.Id, StringComparer.Ordinal);
-        JsonElement hypotheses = RequireArray(json, "hypotheses", 3);
+        // Small local models sometimes ignore array-size instructions.
+        // Only displayed entries may contribute claims, and each is validated.
+        JsonElement hypotheses = RequireArray(json, "hypotheses", 24);
+        int extraHypotheses = Math.Max(0, hypotheses.GetArrayLength() - 3);
         var claims = new List<LocalInvestigationHypothesis>();
-        foreach (JsonElement item in hypotheses.EnumerateArray())
+        foreach (JsonElement item in hypotheses.EnumerateArray().Take(3))
         {
             if (item.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Malformed explanation hypothesis.");
             string claim = ReadText(item, "claim", 650);
-            JsonElement ids = RequireArray(item, "evidence_ids", 4);
+            JsonElement ids = RequireArray(item, "evidence_ids", 24);
             if (ids.GetArrayLength() == 0)
                 throw new InvalidDataException("Uncited hypothesis rejected.");
             var references = new List<InvestigationPromptEvidence>();
-            foreach (JsonElement value in ids.EnumerateArray())
+            foreach (JsonElement value in ids.EnumerateArray().Take(4))
             {
                 if (value.ValueKind != JsonValueKind.String ||
                     !evidenceById.TryGetValue(value.GetString() ?? "",
@@ -154,7 +303,77 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         }
 
         var checks = ReadTexts(json, "next_checks", 5, 500);
-        var unknowns = ReadTexts(json, "unknowns", 4, 500);
+        var unknowns = ReadTexts(json, "unknowns", 4, 500).ToList();
+        if (extraHypotheses > 0)
+            unknowns.Insert(0, extraHypotheses + " extra model hypothesis(es) " +
+                "were omitted to keep the response bounded.");
+        bool hasCode = evidence.Any(item => item.Id.StartsWith('C'));
+        // Cite an actual *supporting* entry, not just the primary L1 failure.
+        // A separate LOG line or an indexed guard at a matched logging
+        // template is a prerequisite, not proof that a proposed cause is true.
+        HashSet<string> supportingIds = evidence.Where(item =>
+            (item.Id.StartsWith('L') && item.Id != "L1" &&
+             item.Kind.StartsWith("Related LOG", StringComparison.Ordinal)) ||
+            (item.Id.StartsWith('C') &&
+             (item.Kind.Contains("logging literal", StringComparison.OrdinalIgnoreCase) ||
+              item.Kind.Contains("logging template", StringComparison.OrdinalIgnoreCase)) &&
+             item.Excerpt.Contains("Enclosing guards", StringComparison.Ordinal) &&
+             !item.Excerpt.Contains("No enclosing if/catch guard",
+                 StringComparison.Ordinal)))
+            .Select(item => item.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        int unsupportedReferences = claims.RemoveAll(claim =>
+            !claim.References.Any(item => supportingIds.Contains(item.Id)));
+        int definitiveClaims = claims.RemoveAll(claim =>
+            DefiniteCauseClaim.IsMatch(claim.Claim));
+        int withheld = unsupportedReferences + definitiveClaims;
+        bool assertedCauseInSummary = DefiniteCauseClaim.IsMatch(summary);
+        if (definitiveClaims > 0)
+            unknowns.Insert(0, definitiveClaims + " definitive causal claim(s) " +
+                "were withheld. Matching an L#/C# location does not establish " +
+                "which component caused this failure.");
+
+        if (!hasCode)
+            unknowns.Insert(0, "No indexed C# source candidate was supplied. " +
+                "The application control flow was not verified.");
+        else if (evidence.Where(item => item.Id.StartsWith('C'))
+                     .All(item => item.Kind.Contains("Method name only",
+                         StringComparison.Ordinal)))
+            unknowns.Insert(0, "C# method names are static hints only. " +
+                "No evidence establishes that any matching method executed.");
+
+        if (evidence.Any(item => item.Kind.StartsWith(
+                "Nearby same-file LOG context", StringComparison.Ordinal)))
+            unknowns.Insert(0, "Nearby same-file LOG entries provide context only. " +
+                "They do not establish a shared operation or a causal sequence.");
+
+        if (assertedCauseInSummary || supportingIds.Count == 0 ||
+            (withheld > 0 && claims.Count == 0))
+        {
+            // Avoid displaying an unsupported model narrative as an observed
+            // fact when all proposed causes lacked corroborating citations.
+            InvestigationPromptEvidence? primary =
+                evidence.FirstOrDefault(item => item.Id == "L1");
+            summary = primary is null
+                ? "No primary LOG observation was supplied."
+                : "The available LOG evidence records an event at " +
+                    primary.Location + ". Its underlying cause is not established.";
+        }
+        if (supportingIds.Count == 0)
+            unknowns.Insert(0, "Causal hypotheses were withheld: no separate " +
+                "related LOG observation or indexed enclosing C# branch " +
+                "supports a mechanism. Inspect the source branch and earlier " +
+                "operation state.");
+        else if (unsupportedReferences > 0)
+            unknowns.Insert(0, "Claims citing only the primary failure " +
+                "or a non-guard source location were withheld. Inspect " +
+                "the relevant L#/C# evidence before inferring a cause.");
+        if (assertedCauseInSummary)
+            unknowns.Insert(0, "A definitive causal assertion in the model " +
+                "summary was replaced by a location-only statement. " +
+                "The provided excerpts do not establish a root cause.");
+        if (unknowns.Count > 4)
+            unknowns.RemoveRange(4, unknowns.Count - 4);
         if (claims.Count == 0 && unknowns.Count == 0)
             throw new InvalidDataException(
                 "The model provided neither supported hypotheses nor limitations.");
@@ -173,15 +392,15 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     private static IReadOnlyList<string> ReadTexts(
         JsonElement root, string name, int maxCount, int maxLength)
     {
-        JsonElement list = RequireArray(root, name, maxCount);
-        return list.EnumerateArray()
+        JsonElement list = RequireArray(root, name, 32);
+        return list.EnumerateArray().Take(maxCount)
             .Select(item => item.ValueKind == JsonValueKind.String
                 ? item.GetString() ?? ""
                 : throw new InvalidDataException($"Invalid '{name}' element."))
             .Select(value => value.Trim())
-            .Select(value => value.Length is > 0 && value.Length <= maxLength
-                ? value
-                : throw new InvalidDataException($"Oversized or empty '{name}' element."))
+            .Select(value => value.Length == 0
+                ? throw new InvalidDataException($"Empty '{name}' element.")
+                : value.Length <= maxLength ? value : value[..(maxLength - 3)] + "...")
             .ToArray();
     }
 
@@ -189,10 +408,10 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     {
         if (!item.TryGetProperty(key, out JsonElement value) ||
             value.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(value.GetString()) ||
-            value.GetString()!.Length > maxLength)
-            throw new InvalidDataException($"Invalid or oversized '{key}' in model response.");
-        return value.GetString()!.Trim();
+            string.IsNullOrWhiteSpace(value.GetString()))
+            throw new InvalidDataException($"Invalid '{key}' in model response.");
+        string text = value.GetString()!.Trim();
+        return text.Length <= maxLength ? text : text[..(maxLength - 3)] + "...";
     }
 
     private static async Task<string> ReadBoundedAsync(

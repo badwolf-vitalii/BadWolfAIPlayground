@@ -37,6 +37,8 @@ public sealed partial class AnomalyViewModel
         "No AI explanation generated. Deterministic log/source evidence remains available above.";
     private bool _localAiExpanded;
     private string _preparedEvidenceTitle = "No investigation selected.";
+    private string _localEvidenceAudit =
+        "No evidence prepared. No LOG or C# excerpts have been sent.";
 
     public ObservableCollection<string> LocalOllamaModels { get; } = [];
     public ObservableCollection<LocalAiHypothesisRow> LocalAiHypotheses { get; } = [];
@@ -70,6 +72,7 @@ public sealed partial class AnomalyViewModel
             // eventual user message, even after the question is edited.
             _preparedPrompt = null;
             LocalPromptPreview = "Question edited. Click Prepare evidence again.";
+            LocalEvidenceAudit = "Question edited. Prepare evidence again to review the new packet.";
             ClearLocalAnswer();
             _explainLocalEvidence.NotifyCanExecuteChanged();
         }
@@ -94,6 +97,11 @@ public sealed partial class AnomalyViewModel
     {
         get => _preparedEvidenceTitle;
         private set => SetProperty(ref _preparedEvidenceTitle, value);
+    }
+    public string LocalEvidenceAudit
+    {
+        get => _localEvidenceAudit;
+        private set => SetProperty(ref _localEvidenceAudit, value);
     }
     public string LocalAnswerSummary
     {
@@ -186,6 +194,7 @@ public sealed partial class AnomalyViewModel
             _preparedPrompt = prompt;
             PreparedEvidenceTitle = row.Heading;
             LocalPromptPreview = prompt.Display;
+            LocalEvidenceAudit = prompt.Audit;
             LocalAiStatus = $"{prompt.Evidence.Count} bounded, numbered evidence " +
                 "excerpt(s) prepared locally. Inspect them below. " +
                 "Nothing is sent until you click Explain with Ollama.";
@@ -196,6 +205,7 @@ public sealed partial class AnomalyViewModel
         {
             _preparedPrompt = null;
             LocalPromptPreview = "Could not prepare evidence.";
+            LocalEvidenceAudit = "No evidence packet is ready.";
             LocalAiStatus = ex.Message;
         }
         _explainLocalEvidence.NotifyCanExecuteChanged();
@@ -230,7 +240,8 @@ public sealed partial class AnomalyViewModel
                 foreach (string unknown in answer.Unknowns)
                     LocalAiUnknowns.Add(unknown);
                 LocalAiStatus = $"{answer.Notice} Local model: {model}. " +
-                    $"{prompt.Evidence.Count} excerpts submitted; " +
+                    $"{prompt.Evidence.Count} excerpts submitted in " +
+                    $"{answer.RequestsMade} loopback request(s); " +
                     "no cloud request or persisted conversation.";
             });
         }
@@ -266,6 +277,7 @@ public sealed partial class AnomalyViewModel
         LocalPromptPreview =
             "Evidence changed. Select an investigation and click Prepare evidence.";
         PreparedEvidenceTitle = "No investigation selected.";
+        LocalEvidenceAudit = "Evidence changed. Prepare a new packet to review its provenance.";
         ClearLocalAnswer();
         LocalAiStatus = "Source evidence updated. No Ollama request was made.";
         _explainLocalEvidence.NotifyCanExecuteChanged();

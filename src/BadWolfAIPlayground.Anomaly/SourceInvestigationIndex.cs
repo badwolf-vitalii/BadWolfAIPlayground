@@ -80,6 +80,16 @@ public sealed class SourceInvestigationIndex
         "LogError", "LogCritical"
     };
 
+    // Explicit symbol names in failure text are only candidate names:
+    // "Purge() FAILED" is not a stack frame or proof that this method ran.
+    // Require an empty argument list followed by a failure marker; do not
+    // guess arbitrary GetValue, logging helpers or identifiers from prose.
+    private static readonly Regex NamedFailureMethod = new(
+        @"\b(?<method>[A-Za-z_][A-Za-z0-9_]{2,79})\(\)\s*" +
+        @"(?:FAILED|FAILURE|ERROR)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
     private static readonly Regex Placeholder = new(
         @"(?<!\{)\{[^{}]+\}(?!\})", RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(100));
@@ -257,6 +267,46 @@ public sealed class SourceInvestigationIndex
 
 
     /// <summary>
+    /// An explicit "Method() FAILED" log can help a developer navigate a
+    /// selected, already-indexed C# checkout when no logging literal matches.
+    /// This is strictly an exact declaration-name hint, NOT execution proof.
+    /// Multiple declarations remain separately visible and ambiguous.
+    /// </summary>
+    public IReadOnlyList<SourceInvestigationCandidate> FindNamedFailureMethods(
+        string message, int limit = MaxCandidates, CancellationToken token = default)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        int take = Math.Clamp(limit, 1, MaxCandidates);
+        var results = new List<SourceInvestigationCandidate>();
+        string bounded = message[..Math.Min(message.Length, 2_048)];
+        try
+        {
+            foreach (Match match in NamedFailureMethod.Matches(bounded))
+            {
+                token.ThrowIfCancellationRequested();
+                string method = match.Groups["method"].Value;
+                if (!_methodsByName.TryGetValue(method, out var found))
+                    continue;
+                foreach (SourceInvestigationCandidate candidate in found)
+                {
+                    if (results.Any(item =>
+                            item.RelativePath == candidate.RelativePath &&
+                            item.LineNumber == candidate.LineNumber))
+                        continue;
+                    results.Add(candidate);
+                    if (results.Count >= take)
+                        return results;
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Malicious or pathological log text cannot stall local indexing.
+        }
+        return results;
+    }
+
+    /// <summary>
     /// Resolve an explicit logger-reported C# path/line only against files
     /// indexed from the selected local checkout. The machine/checkout root
     /// may differ from the one that produced the log; the complete relative
@@ -399,7 +449,7 @@ public sealed class SourceInvestigationIndex
             if (!File.Exists(path))
                 return "";
             string excerpt = string.Join(Environment.NewLine,
-                File.ReadLines(path).Skip(Math.Max(0, line - 2)).Take(3)).Trim();
+                File.ReadLines(path).Skip(Math.Max(0, line - 3)).Take(5)).Trim();
             return excerpt.Length > 480 ? excerpt[..480] + "..." : excerpt;
         }
         catch (IOException)
@@ -443,6 +493,8 @@ public sealed class SourceInvestigationIndex
         string conditions = string.Join("; ", guards);
         if (conditions.Length == 0)
             conditions = "No enclosing if/catch guard established for this site.";
+        else if (ReferenceEquals(site, callable))
+            conditions = "Method contains (not proven reached): " + conditions;
 
         string calls = string.Join(", ", callable.DescendantNodes()
             .OfType<InvocationExpressionSyntax>()

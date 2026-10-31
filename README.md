@@ -56,7 +56,7 @@ statistical anomaly detection still work entirely locally without a model.
    hypotheses, not confirmed diagnoses**.
 
 The prompt includes only one primary selected LOG entry, up to **six
-explicitly related LOG events** and **three indexed C# excerpts**,
+additional LOG entries** (operation-correlated or clearly labeled nearby same-file context) and **three indexed C# excerpts**,
 all clipped to bounded lengths. Its entire user message is limited
 to **7,200 characters**. It never automatically reads or sends whole
 log/source files. Skipped, excluded or unimported files cannot be
@@ -65,16 +65,147 @@ bodies to be submitted. A model or question change cannot silently
 replace the chosen evidence; reanalysis, new logs or Include/Exclude
 discard the prepared prompt and any previous AI explanation.
 
-The response is requested as structured JSON. Each proposed hypothesis
-must reference one or more actual labeled evidence IDs; fabricated
-references, absent citations, malformed JSON and oversized replies
-are **rejected**. Source-ID validation guarantees provenance, not
+The model response is requested using a JSON Schema tied to the packet's
+actual evidence IDs. Fabricated or missing citations in displayed claims are
+**rejected**, and a response larger than the 64 KiB network budget is never
+published. Older local models may ignore list-size instructions: extra items
+are omitted rather than causing the entire investigation to fail. Source-ID validation guarantees provenance, not
 the semantic correctness of the model's conclusion: inspect the
 original referenced lines. The UI shows next checks and remaining
 unknowns separately and supports cancellation. No prompts or
 generated responses are persisted by the application (Ollama itself
 may keep service logs according to its configuration). Missing
 Ollama/model does not break the deterministic log analyzer.
+
+
+### Same-file context for logs without operation_id (v0.5.0)
+
+Source-aware search can now supply nearby entries when the selected LOG
+event has **no explicit operation_id**. The analyzer inspects only the
+already imported, currently included, retained entries from the **same
+original file**, selecting up to three earlier and three later events,
+within 60 physical lines and two minutes. Records tagged with a different
+explicit operation_id are excluded; neighboring events from another
+component are never linked simply by matching timestamps.
+
+The Prepare audit and exact preview distinguish **operation-correlated
+LOG evidence** from **nearby same-file context**. A nearby record is useful
+for understanding sequence and state, but physical/time proximity is **not
+proof** of a common transaction, executed C# path, or root cause. The
+conservative citation gate does not accept a nearby-only reference as
+support for a causal hypothesis. This remains a bounded selection,
+not the entire history of the imported logs; missing surrounding entries
+in the packet do not prove none exist in the original files.
+
+### Failure-focused sampling of long operations (v0.5.0)
+
+A single explicit `operation_id` can contain dozens of DEBUG/INFO records.
+Previously the source-aware investigation showed mainly the earliest entries
+and sent the first six of those to Ollama, so a late failure like
+`Purge() FAILED` could be deprived of relevant context. The bounded
+correlation scan now retains a small **beginning**, **recent**,
+**WARN/ERROR**, **logger-reported C# caller**, and **selected-hit
+neighborhood** sample. Only the already included/imported events are used.
+
+Preparing the AI request selects up to six **distinct operation-correlated
+LOG** entries with priority for the last steps **before the selected
+event**, the next step, a possible source caller, an error/outcome and the
+start of the operation. The user preview now includes original timestamps
+for every numbered LOG entry and explicitly warns that a short sample
+does **not** prove other entries are absent from the full imported logs.
+The separate primary LOG entry remains `L1`. Source locations are
+validated only against the selected local C# checkout, when provided.
+No new network/file access, automatic model call or extra context budget
+has been introduced.
+
+### Causal-claim safeguards and explicit C# method hints (v0.5.0)
+
+Real local-model comparisons found that `qwen2.5:1.5b-instruct`
+sometimes asserted `"operation failed due to GetValue()"` merely because
+`GetValue` errors and `Purge() FAILED` shared an `operation_id`.
+Shared IDs validate correlation, not causation. The parser now **withholds
+unqualified direct-cause claims** (including common English, Italian and
+Ukrainian causal wording), even when the model attached valid `L#` IDs.
+A definitive causal assertion in the generated summary is replaced with
+a deterministic, source-location-only statement. Tentative, clearly
+qualified leads such as `"the NoCDM lookup may have contributed"` and
+specific diagnostic checks remain available.
+
+This is an intentionally conservative **wording safeguard**, not
+semantic validation: it can suppress legitimate statements or miss
+unsupported claims expressed differently. The original LOG/C# excerpts,
+unknowns and citation links remain the evidence to inspect.
+
+When a LOG explicitly says `Method() FAILED`, the offline Roslyn index
+can now look for **exactly named method declarations** in a user-selected
+C# checkout, even if no logging template matches. The resulting
+candidates are labeled **method name only (static hint)** and may be
+ambiguous; neither matching a method declaration nor its enclosing
+conditions proves it executed. The causal citation gate does not treat
+such candidates as runtime proof. The evidence audit now distinguishes
+**no Visual Studio solution loaded** (choose a `.sln` and index it)
+from **checkout indexed, but no source candidate matched**.
+
+### Robust local model responses (v0.5.0)
+
+Ollama now receives a bounded response **JSON Schema**, with valid evidence
+IDs enumerated for the current case, and `think: false` to keep Qwen3 from
+spending the response allowance on a separate reasoning trace. The first
+response has an expanded 1,400-token generation limit. A truncated, invalid
+or structurally unusable reply may trigger **one automatic local retry** with
+the *same* previewed system/user messages and a 2,200-token limit. If an old
+Ollama service rejects the schema with HTTP 400, only the second request uses
+the simpler `format: "json"`. Both attempts are authorized by the single
+explicit **Explain** click; no new LOG/C# content is retrieved or sent.
+
+Small-model responses with more than three hypotheses, five next checks or
+four unknowns are safely bounded to the displayed limits instead of causing
+a full response failure. Every **displayed** hypothesis must still have valid
+evidence references; the v0.5.0 conservative causal-support checks remain
+active. If both attempts fail, the UI displays an explicitly marked
+**evidence-only fallback** with no accepted AI hypothesis or invented cause.
+The UI also reports how many loopback requests were made. A successful
+request cannot establish semantic or causal correctness, and no prompt/model
+response is persisted by this application.
+
+### Code-aware, evidence-audited investigation (v0.5.0)
+
+The **Prepare** step now displays an evidence audit above the model selector:
+the primary LOG, the number of included versus available related LOG entries,
+the number of selected versus indexed C# candidates, and warnings when the
+source match is ambiguous or absent. The audit and all excerpts are strictly
+local until **Explain with local Ollama** is clicked.
+
+Each chosen C# source candidate now includes a short snippet plus **static**
+enclosing `if`/`catch` guards (where available) and other invocation names
+in its containing method. Source candidates are diversified to avoid filling
+the three-C# budget only with similar logger-location hints. These are
+**syntax observations, not a confirmed execution path**. A method-name match,
+logger/catch location or a condition within the selected checkout does not
+prove that that branch ran in production.
+
+The local model is instructed to keep observed LOG facts separate from
+hypotheses, use concrete code variables and branch checks, and say when the
+evidence does not justify a causal guess. The answer is labelled **unverified**.
+The response parser also applies a conservative structural safeguard: **with
+no separate related LOG observation and no indexed enclosing guard at an
+identified logging site, it withholds causal hypotheses** and replaces an
+unsupported free-form model summary with a deterministic, limited statement.
+Missing C# evidence is always called out in the unknowns. This does not solve
+semantic hallucination for richer evidence and is not a proof of root cause.
+
+A duplicate event written to multiple log targets with the same timestamp
+and message is admitted only once; the extra file is not independent
+corroboration. A causal hypothesis must cite the particular related LOG
+entry or indexed logging-site guard supporting it: a reference to the
+primary error line `L1` alone is insufficient even when other evidence
+exists in the packet.
+
+The same explicit local-only flow, limits (one primary LOG, six additional LOG,
+three C#, 7,200-character user prompt), no-cloud policy, input exclusions,
+strict citation IDs and cancellation behavior remain in place. This release
+does not add whole-repository retrieval or a runtime call graph.
+
 
 
 
