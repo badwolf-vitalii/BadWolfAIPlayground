@@ -12,6 +12,8 @@ var checks = new (string Name, Action Execute)[]
     ("Repeated burst windows collapse without hiding rare errors", GroupedBursts),
     ("Recurring message patterns count real events and preserve evidence", RecurringPatterns),
     ("Optional offline C# log-template source context", SourceContext),
+    ("Roslyn source investigations distinguish syntax evidence and ambiguity", RoslynSourceInvestigation),
+    ("Cross-log operation_id links DEBUG caller to original C# line", CrossLogCallerEvidence),
     ("Import entire Logs directory with component provenance", FolderImport),
     ("Large files stream safely without 16 MiB exclusion", FolderGuards),
     ("More than 512 log files remain individually importable", FolderFileCount),
@@ -275,6 +277,336 @@ static void SourceContext()
     }
 }
 
+
+
+static void RoslynSourceInvestigation()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-RoslynEvidence-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        string first = Path.Combine(root, "PrinterWorker.cs");
+        File.WriteAllText(first,
+            """
+            namespace Synthetic;
+            class PrinterWorker
+            {
+                void RepairQueue(int cardId) { }
+                void Print(int cardId)
+                {
+                    if (cardId > 0)
+                    {
+                        logger.Error($"Retry timeout on connection {cardId}");
+                        RepairQueue(cardId);
+                    }
+                    logger.Info("Service initialization started");
+                }
+                void CardInfoReadAndChecks() { }
+            }
+            """);
+        File.WriteAllText(Path.Combine(root, "SecondWorker.cs"),
+            """
+            class SecondWorker
+            {
+                void Run() { logger.Info("Service initialization started"); }
+            }
+            """);
+        Directory.CreateDirectory(Path.Combine(root, "obj"));
+        File.WriteAllText(Path.Combine(root, "obj", "Ignored.cs"),
+            "class Generated { void Run() { logger.Error(\"Ignored generated file\"); } }");
+
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(root);
+        Ensure(index.FilesScanned == 2 && index.MethodsIndexed >= 4 &&
+               index.LoggingSites == 3,
+            "Only the explicitly chosen source files should be indexed with syntax.");
+        var matched = index.FindLogSites("Retry timeout on connection 9024");
+        Ensure(matched.Count == 1 &&
+               matched[0].Kind == SourceEvidenceKind.FormattedLoggingTemplate &&
+               matched[0].MethodName == "Print" &&
+               matched[0].TypeName == "PrinterWorker" &&
+               matched[0].Conditions.Contains("cardId > 0", StringComparison.Ordinal) &&
+               matched[0].DirectCalls.Contains("RepairQueue", StringComparison.Ordinal) &&
+               matched[0].Excerpt.Contains("Retry timeout", StringComparison.Ordinal),
+            "Roslyn must return the containing C# method, conditional evidence " +
+            "and possible direct calls without inferring runtime cause.");
+
+        var ambiguous = index.FindLogSites("Service initialization started");
+        Ensure(ambiguous.Count == 2 &&
+               ambiguous.All(c => c.Kind == SourceEvidenceKind.ExactLoggingLiteral),
+            "Two matching logging literals must be kept as distinct candidates.");
+        Ensure(index.FindLogSites("Unrelated message").Count == 0,
+            "No match must not be reported as a source link.");
+
+        var named = index.FindMethods("CardInfoReadAndChecks");
+        Ensure(named.Count == 1 &&
+               named[0].Kind == SourceEvidenceKind.OperationMethodName &&
+               named[0].MethodName == "CardInfoReadAndChecks",
+            "A known structured operation should match the exact C# declaration.");
+        Ensure(index.FindMethods("UnknownMethodName").Count == 0,
+            "Missing operation names are not inferred from timing.");
+
+        var stack = index.FindStackFrames(
+            @"at Synthetic.PrinterWorker.Print() in C:\checkout\PrinterWorker.cs:line 9");
+        Ensure(stack.Count == 1 &&
+               stack[0].Kind == SourceEvidenceKind.ExplicitStackFrame &&
+               stack[0].RelativePath == "PrinterWorker.cs" &&
+               stack[0].LineNumber == 9,
+            "Actual file/line metadata must be checked against scanned C# files.");
+
+        (string resolved, int line) = index.ResolveSourceLocation(matched[0]);
+        Ensure(resolved == Path.GetFullPath(first) && line == matched[0].LineNumber,
+            "Matching source should navigate to the original indexed physical line.");
+        bool rejected = false;
+        try
+        {
+            index.ResolveSourceLocation(matched[0] with
+            {
+                RelativePath = Path.Combine("..", "Outside.cs")
+            });
+        }
+        catch (InvalidOperationException) { rejected = true; }
+        Ensure(rejected, "A forged source path must not open outside the selected checkout.");
+
+        const string log =
+            "2026-10-30 18:00:00 ERROR Retry timeout on connection 9024\n" +
+            "2026-10-30 18:00:01 ERROR Service initialization started\n" +
+            "2026-10-30 18:00:02 INFO TOM_OP v=1 event=end " +
+            "operation=CardInfoReadAndChecks transaction_id=- " +
+            "flow_id=standalone-card duration_ms=4057 status=completed result=unknown\n";
+        LogParseResult parsed = LogParser.Parse(log, sourceFile: "Operations.log");
+        SourceInvestigationReport report = SourceInvestigationAnalyzer.Analyze(
+            AnomalyDetector.Analyze(parsed),
+            OperationTimelineAnalyzer.Analyze(parsed), index);
+        Ensure(report.Cases.Any(c =>
+                   c.Category == "LOG PATTERN" &&
+                   c.Evidence.Contains("Retry timeout", StringComparison.Ordinal) &&
+                   c.Candidates.Any(x => x.MethodName == "Print")) &&
+               report.Cases.Any(c =>
+                   c.Category == "LOG PATTERN" && c.Ambiguous &&
+                   c.Assessment.Contains("Ambiguous", StringComparison.Ordinal)) &&
+               report.Cases.Any(c =>
+                   c.Category == "TOM_OP METHOD" &&
+                   c.Candidates.Any(x => x.MethodName == "CardInfoReadAndChecks")) &&
+               report.Cases.All(c => c.LogLine > 0 && c.LogFile == "Operations.log"),
+            "Investigations must retain original log source lines and " +
+            "distinguish template matches from method-name hints.");
+
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        rejected = false;
+        try { SourceInvestigationIndex.Build(root, canceled.Token); }
+        catch (OperationCanceledException) { rejected = true; }
+        Ensure(rejected, "Cancellation must prevent indexing private source files.");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+
+static void CrossLogCallerEvidence()
+{
+    string root = Path.Combine(Path.GetTempPath(),
+        "BadWolfAIPlayground-CrossLog-" + Guid.NewGuid().ToString("N"));
+    string codeRoot = Path.Combine(root, "checkout");
+    string sourceDir = Path.Combine(codeRoot, "src", "AFCS.TOM.UCUILib", "Views");
+    string logs = Path.Combine(root, "Logs");
+    Directory.CreateDirectory(sourceDir);
+    Directory.CreateDirectory(logs);
+    const string operationId = "41d14983730d4ac6b1c491fc232b77de";
+    try
+    {
+        string sourceFile = Path.Combine(sourceDir, "UCCardInfoView.xaml.cs");
+        string[] lines = Enumerable.Repeat("// unrelated line", 1844).ToArray();
+        lines[0] = "namespace Synthetic { class UCCardInfoView {";
+        lines[1] = "void ReadCard() {";
+        lines[1838] = "try { } catch (Exception ex) {";
+        lines[1839] = "BLogic.Helper.LogException(Logger, ex);";
+        lines[1840] = "}";
+        lines[1842] = "}";
+        lines[1843] = "} }";
+        File.WriteAllLines(sourceFile, lines);
+        SourceInvestigationIndex index = SourceInvestigationIndex.Build(codeRoot);
+
+        string caller = @"C:\Src\Azure\AFCS.TOM-ATM\src\AFCS.TOM.UCUILib\Views\UCCardInfoView\.xaml.cs: line 1840";
+        var resolvedCaller = index.FindLoggedCallerLocations(caller);
+        Ensure(resolvedCaller.Count == 1 &&
+               resolvedCaller[0].Kind == SourceEvidenceKind.LoggedCallerLocation &&
+               resolvedCaller[0].LineNumber == 1840 &&
+               resolvedCaller[0].MethodName == "ReadCard" &&
+               resolvedCaller[0].Excerpt.Contains("LogException", StringComparison.Ordinal),
+            "A split .xaml.cs path must resolve ONLY when the selected checkout " +
+            "confirms its exact relative path and physical line.");
+        Ensure(index.FindLoggedCallerLocations(
+                @"C:\Somewhere\OtherProject\Views\UCCardInfoView.xaml.cs: line 1840").Count == 0 &&
+               index.FindLoggedCallerLocations(
+                @"C:\Src\Azure\AFCS.TOM-ATM\src\AFCS.TOM.UCUILib\Views\UCCardInfoView.xaml.cs: line 99999").Count == 0,
+            "Similar filename alone or an out-of-range source line is not proof.");
+        (string actualPath, int actualLine) = index.ResolveSourceLocation(
+            resolvedCaller[0]);
+        Ensure(actualPath == Path.GetFullPath(sourceFile) && actualLine == 1840,
+            "Source navigation must resolve only through indexed checkout files.");
+
+        string appName = "App_2026-10-30.log";
+        string webName = "WebClient_2026-10-30.log";
+        string appError =
+            "Unable to read data from the transport connection: The I/O " +
+            "operation has been aborted because of either a thread exit " +
+            "or an application request. | operation_id=" + operationId +
+            " | exception_logger=AppLogger | exception_type=System.IO.IOException";
+        File.WriteAllText(Path.Combine(logs, appName),
+            "2026-10-30 16:26:53.3860 ERROR " + appError + "\n" +
+            "   at System.Net.Sockets.Socket.AwaitableSocketAsyncEventArgs.ThrowException()\n");
+        File.WriteAllText(Path.Combine(logs, webName),
+            "2026-10-30 16:26:53.3860 DEBUG " + caller +
+            " | operation_id=" + operationId + "\n" +
+            "2026-10-30 16:26:53.3860 ERROR " + appError + "\n" +
+            // This has an identical timestamp but a different operation ID:
+            "2026-10-30 16:26:53.3860 DEBUG " + caller +
+            " | operation_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
+
+        LogFolderImportResult import = LogFolderImporter.Import(logs);
+        SourceInvestigationReport Investigate(LogParseResult parsed)
+        {
+            LogEvent original = parsed.Events.First(e =>
+                e.Severity == LogSeverity.Error &&
+                e.Message.Contains("Unable to read data",
+                    StringComparison.Ordinal));
+            AnomalyReport normal = AnomalyDetector.Analyze(parsed);
+            var finding = new AnomalyFinding(
+                AnomalyKind.RareErrorPattern, original.Timestamp,
+                "Rare error message pattern", "Original exception from App",
+                original.Message, original.LineNumber, 1, 0, 1)
+            {
+                SourceFile = original.SourceFile,
+                Continuation = original.Continuation
+            };
+            return SourceInvestigationAnalyzer.Analyze(
+                normal with { Findings = [finding] },
+                OperationTimelineAnalyzer.Analyze(parsed), index);
+        }
+        SourceInvestigationReport report = Investigate(import.Combined);
+        SourceInvestigationCase matched = report.Cases.Single(c =>
+            c.Category == "STACK / FINDING");
+        Ensure(import.DuplicateCopies == 1 &&
+               matched.OperationId == operationId &&
+               matched.RelatedEventCount == 2 &&
+               matched.RelatedEvents.Any(e => e.SourceFile == webName &&
+                   e.Severity == LogSeverity.Debug && e.SourceLine == 1) &&
+               matched.Candidates.Any(c =>
+                   c.Kind == SourceEvidenceKind.LoggedCallerLocation &&
+                   c.RelativePath.EndsWith("UCCardInfoView.xaml.cs",
+                       StringComparison.OrdinalIgnoreCase) &&
+                   c.LineNumber == 1840) &&
+               matched.Assessment.Contains(
+                   "Identifier equality proves correlation, not causation",
+                   StringComparison.Ordinal) &&
+               !matched.RelatedEvents.Any(e =>
+                   e.Message.Contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                       StringComparison.Ordinal)),
+            "App error and WebClient DEBUG must link by matching operation_id, " +
+            "without borrowing same-timestamp events from unrelated operations.");
+
+        // Search must inspect all retained log lines even if the statistical
+        // detector's top-pattern and rare-finding slots omit this error.
+        AnomalyReport hiddenError = AnomalyDetector.Analyze(import.Combined) with
+        {
+            Findings = [],
+            TopMessagePatterns = []
+        };
+        Ensure(SourceInvestigationAnalyzer.Analyze(hiddenError,
+                   OperationTimelineAnalyzer.Analyze(import.Combined), index)
+                   .Cases.Count == 0,
+            "The unranked example must not appear in the default top findings.");
+        SourceInvestigationSearchResult exact =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, operationId);
+        Ensure(exact.MatchingEventCount == 2 && exact.DisplayedGroups == 1 &&
+               exact.Cases.Single().Category == "LOG SEARCH" &&
+               exact.Cases.Single().Evidence.Contains("Unable to read data",
+                   StringComparison.Ordinal) &&
+               exact.Cases.Single().RelatedEventCount == 2 &&
+               exact.Cases.Single().Candidates.Any(candidate =>
+                   candidate.Kind == SourceEvidenceKind.LoggedCallerLocation &&
+                   candidate.LineNumber == 1840) &&
+               exact.Cases.Single().ObservedAt.HasValue,
+            "Searching an old operation_id must find all DEBUG/ERROR entries " +
+            "outside top anomalies, group one operation and expose C# caller evidence.");
+
+        SourceInvestigationSearchResult byException =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, "IOException");
+        Ensure(byException.MatchingEventCount == 1 &&
+               byException.Cases.Single().RelatedEvents.Any(entry =>
+                   entry.SourceFile == webName && entry.Severity == LogSeverity.Debug),
+            "Searching exception text must bring in linked DEBUG metadata even " +
+            "when that metadata does not include the exception's words.");
+
+        SourceInvestigationSearchResult byMirrorAlias =
+            SourceInvestigationAnalyzer.Search(import.Combined, index, appName);
+        Ensure(byMirrorAlias.MatchingEventCount == 1 &&
+               byMirrorAlias.Cases.Single().OperationId == operationId,
+            "Filename queries must include the original App target if its " +
+            "mirrored error was deduplicated in favor of WebClient.");
+
+        SourceInvestigationSearchResult byOtherId =
+            SourceInvestigationAnalyzer.Search(import.Combined, index,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        Ensure(byOtherId.MatchingEventCount == 1 &&
+               byOtherId.Cases.Single().OperationId != operationId &&
+               byOtherId.Cases.Single().RelatedEventCount == 1 &&
+               byOtherId.Cases.Single().RelatedEvents.All(entry =>
+                   !entry.Message.Contains(operationId, StringComparison.Ordinal)),
+            "Two events at exactly the same timestamp must never be joined " +
+            "across different operation IDs.");
+
+        SourceInvestigationSearchResult withoutSource =
+            SourceInvestigationAnalyzer.Search(import.Combined, null, "IOException");
+        Ensure(withoutSource.MatchingEventCount == 1 &&
+               withoutSource.Cases.Single().Candidates.Count == 0 &&
+               withoutSource.Cases.Single().Assessment.Contains(
+                   "Choose a local C# solution", StringComparison.Ordinal),
+            "Full-log search must still work without a selected source checkout.");
+
+        bool shortQueryRejected = false;
+        try { SourceInvestigationAnalyzer.Search(import.Combined, index, "IO"); }
+        catch (ArgumentException) { shortQueryRejected = true; }
+        Ensure(shortQueryRejected, "A very short query must not produce huge result lists.");
+
+        using var canceledSearch = new CancellationTokenSource();
+        canceledSearch.Cancel();
+        bool canceledProperly = false;
+        try
+        {
+            SourceInvestigationAnalyzer.Search(
+                import.Combined, index, operationId, canceledSearch.Token);
+        }
+        catch (OperationCanceledException) { canceledProperly = true; }
+        Ensure(canceledProperly, "Full-log search must honor cancellation.");
+
+        // File filtering must recompute evidence from the currently enabled
+        // report, not retain sources omitted from the user's analysis.
+        LogFolderSelection appOnly = LogFolderImporter.SelectFiles(import, [appName]);
+        SourceInvestigationCase isolated = Investigate(appOnly.Combined).Cases
+            .Single(c => c.Category == "STACK / FINDING");
+        Ensure(isolated.RelatedEventCount == 1 &&
+               isolated.Candidates.All(c =>
+                   c.Kind != SourceEvidenceKind.LoggedCallerLocation),
+            "Disabling WebClient must remove its caller evidence and source link.");
+        SourceInvestigationSearchResult filteredSearch =
+            SourceInvestigationAnalyzer.Search(appOnly.Combined, index, operationId);
+        Ensure(filteredSearch.MatchingEventCount == 1 &&
+               filteredSearch.Cases.Single().RelatedEventCount == 1 &&
+               filteredSearch.Cases.Single().Candidates.All(candidate =>
+                   candidate.Kind != SourceEvidenceKind.LoggedCallerLocation),
+            "Search must recompute from included files, never from the original folder.");
+
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
 
 static void FolderImport()
 {

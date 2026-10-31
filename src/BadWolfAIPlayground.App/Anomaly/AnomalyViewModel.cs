@@ -19,11 +19,15 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private readonly Dispatcher _dispatcher = Dispatcher.CurrentDispatcher;
     private readonly RelayCommand _demo, _open, _run, _cancel, _chooseSource, _chooseFolder;
     private readonly RelayCommand _selectAll, _selectNone, _chooseEditor;
+    private readonly RelayCommand _findInvestigation, _clearInvestigationSearch;
     private readonly ParameterRelayCommand<AnomalyFindingRow> _openFinding;
     private readonly ParameterRelayCommand<AnomalyPatternRow> _openPattern;
     private readonly ParameterRelayCommand<AnomalyExceptionRow> _openException;
     private readonly ParameterRelayCommand<AnomalyOperationEventRow> _openOperationEvent;
     private readonly ParameterRelayCommand<AnomalySourceFileRow> _openLogFile;
+    private readonly ParameterRelayCommand<AnomalySourceCandidateRow> _openCSharpSource;
+    private readonly ParameterRelayCommand<AnomalyInvestigationRow> _openInvestigationLog;
+    private readonly ParameterRelayCommand<AnomalyRelatedLogRow> _openRelatedLog;
     private LogFolderImportResult? _folderImport;
     private string? _folderRoot;
     private string? _singleFilePath;
@@ -36,8 +40,16 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     private AnomalyReport? _lastReport;
     private OperationTimelineReport? _lastOperations;
     private LogSourceContextIndex? _sourceIndex;
+    private SourceInvestigationIndex? _investigationIndex;
     private string _sourceContextStatus =
-        "Optional: select a local Visual Studio solution to match log messages to C# logging statements.";
+        "Optional: select a local Visual Studio solution for source-aware log investigation.";
+    private string _investigationSummary =
+        "Select a local C# solution (optional) to locate source methods. " +
+        "Search across all imported log events also works without source code.";
+    private string _investigationSearchText = "";
+    private string _activeInvestigationQuery = "";
+    private IReadOnlyList<AnomalyInvestigationRow> _defaultInvestigationRows = [];
+    private string _defaultInvestigationSummary = "";
     private string _source = "No file selected";
     private string _filesSummary = "Choose a Logs folder to inspect all components.";
     private string _skippedSummary = "No files skipped.";
@@ -69,6 +81,14 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _selectNone = new RelayCommand(async () => await SelectAllFilesAsync(false),
             () => CanEditFiles);
         _chooseEditor = new RelayCommand(ChooseNotepadPlusPlus);
+        _findInvestigation = new RelayCommand(async () =>
+            await SearchInvestigationsAsync(),
+            () => !Busy && _loaded is not null &&
+                  InvestigationSearchText.Trim().Length >= 3);
+        _clearInvestigationSearch = new RelayCommand(
+            ClearInvestigationSearch,
+            () => !Busy && (_activeInvestigationQuery.Length > 0 ||
+                             InvestigationSearchText.Length > 0));
         _openFinding = new ParameterRelayCommand<AnomalyFindingRow>(
             item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
             _ => _folderRoot is not null || _singleFilePath is not null);
@@ -84,6 +104,15 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openLogFile = new ParameterRelayCommand<AnomalySourceFileRow>(
             item => OpenLogInNotepadPlusPlus(item.RelativePath, 1),
             _ => _folderRoot is not null);
+        _openCSharpSource = new ParameterRelayCommand<AnomalySourceCandidateRow>(
+            item => OpenCSharpInNotepadPlusPlus(item.Source),
+            _ => _investigationIndex is not null);
+        _openInvestigationLog = new ParameterRelayCommand<AnomalyInvestigationRow>(
+            item => OpenLogInNotepadPlusPlus(item.LogFile, item.LogLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
+        _openRelatedLog = new ParameterRelayCommand<AnomalyRelatedLogRow>(
+            item => OpenLogInNotepadPlusPlus(item.SourceFile, item.SourceLine),
+            _ => _folderRoot is not null || _singleFilePath is not null);
     }
 
     public ObservableCollection<AnomalyBucketRow> Timeline { get; } = [];
@@ -93,6 +122,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ObservableCollection<AnomalyOperationGroupRow> OperationGroups { get; } = [];
     public ObservableCollection<AnomalySourceFileRow> SourceFiles { get; } = [];
     public ObservableCollection<LogFolderSkippedFile> SkippedSourceFiles { get; } = [];
+    public ObservableCollection<AnomalyInvestigationRow> Investigations { get; } = [];
     public ICommand UseDemoCommand => _demo;
     public ICommand ChooseFileCommand => _open;
     public ICommand ChooseFolderCommand => _chooseFolder;
@@ -104,6 +134,11 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     public ICommand OpenExceptionCommand => _openException;
     public ICommand OpenOperationEventCommand => _openOperationEvent;
     public ICommand OpenLogFileCommand => _openLogFile;
+    public ICommand OpenCSharpSourceCommand => _openCSharpSource;
+    public ICommand OpenInvestigationLogCommand => _openInvestigationLog;
+    public ICommand OpenRelatedLogCommand => _openRelatedLog;
+    public ICommand SearchInvestigationsCommand => _findInvestigation;
+    public ICommand ClearInvestigationSearchCommand => _clearInvestigationSearch;
     public bool CanEditFiles => !Busy && _folderImport is not null;
     public string EditorStatus
     {
@@ -117,6 +152,31 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
     {
         get => _sourceContextStatus;
         private set => SetProperty(ref _sourceContextStatus, value);
+    }
+    public string InvestigationSummary
+    {
+        get => _investigationSummary;
+        private set => SetProperty(ref _investigationSummary, value);
+    }
+    public string InvestigationSearchText
+    {
+        get => _investigationSearchText;
+        set
+        {
+            if (SetProperty(ref _investigationSearchText, value ?? ""))
+            {
+                _findInvestigation.NotifyCanExecuteChanged();
+                _clearInvestigationSearch.NotifyCanExecuteChanged();
+            }
+        }
+    }
+    public (string FullPath, int Line) ResolveCSharpLocation(
+        SourceInvestigationCandidate candidate)
+    {
+        if (_investigationIndex is null)
+            throw new InvalidOperationException(
+                "Select a local C# solution before opening source code.");
+        return _investigationIndex.ResolveSourceLocation(candidate);
     }
     public string SourceName { get => _source; private set => SetProperty(ref _source, value); }
     public string SourceFilesSummary
@@ -197,6 +257,8 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
                 _chooseFolder.NotifyCanExecuteChanged();
                 _selectAll.NotifyCanExecuteChanged();
                 _selectNone.NotifyCanExecuteChanged();
+                _findInvestigation.NotifyCanExecuteChanged();
+                _clearInvestigationSearch.NotifyCanExecuteChanged();
                 OnPropertyChanged(nameof(CanEditFiles));
             }
         }
@@ -394,6 +456,9 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         _openException.NotifyCanExecuteChanged();
         _openOperationEvent.NotifyCanExecuteChanged();
         _openLogFile.NotifyCanExecuteChanged();
+        _openCSharpSource.NotifyCanExecuteChanged();
+        _openInvestigationLog.NotifyCanExecuteChanged();
+        _openRelatedLog.NotifyCanExecuteChanged();
     }
 
     private async void OnFolderFileIncludedChanged(object? sender, EventArgs e)
@@ -600,6 +665,29 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void OpenCSharpInNotepadPlusPlus(SourceInvestigationCandidate candidate)
+    {
+        try
+        {
+            (string path, int line) = ResolveCSharpLocation(candidate);
+            string? executable = _notepadExecutable ??
+                NotepadPlusPlusLauncher.DiscoverExecutable();
+            if (executable is null)
+            {
+                StatusText = "Notepad++ not found. Click Locate Notepad++ first.";
+                return;
+            }
+            NotepadPlusPlusLauncher.Open(executable, path, line);
+            StatusText = $"Opened C# source {candidate.Location} in Notepad++.";
+        }
+        catch (Exception exception) when (exception is IOException or
+            InvalidOperationException or ArgumentException or
+            System.ComponentModel.Win32Exception or UnauthorizedAccessException)
+        {
+            StatusText = $"Could not open C# source: {exception.Message}";
+        }
+    }
+
     public Task AnalyzeAsync() => ExecuteAsync(async token =>
     {
         LogParseResult? parsed = _loaded;
@@ -617,20 +705,29 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
 
     public Task LoadSourceContextAsync(string folder) => ExecuteAsync(async token =>
     {
-        LogSourceContextIndex index = await Task.Run(() =>
-            LogSourceContextIndex.Build(folder, token), token);
+        // Build both the existing log-template preview and the new Roslyn
+        // source index. Replace neither until both complete successfully.
+        var indexes = await Task.Run(() =>
+        {
+            LogSourceContextIndex legacy =
+                LogSourceContextIndex.Build(folder, token);
+            SourceInvestigationIndex parsed =
+                SourceInvestigationIndex.Build(folder, token);
+            return (legacy, parsed);
+        }, token);
         token.ThrowIfCancellationRequested();
         await _dispatcher.InvokeAsync(() =>
         {
-            _sourceIndex = index;
+            _sourceIndex = indexes.legacy;
+            _investigationIndex = indexes.parsed;
             SourceContextStatus =
-                $"Local C# context loaded: {index.TemplateCount:N0} logging templates " +
-                $"from {index.FilesScanned:N0} source files. " +
-                "Matches are heuristic; the source stays on this PC.";
+                $"Local C# context: {indexes.parsed.MethodsIndexed:N0} methods, " +
+                $"{indexes.parsed.LoggingSites:N0} logging sites across " +
+                $"{indexes.parsed.FilesScanned:N0} files (Roslyn syntax only). " +
+                "Possible matches are not confirmed root causes; nothing uploaded.";
+            NotifyOpenCommands();
             if (_lastReport is not null && _lastOperations is not null)
-            {
                 Apply(_lastReport, _lastOperations);
-            }
         });
     });
 
@@ -709,6 +806,83 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         }
     }
 
+
+    /// <summary>
+    /// Searches all currently enabled parsed log events, not only the
+    /// top statistical findings. The source index is optional.
+    /// </summary>
+    public Task SearchInvestigationsAsync() => ExecuteAsync(async token =>
+    {
+        LogParseResult? parsed = _lastReport?.Source ?? _loaded;
+        if (parsed is null)
+            return;
+        string query = InvestigationSearchText.Trim();
+        if (query.Length < 3)
+        {
+            StatusText = "Enter at least 3 characters to search local log evidence.";
+            return;
+        }
+        SourceInvestigationIndex? source = _investigationIndex;
+        SourceInvestigationSearchResult result = await Task.Run(
+            () => SourceInvestigationAnalyzer.Search(parsed, source, query, token), token);
+        token.ThrowIfCancellationRequested();
+        await _dispatcher.InvokeAsync(() =>
+        {
+            _activeInvestigationQuery = query;
+            ShowInvestigationSearch(result, query);
+            _clearInvestigationSearch.NotifyCanExecuteChanged();
+            StatusText = $"Searched {parsed.Events.Count:N0} currently included log events locally.";
+        });
+    });
+
+    public void ClearInvestigationSearch()
+    {
+        if (Busy)
+            return;
+        _activeInvestigationQuery = "";
+        InvestigationSearchText = "";
+        Investigations.Clear();
+        foreach (AnomalyInvestigationRow row in _defaultInvestigationRows)
+            Investigations.Add(row);
+        InvestigationSummary = _defaultInvestigationSummary.Length > 0
+            ? _defaultInvestigationSummary
+            : "Load logs to inspect source-aware evidence.";
+        _clearInvestigationSearch.NotifyCanExecuteChanged();
+    }
+
+    private void ShowInvestigationSearch(
+        SourceInvestigationSearchResult result, string query)
+    {
+        Investigations.Clear();
+        foreach (SourceInvestigationCase item in result.Cases)
+            Investigations.Add(ToInvestigationRow(item));
+        InvestigationSummary =
+            $"Search \"{query}\": {result.MatchingEventCount:N0} matching " +
+            $"event(s), {result.DisplayedGroups:N0} displayed operation/line " +
+            $"group(s) (maximum {SourceInvestigationAnalyzer.MaxSearchGroups}). " +
+            "Includes DEBUG/INFO and events outside the top anomalies; " +
+            "only currently included imported logs are searched.";
+    }
+
+    private static AnomalyInvestigationRow ToInvestigationRow(
+        SourceInvestigationCase item) =>
+        new(item.Category, item.Title, item.Evidence, item.Assessment,
+            item.LogFile, item.LogLine,
+            item.Candidates.Select(candidate =>
+                new AnomalySourceCandidateRow(candidate)).ToArray())
+        {
+            OperationId = item.OperationId,
+            ObservedAt = item.ObservedAt,
+            RelatedEventCount = item.RelatedEventCount,
+            RelatedLogs = item.RelatedEvents.Select(entry =>
+                new AnomalyRelatedLogRow(
+                    entry.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff",
+                        CultureInfo.InvariantCulture),
+                    entry.Severity.ToString().ToUpperInvariant(),
+                    entry.Message, entry.SourceFile, entry.SourceLine))
+                .ToArray()
+        };
+
     private void Apply(AnomalyReport report, OperationTimelineReport operations)
     {
         _lastReport = report;
@@ -717,6 +891,7 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
         Patterns.Clear();
         ExceptionEntries.Clear();
         OperationGroups.Clear();
+        Investigations.Clear();
         Timeline.Clear();
 
         OperationGroupCount = operations.GroupCount;
@@ -911,6 +1086,39 @@ public sealed class AnomalyViewModel : ObservableObject, IDisposable
             });
         }
 
+        // Source links are recomputed from this exact enabled-file report,
+        // never from omitted logs or mere timestamp adjacency.
+        if (_investigationIndex is null)
+        {
+            InvestigationSummary =
+                "Select a local C# solution to inspect possible methods and " +
+                "logging sites. No source files are uploaded.";
+        }
+        else
+        {
+            SourceInvestigationReport investigation =
+                SourceInvestigationAnalyzer.Analyze(
+                    report, operations, _investigationIndex);
+            foreach (SourceInvestigationCase item in investigation.Cases)
+                Investigations.Add(ToInvestigationRow(item));
+            InvestigationSummary =
+                $"Investigated {investigation.Total:N0} selected log/operation " +
+                $"evidence items: {investigation.Linked:N0} with C# candidates, " +
+                $"{investigation.Unmatched:N0} unmatched, " +
+                $"{investigation.Ambiguous:N0} ambiguous. " +
+                "Links are syntax or stack evidence, not proof of root cause.";
+        }
+
+        _defaultInvestigationRows = Investigations.ToArray();
+        _defaultInvestigationSummary = InvestigationSummary;
+        if (_activeInvestigationQuery.Length >= 3)
+        {
+            SourceInvestigationSearchResult search =
+                SourceInvestigationAnalyzer.Search(report.Source,
+                    _investigationIndex, _activeInvestigationQuery);
+            ShowInvestigationSearch(search, _activeInvestigationQuery);
+        }
+
         EventCount = report.Source.Events.Count;
         ProblemCount = report.TotalProblems;
         FindingCount = report.Findings.Count;
@@ -966,6 +1174,71 @@ public sealed record AnomalyOperationEventRow(
     public string Display => Time + "  " + Description;
     public string Location => string.IsNullOrWhiteSpace(SourceFile)
         ? "Log line " + SourceLine : SourceFile + ":" + SourceLine;
+}
+
+
+/// <summary>One original log evidence item and candidate source locations.</summary>
+public sealed record AnomalyInvestigationRow(
+    string Category, string Title, string Evidence, string Assessment,
+    string LogFile, int LogLine, IReadOnlyList<AnomalySourceCandidateRow> Candidates)
+{
+    public string LogLocation => string.IsNullOrEmpty(LogFile)
+        ? $"Log line {LogLine}" : $"{LogFile}:{LogLine}";
+    public string Heading =>
+        Category + "  |  " + CompactHeadline(
+            Category == "TOM_OP METHOD" ? Title : Evidence, 146);
+    public string DetailLine =>
+        (ObservedAt.HasValue
+            ? ObservedAt.Value.ToString("yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture) + "  |  "
+            : "") +
+        Title + "  |  " + LogLocation +
+        (OperationId.Length > 0 ? "  |  operation_id=" + OperationId : "") +
+        $"  |  {Candidates.Count:N0} C# candidate(s)";
+    public DateTimeOffset? ObservedAt { get; init; }
+    private static string CompactHeadline(string value, int limit)
+    {
+        string text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        int metadata = text.IndexOf(" | operation_id=",
+            StringComparison.OrdinalIgnoreCase);
+        if (metadata < 0)
+            metadata = text.IndexOf(" | exception_",
+                StringComparison.OrdinalIgnoreCase);
+        if (metadata >= 0)
+            text = text[..metadata];
+        return text.Length <= limit ? text : text[..limit].TrimEnd() + "...";
+    }
+    public string OperationId { get; init; } = "";
+    public int RelatedEventCount { get; init; }
+    public IReadOnlyList<AnomalyRelatedLogRow> RelatedLogs { get; init; } = [];
+    public string RelatedSummary => RelatedEventCount == 0
+        ? ""
+        : $"Same operation_id={OperationId}: {RelatedEventCount:N0} " +
+          $"included event(s), showing {RelatedLogs.Count:N0}. " +
+          "No timestamp-only joins; a logger's source line is not proof of root cause.";
+}
+
+/// <summary>
+/// Original, explicitly linked LOG/TXT evidence. Navigation always uses the
+/// selected Logs-folder allowlist, not a path copied out of the log message.
+/// </summary>
+public sealed record AnomalyRelatedLogRow(
+    string Time, string Severity, string Message, string SourceFile, int SourceLine)
+{
+    public string Heading => $"{Time} | {Severity} | {SourceFile}:{SourceLine}";
+}
+
+/// <summary>
+/// C# navigation is allowed only after resolving the site against the
+/// in-memory index of the explicitly selected local source checkout.
+/// </summary>
+public sealed record AnomalySourceCandidateRow(SourceInvestigationCandidate Source)
+{
+    public string Heading => Source.EvidenceLabel + " | " + Source.Location;
+    public string Symbol => Source.Symbol;
+    public string Excerpt => Source.Excerpt;
+    public string Guards => "Conditions: " + Source.Conditions;
+    public string Calls => "Direct calls (static): " + Source.DirectCalls;
 }
 
 /// <summary>Recurring error pattern with one precise source reference.</summary>

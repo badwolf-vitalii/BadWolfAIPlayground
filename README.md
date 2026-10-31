@@ -139,6 +139,40 @@ dotnet restore BadWolfAIPlayground.sln
 dotnet run --project src/BadWolfAIPlayground.App/BadWolfAIPlayground.App.csproj
 ```
 
+### Visual Studio: Roslyn / Microsoft.CodeAnalysis not found
+
+Source-aware Log Investigation uses the **Microsoft.CodeAnalysis.CSharp 4.14.0**
+NuGet package, declared in
+`src/BadWolfAIPlayground.Anomaly/BadWolfAIPlayground.Anomaly.csproj`.
+If Visual Studio shows `CS0234: Microsoft.CodeAnalysis does not exist`
+followed by missing `SyntaxNode`, `SourceInvestigationIndex`, or
+investigation ViewModel types, those later errors are commonly
+**cascading** from an unsuccessful or outdated local NuGet restore.
+
+Open the solution in VS 2022 and choose **Restore NuGet Packages**
+from the solution context menu. You can also close Visual Studio,
+open PowerShell in the repository root, and run:
+
+```powershell
+dotnet restore .\BadWolfAIPlayground.sln --force
+dotnet build .\BadWolfAIPlayground.sln --configuration Debug --no-restore
+```
+
+Reopen/reload the solution after a successful build if the Error List
+still contains stale **active** IntelliSense diagnostics. The Error
+List's **Build Only** filter can distinguish real compiler errors
+from editor design-time state. Do not remove Roslyn `using`
+directives or add references individually to dependent projects:
+the Anomaly project already declares the NuGet dependency and the
+App/tests reference that project.
+
+If restore fails with `NU1301`, `NU1101` or another `NU...`
+diagnostic, fix the indicated NuGet source/network/authentication
+issue rather than changing C# code. You can inspect feeds using
+`dotnet nuget list source` and SDKs using `dotnet --list-sdks`.
+The Windows CI performs both **Release** and **Debug** builds with
+the same declared package.
+
 ### First experiment: Neural Network Lab tutorial
 
 1. Open **START HERE / GUIDED XOR EXPERIMENT**.
@@ -398,6 +432,139 @@ This generic scanner contains **no company source, logging strings,
 secrets or production logs**. Always keep private source in a private
 checkout, and never commit your source data to this public repo.
 
+
+
+### Source-aware log investigation (next stage)
+
+After **Select Logs folder** or **Select local LOG / TXT**, optionally
+choose **Select local C# solution** from an existing checkout. The
+original lightweight logging-template hints remain available; a new
+**Source-aware log investigation** panel additionally uses Roslyn's
+C# syntax parser to index method declarations, literal logging
+statements, interpolated and structured logging templates, enclosing
+`if`/`catch` context and direct method invocations.
+
+The panel investigates up to 12 recurring WARN/ERROR/FATAL patterns,
+8 recent structured TOM_OP groups and 4 findings with exception
+context. Each item retains an original log file and physical line
+and offers up to 5 matching C# candidate locations, source snippets,
+method/type names and static condition/call hints. Both the log
+evidence and a candidate source location can be opened separately
+in Notepad++ at the original line. C# source navigation is restricted
+to indexed files within the user-selected checkout.
+
+**Evidence is not causality.** An exact literal match identifies a
+possible logging statement, not proof that it executed in a specific
+incident. A TOM_OP operation name matching a declared method is a
+weaker hint, not a reconstructed call stack. An explicit stack frame
+contains runtime source evidence, but must still be checked against
+the deployed binary and current checkout. Duplicate matching sites
+are marked **ambiguous**, and missing matches remain **unmatched**.
+No root causes, transaction relationships, code branches or call
+paths are invented.
+
+Source parsing is local and syntax-only: there is **no compilation
+or execution** of selected source, no automatic repository download,
+no AI/cloud request and no persistence of indexed code. The source
+scanner skips generated directories and bounds source files to
+4,000, individual input C# files to 1 MiB, combined indexed source
+to 48 MiB, 20,000 logging sites and 40,000 methods. The result and
+all source snippets exist only in this program's memory. Source
+relationships are recomputed when log file filters or the selected
+source checkout change.
+
+This stage intentionally does **not** ask Ollama to interpret evidence.
+That will be an optional later step once reliable, inspectable source
+references are available.
+
+
+
+#### Find a specific error in all imported logs
+
+The collapsed cards now show a **recognizable message/operation
+preview** rather than repeating generic titles such as
+"Rare error message pattern". A second line shows the original log
+file and physical line, observation time (when available), operation
+ID and number of candidate C# locations. The full original message
+and evidence remain available on expansion.
+
+To find a particular incident, use the **Search all logs** box at
+the top of section **9 — Source-aware log investigation**. Enter
+at least three characters and click **Search all logs** or press
+Enter. Search accepts any case-insensitive substring of the
+message, captured exception continuation, original log filename,
+mirrored filename, or explicit `operation_id`. Examples:
+
+- `41d14983730d4ac6b1c491fc232b77de` — one explicitly identified
+  operation, including ERROR and related DEBUG lines
+- `Unable to read data from the transport connection` — search
+  errors by their actual text rather than statistical ranking
+- `WebClient_2026-10-30.log` — show records associated with that
+  component, including original mirror provenance
+
+**Search examines all currently included, parsed events**, not
+just the 12 top patterns, 8 recent TOM_OP groups or 4 exception
+findings shown by the ordinary summary. It also examines INFO
+and DEBUG events. Search is available **without** choosing a C#
+solution; loading one additionally supplies verified source
+candidates and safe C# navigation. Results are grouped by exact
+`operation_id` when present (otherwise by original source
+filename/line). The UI reports the total number of matching log
+events and displays **up to 40** recent operation/line groups,
+with the highest-severity matching message representing each
+operation and bounded linked evidence below it. Click **Clear
+search** to restore the regular anomaly/operation overview.
+
+The active query is recomputed when the user includes/excludes
+files, reloads logs, changes the source checkout or reanalyzes
+with another sensitivity. Only **retained, parsed events** from
+imported files are searchable; unparsed/omitted file contents
+are not implicitly scanned. Search has a 3–256 character query
+range, supports cancellation, runs off the WPF UI thread when
+submitted, and never writes local logs/source to a service,
+repository or persistence layer. A result is evidence, not a
+confirmed anomaly or diagnosis.
+
+#### Cross-log investigation by operation_id
+
+When an error in `App_*.log` contains an explicit `operation_id`,
+the source-aware analyzer searches **only the currently included,
+deduplicated imported logs** for records with that **exact identifier**.
+It can therefore display a linked DEBUG caller entry in
+`WebClient_*.log`, even when the two files contain different message
+text. Timestamp proximity is **never** sufficient to join records.
+
+For example, an `App` `IOException` containing
+`operation_id=41d14983730d4ac6b1c491fc232b77de` may correspond to
+a `WebClient` DEBUG entry reporting
+`src/AFCS.TOM.UCUILib/Views/UCCardInfoView.xaml.cs: line 1840`.
+The panel shows the shared ID, original log filenames/physical lines,
+severity, a bounded excerpt and the number of included matching events.
+Each related line has its own **Open linked log line** navigation. The
+source candidate opens the verified C# file/line from the selected
+checkout (not the arbitrary absolute path embedded in a log).
+
+Logger-reported C# locations are matched against the **full relative
+path suffix** of files indexed from the explicitly selected checkout.
+An observed malformed `UCCardInfoView\\.xaml.cs` segment is normalized
+to `UCCardInfoView.xaml.cs` **only if** the resulting suffix exists
+among indexed C# files at the given physical line. A filename-only
+coincidence, unindexed checkout, out-of-range line, or unknown ID never
+creates a source navigation link. Source paths and evidence from
+disabled/skipped log files cannot appear in refreshed investigations.
+
+**Interpretation:** same `operation_id` means the logger connected
+these records to the same instrumented operation; a reported C#
+line identifies a place where an exception was **logged**, not
+necessarily the network operation that failed. For socket/TLS/HTTP
+`IOException` cases, the program does not guess whether cancellation,
+client disconnect, timeout or some other cause initiated the failure.
+Use original stack frames, code and runtime context for further diagnosis.
+
+The correlation scan is single-pass over retained events and keeps
+only bounded examples and caller locations for the visible
+investigation IDs. It cannot join files missing from the current
+report and never uploads or persists code or logs.
 
 ### Analyze a complete Logs folder (v0.3.0)
 

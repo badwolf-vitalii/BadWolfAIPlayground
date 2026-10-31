@@ -362,8 +362,10 @@ supported format and any root-cause interpretation remain provisional.
 `LogSourceContextIndex` scans a locally chosen solution directory
 for elementary C# logging statements, supports simple interpolated
 templates with bounded variable spans, and records relative source
-file paths and line numbers. It intentionally does not require a
-Roslyn dependency, cloud access, cloning or persisted embeddings.
+file paths and line numbers. That legacy index is still a simple
+regex matcher; the new independent `SourceInvestigationIndex` adds
+Roslyn syntax parsing. Neither index requires cloud access, cloning
+or persisted embeddings.
 A matched source location is labeled as a *possible* source, not
 proof of execution; no source code or matched message is transferred
 to the public repository. File size, file count, total bytes,
@@ -382,6 +384,143 @@ the WPF source-selection flow. The ability to understand business
 rules still requires human-authored documentation or explicit
 source-level investigation, not just a message-template match.
 
+
+
+### Roslyn-powered source investigation (offline)
+
+The optional **Source-aware log investigation** panel uses
+`SourceInvestigationIndex` in addition to the existing lightweight
+`LogSourceContextIndex`. The index scans only an explicitly selected
+local C# solution directory, ignores common generated/build folders
+and directory reparse points, and parses syntax without compiling,
+loading assemblies or executing any source code. The independent
+.NET 8 Anomaly library has a `Microsoft.CodeAnalysis.CSharp` 4.14.0
+dependency for syntax extraction. Indexing has bounded scanned
+files/bytes, logging-site and method counts and cancellation support.
+
+Logging invocations are parsed as C# syntax, rather than inferred
+by matching arbitrary source text. Recognized direct logger and
+logging-helper methods with literal/interpolated/structured format
+strings become anchored message patterns. An index entry records
+the specific source line, enclosing method and type, a short snippet,
+enclosing `if`/`catch` expressions and directly named invocations
+within the containing method. **Calls and conditions are static
+observations only**, not an evaluated runtime path.
+
+`SourceInvestigationAnalyzer` builds bounded investigation cases
+from the selected, already-deduplicated log report: top recurring
+error patterns, explicitly named TOM_OP operations and exception
+stack traces. Candidates are ranked by evidence category: an exact
+logging literal, a format/interpolation match, a declared operation
+method name, or an explicit stack-frame line that exists in the
+selected checkout. A name match is never promoted into a proven
+runtime invocation. Multiple matching sources remain visible
+and **ambiguous**; no match remains **unmatched**. The scanner never
+correlates events merely by time proximity or guesses business rules.
+
+`AnomalyViewModel` stores the index in memory only and rebuilds
+source cards on regular reanalysis, Include/Exclude filtering and
+source selection. Source-opening commands call
+`SourceInvestigationIndex.ResolveSourceLocation`, which requires
+the requested file/line to be in the indexed file whitelist, checks
+the canonical full path is beneath the chosen checkout, rejects
+reparse-point files and confirms the file still exists. The original
+log location uses the independent Logs-folder allowlist. Both are
+passed as structured Notepad++ arguments, never concatenated into
+shell commands.
+
+This is deterministic groundwork for a *later* optional local LLM
+explanation feature. No user logs or private C# files are bundled,
+committed, transmitted to a server or shared with Ollama.
+Synthetic engine and real Windows WPF smoke tests cover exact
+and formatted logging sites, method declarations, ambiguous
+literals, unmatched evidence, stack references, source navigation
+and the live investigate-on-selection UI lifecycle.
+
+
+
+### Discoverable collapsed evidence and full-log investigation search
+
+The default Source-aware section is intentionally a **bounded
+statistical summary**, not a full-text search index. The ViewModel
+now formats each collapsed `AnomalyInvestigationRow` with a short
+message excerpt (without trailing operation/exception metadata)
+and separate time, category, original filename:line, explicit
+operation ID, and number of C# candidates. It does not disguise
+`0 candidate(s)` as a failed operation.
+
+`SourceInvestigationAnalyzer.Search` performs an on-demand,
+case-insensitive scan over **every retained event** in the current
+`LogParseResult` (including DEBUG and INFO). It matches message
+text, captured continuation, source filename and mirror-target
+aliases. This is separate from `AnomalyDetector`'s bounded
+pattern/finding selection, so an older uncommon IOException
+can be found even when it is absent from the top patterns
+and four displayed exception cases. A query is 3–256 characters.
+The scan counts all matching events but retains at most **40
+recent operation/file-line groups**, preferring error messages
+as their representative when several levels share an exact ID.
+A bounded second pass gathers linked records only for those
+visible exact `operation_id` values. File line numbers are
+never inferred from textual proximity.
+
+`AnomalyViewModel.SearchInvestigationsAsync` runs the scan on
+a background task with cancellation and safely replaces the
+visible investigation cards. The source context is optional;
+search-only cases still display original log evidence and
+Notepad++ navigation. `ClearInvestigationSearch` restores the
+cached ordinary investigation summary without reloading logs.
+The current query is recomputed from the selected report when
+Include/Exclude, file import, source loading or sensitivity
+reanalysis changes the evidence, preventing stale cross-file
+links. A skipped/partially analyzed file cannot be searched
+until it has actually been imported; search counts do not
+pretend to cover missing bytes/lines. No network or LLM call
+is used.
+
+Synthetic engine and Windows WPF tests validate exact
+operation_id queries, free-text IOException and component
+filename search, App/WebClient mirror aliases, unrelated
+same-timestamp IDs, no-code operation, input length and
+cancellation, informative collapsed headers, live search
+binding and clearing, and Include/Exclude refresh.
+
+### Cross-component exception correlation (explicit operation_id only)
+
+`SourceInvestigationAnalyzer` gathers explicit `operation_id` values
+from the bounded, currently visible error pattern, stack/finding
+and TOM_OP evidence. It scans the **selected, deduplicated**
+`AnomalyReport.Source.Events` once for exact matching IDs, recording
+the total matching event count and bounded per-ID samples and caller
+DEBUG messages. Correlation does not use timestamps, message
+similarity, session guessing or files omitted by import/Include/Exclude.
+An App/WebClient mirrored NLog error is still counted once according
+to existing mirror-deduplication rules. The WPF section lists
+related log file/line references and opens them only through
+`AnomalyViewModel.ResolveLogLocation`.
+
+`SourceInvestigationIndex.FindLoggedCallerLocations` parses
+logger-emitted Windows/Unix `<absolute .cs path>: line <n>` hints,
+matching **only full relative source-path suffixes** from files
+explicitly indexed in the selected C# tree; the given physical line
+must exist. A split `.xaml.cs` path fragment is repaired only when
+the resulting normalized complete suffix independently matches an
+indexed file. Method names can be shown only if a Roslyn method
+declaration **contains** that line. The original logged absolute
+path is never accepted as a file-opening target. The candidate is
+clearly labelled a verified **logger-reported location**, distinct
+from a stack-frame location or a mere static logging template.
+
+A shared ID is evidence of **correlation**, not proof of causation;
+a C# logger/catch location is not necessarily where a socket,
+HTTP, SSL or transport error originated. The UI keeps this warning
+and the original source references visible. Regression tests use
+synthetic App/WebClient messages with the same operation ID,
+an unrelated same-timestamp event with a different ID, an archived
+checkout path and a split XAML filename. They verify exact C# line
+resolution, bounded evidence, mirror deduplication, and reanalysis
+after disabling/re-enabling WebClient. No customer source or logs are
+checked in.
 
 ### Importing a whole multi-component Logs directory
 

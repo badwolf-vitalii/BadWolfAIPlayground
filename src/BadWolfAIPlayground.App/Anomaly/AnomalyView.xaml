@@ -531,6 +531,154 @@
                     </ScrollViewer>
                 </StackPanel>
             </Border>
+
+            <Border Style="{StaticResource Card}" Margin="0,17,0,0">
+                <StackPanel>
+                    <TextBlock Text="9  Source-aware log investigation" FontSize="16"
+                               FontWeight="SemiBold" Margin="0,0,0,8"/>
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="AnomalyInvestigationSearchBox" Grid.Column="0"
+                                 Text="{Binding InvestigationSearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Search every included LOG event by message text, operation_id or component filename. Press Enter to search."
+                                 Background="#0B2034" Foreground="#E6F5FC"
+                                 BorderBrush="#3B6280" BorderThickness="1"
+                                 FontSize="12" Padding="11,8" Margin="0,0,9,0">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding SearchInvestigationsCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Button x:Name="AnomalyInvestigationFindButton"
+                                Grid.Column="1" Content="Search all logs"
+                                Style="{StaticResource PrimaryButton}"
+                                Command="{Binding SearchInvestigationsCommand}"
+                                Margin="0,0,8,0"/>
+                        <Button x:Name="AnomalyInvestigationClearButton"
+                                Grid.Column="2" Content="Clear search"
+                                Style="{StaticResource SecondaryButton}"
+                                Command="{Binding ClearInvestigationSearchCommand}"/>
+                    </Grid>
+                    <TextBlock Text="Search text, operation_id or filenames (3+ characters). Includes INFO/DEBUG and errors outside the top findings. Results are limited to 40 groups; every included log event is checked."
+                               FontSize="10" Foreground="#9BC6DA"
+                               TextWrapping="Wrap" Margin="0,0,0,9"/>
+                    <TextBlock Text="{Binding InvestigationSummary}" FontSize="11"
+                               Foreground="#9BC6DA" TextWrapping="Wrap"
+                               Margin="0,0,0,9"/>
+                    <TextBlock Text="Only source syntax and explicit log evidence are joined. Matching code is not a confirmed runtime call path or root cause."
+                               FontSize="11" Foreground="#D1BFA9"
+                               TextWrapping="Wrap" Margin="0,0,0,10"/>
+                    <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="AnomalyInvestigationCases"
+                                      ItemsSource="{Binding Investigations}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Expander BorderBrush="#294C68" BorderThickness="1"
+                                              Background="#0C1C30" Foreground="#D3E6F5"
+                                              Padding="8" Margin="0,0,0,8">
+                                        <Expander.Header>
+                                            <StackPanel MaxWidth="1080">
+                                                <TextBlock Text="{Binding Heading}"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="#D7ECFF"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Evidence}"/>
+                                                <TextBlock Text="{Binding DetailLine}"
+                                                           FontFamily="Consolas" FontSize="10"
+                                                           Foreground="#89BBD6" TextWrapping="Wrap"
+                                                           Margin="0,4,0,0"/>
+                                            </StackPanel>
+                                        </Expander.Header>
+                                        <StackPanel Margin="3,9,3,4">
+                                            <TextBlock Text="{Binding Assessment}"
+                                                       Foreground="#F0CFAC"
+                                                       TextWrapping="Wrap" FontSize="11"/>
+                                            <Border Background="#081625" CornerRadius="5"
+                                                    Padding="9" Margin="0,8,0,6">
+                                                <TextBlock Text="{Binding Evidence}"
+                                                           FontSize="10" FontFamily="Consolas"
+                                                           Foreground="#C8E4F7" TextWrapping="Wrap"/>
+                                            </Border>
+                                            <TextBlock Text="{Binding LogLocation}" FontSize="10"
+                                                       Foreground="#8CCDE9" FontFamily="Consolas"/>
+                                            <Button Content="Open log evidence in Notepad++"
+                                                    HorizontalAlignment="Left" Margin="0,7,0,9"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding DataContext.OpenInvestigationLogCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}"/>
+
+                                            <TextBlock Text="{Binding RelatedSummary}"
+                                                       FontSize="10" Foreground="#80D3D1"
+                                                       TextWrapping="Wrap" Margin="0,8,0,7"/>
+                                            <ItemsControl ItemsSource="{Binding RelatedLogs}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#10283B" BorderBrush="#284C62"
+                                                                BorderThickness="1" CornerRadius="5"
+                                                                Padding="8" Margin="0,0,0,5">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Heading}"
+                                                                           FontFamily="Consolas" FontSize="10"
+                                                                           Foreground="#96CEE9" TextWrapping="Wrap"/>
+                                                                <TextBlock Text="{Binding Message}" FontSize="10"
+                                                                           Foreground="#CCDAE4" TextWrapping="Wrap"
+                                                                           Margin="0,4,0,6"/>
+                                                                <Button Content="Open linked log line"
+                                                                        HorizontalAlignment="Left"
+                                                                        Style="{StaticResource SecondaryButton}"
+                                                                        Command="{Binding DataContext.OpenRelatedLogCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <ItemsControl ItemsSource="{Binding Candidates}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="#10273D" BorderBrush="#365875"
+                                                                BorderThickness="1" CornerRadius="5"
+                                                                Padding="10" Margin="0,0,0,7">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding Heading}"
+                                                                           FontFamily="Consolas"
+                                                                           Foreground="#8DD9C4" FontSize="11"
+                                                                           TextWrapping="Wrap"/>
+                                                                <TextBlock Text="{Binding Symbol}"
+                                                                           Foreground="#D7E8F8"
+                                                                           FontWeight="SemiBold"
+                                                                           Margin="0,4,0,6"/>
+                                                                <TextBlock Text="{Binding Excerpt}"
+                                                                           FontFamily="Consolas"
+                                                                           Foreground="#AACDE3"
+                                                                           FontSize="10" TextWrapping="Wrap"/>
+                                                                <TextBlock Text="{Binding Guards}" FontSize="10"
+                                                                           Foreground="#D9C9AC"
+                                                                           TextWrapping="Wrap" Margin="0,7,0,3"/>
+                                                                <TextBlock Text="{Binding Calls}" FontSize="10"
+                                                                           Foreground="#BED6E8" TextWrapping="Wrap"
+                                                                           Margin="0,0,0,8"/>
+                                                                <Button Content="Open C# source in Notepad++"
+                                                                        HorizontalAlignment="Left"
+                                                                        Style="{StaticResource SecondaryButton}"
+                                                                        Command="{Binding DataContext.OpenCSharpSourceCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Expander>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
         </StackPanel>
     </ScrollViewer>
 </UserControl>
