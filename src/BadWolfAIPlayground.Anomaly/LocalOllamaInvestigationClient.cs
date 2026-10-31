@@ -16,9 +16,14 @@ public sealed record LocalInvestigationExplanation(
     string Summary, IReadOnlyList<LocalInvestigationHypothesis> Hypotheses,
     IReadOnlyList<string> NextChecks, IReadOnlyList<string> Unknowns)
 {
-    public string Notice =>
-        "Model-generated hypotheses, NOT verified root cause. " +
-        "Evidence IDs refer to original imported logs and local indexed C# excerpts.";
+    public bool IsEvidenceOnly { get; init; }
+    public int RequestsMade { get; init; } = 1;
+
+    public string Notice => IsEvidenceOnly
+        ? "Evidence-only fallback: the local model failed to return usable " +
+          "structured JSON; no AI diagnosis was published."
+        : "Model-generated hypotheses, NOT verified root cause. " +
+          "Evidence IDs refer to original imported logs and local indexed C# excerpts.";
 }
 
 /// <summary>
@@ -61,6 +66,11 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
                 "Investigation chat is restricted to http://127.0.0.1:11434/.");
     }
 
+    /// <summary>
+    /// One explicit click makes at most two loopback requests. Both requests
+    /// contain the exact same previewed system and user messages; the second
+    /// attempt only adjusts generation limits or JSON-format compatibility.
+    /// </summary>
     public async Task<LocalInvestigationExplanation> ExplainAsync(
         InvestigationPrompt prompt, string model, CancellationToken token = default)
     {
@@ -71,53 +81,175 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
             throw new ArgumentException("Invalid local Ollama model name.", nameof(model));
         ValidateEndpoint(_http.BaseAddress);
 
-        var payload = new
-        {
-            model,
-            stream = false,
-            format = "json",
-            messages = new[]
-            {
-                new { role = "system", content = prompt.SystemMessage },
-                new { role = "user", content = prompt.UserMessage }
-            },
-            options = new
-            {
-                temperature = 0.0,
-                num_predict = 700,
-                num_ctx = 8192
-            }
-        };
+        object responseSchema = BuildResponseSchema(prompt);
+        bool legacyJsonFormat = false;
         try
         {
-            using HttpResponseMessage response = await _http.PostAsJsonAsync(
-                "api/chat", payload, token).ConfigureAwait(false);
-            if (response.StatusCode == HttpStatusCode.NotFound)
-                throw new InvalidOperationException(
-                    $"Local model '{model}' was not found. Install it using Ollama.");
-            if (!response.IsSuccessStatusCode)
-                throw new InvalidOperationException(
-                    $"Local Ollama investigation failed (HTTP {(int)response.StatusCode}).");
-            string jsonText = await ReadBoundedAsync(response.Content, token)
-                .ConfigureAwait(false);
-            using JsonDocument envelope = JsonDocument.Parse(jsonText);
-            if (!envelope.RootElement.TryGetProperty("message", out JsonElement message) ||
-                !message.TryGetProperty("content", out JsonElement content) ||
-                content.ValueKind != JsonValueKind.String)
-                throw new InvalidDataException("Ollama returned no chat message.");
-            using JsonDocument answer = JsonDocument.Parse(content.GetString() ?? "");
-            return ParseExplanation(answer.RootElement, prompt.Evidence);
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                var payload = new
+                {
+                    model,
+                    stream = false,
+                    // Qwen3 can otherwise spend its entire output allowance
+                    // on thinking instead of producing valid response.content.
+                    think = false,
+                    format = legacyJsonFormat ? (object)"json" : responseSchema,
+                    messages = new[]
+                    {
+                        new { role = "system", content = prompt.SystemMessage },
+                        new { role = "user", content = prompt.UserMessage }
+                    },
+                    options = new
+                    {
+                        temperature = 0.0,
+                        num_predict = attempt == 1 ? 1400 : 2200,
+                        num_ctx = 8192
+                    }
+                };
+                using HttpResponseMessage response = await _http.PostAsJsonAsync(
+                    "api/chat", payload, token).ConfigureAwait(false);
+                if (response.StatusCode == HttpStatusCode.NotFound)
+                    throw new InvalidOperationException(
+                        $"Local model '{model}' was not found. Install it using Ollama.");
+                if (response.StatusCode == HttpStatusCode.BadRequest && attempt == 1)
+                {
+                    // Older local Ollama installations may support format:"json"
+                    // but not a schema object. Try once with the same messages.
+                    legacyJsonFormat = true;
+                    continue;
+                }
+                if (!response.IsSuccessStatusCode)
+                    throw new InvalidOperationException(
+                        $"Local Ollama investigation failed (HTTP {(int)response.StatusCode}).");
+
+                try
+                {
+                    string envelopeText = await ReadBoundedAsync(response.Content, token)
+                        .ConfigureAwait(false);
+                    using JsonDocument envelope = JsonDocument.Parse(envelopeText);
+                    JsonElement root = envelope.RootElement;
+                    if (root.ValueKind != JsonValueKind.Object ||
+                        !root.TryGetProperty("message", out JsonElement message) ||
+                        message.ValueKind != JsonValueKind.Object ||
+                        !message.TryGetProperty("content", out JsonElement content) ||
+                        content.ValueKind != JsonValueKind.String)
+                        throw new InvalidDataException("Ollama returned no chat message.");
+
+                    // Ollama reports "length" when the model runs out of
+                    // prediction tokens; never publish a partial answer.
+                    if (root.TryGetProperty("done_reason", out JsonElement reason) &&
+                        reason.ValueKind == JsonValueKind.String &&
+                        reason.GetString() == "length")
+                        throw new InvalidDataException("The local model ran out of output tokens.");
+
+                    string modelText = UnwrapJsonFence(content.GetString() ?? "");
+                    using JsonDocument answer = JsonDocument.Parse(modelText);
+                    LocalInvestigationExplanation validated =
+                        ParseExplanation(answer.RootElement, prompt.Evidence);
+                    return validated with { RequestsMade = attempt };
+                }
+                catch (JsonException)
+                {
+                    // A malformed JSON reply is untrusted and never published.
+                    // Retry at most once using the same user-reviewed messages.
+                }
+                catch (InvalidDataException)
+                {
+                    // Wrong structure, invalid citations, truncated responses
+                    // and size violations are also never shown as AI findings.
+                }
+            }
+            // Show a clearly labeled deterministic fallback rather than
+            // silently presenting an empty UI or a malformed model claim.
+            return EvidenceOnlyFallback(prompt);
         }
         catch (HttpRequestException ex)
         {
             throw new InvalidOperationException(
                 "Cannot connect to local Ollama on http://127.0.0.1:11434/.", ex);
         }
-        catch (JsonException ex)
+    }
+
+    private static object BuildResponseSchema(InvestigationPrompt prompt)
+    {
+        string[] allowedIds = prompt.Evidence.Select(item => item.Id).ToArray();
+        return new
         {
-            throw new InvalidDataException(
-                "The local model returned invalid structured JSON; no diagnosis was published.", ex);
-        }
+            type = "object",
+            properties = new
+            {
+                summary = new { type = "string" },
+                hypotheses = new
+                {
+                    type = "array",
+                    maxItems = 3,
+                    items = new
+                    {
+                        type = "object",
+                        properties = new
+                        {
+                            claim = new { type = "string" },
+                            evidence_ids = new
+                            {
+                                type = "array",
+                                minItems = 1,
+                                maxItems = 4,
+                                items = new { type = "string", @enum = allowedIds }
+                            }
+                        },
+                        required = new[] { "claim", "evidence_ids" }
+                    }
+                },
+                next_checks = new
+                {
+                    type = "array",
+                    maxItems = 5,
+                    items = new { type = "string" }
+                },
+                unknowns = new
+                {
+                    type = "array",
+                    maxItems = 4,
+                    items = new { type = "string" }
+                }
+            },
+            required = new[] { "summary", "hypotheses", "next_checks", "unknowns" }
+        };
+    }
+
+    private static string UnwrapJsonFence(string content)
+    {
+        string trimmed = content.Trim();
+        string fence = new((char)96, 3);
+        if (!trimmed.StartsWith(fence, StringComparison.Ordinal) ||
+            !trimmed.EndsWith(fence, StringComparison.Ordinal))
+            return trimmed;
+        int newline = trimmed.IndexOf('\n');
+        return newline < 0
+            ? trimmed : trimmed.Substring(newline + 1,
+                trimmed.Length - newline - 4).Trim();
+    }
+
+    private static LocalInvestigationExplanation EvidenceOnlyFallback(
+        InvestigationPrompt prompt)
+    {
+        InvestigationPromptEvidence? primary =
+            prompt.Evidence.FirstOrDefault(item => item.Id == "L1");
+        string summary = primary is null
+            ? "Evidence-only: no primary LOG line was available."
+            : "Evidence-only: a LOG event was recorded at " + primary.Location +
+              ". The underlying cause remains undetermined.";
+        return new LocalInvestigationExplanation(
+            summary, [],
+            ["Inspect the original LOG line and the preceding operation state."],
+            ["The local model did not provide a valid structured answer after " +
+             "two bounded attempts. No model-generated diagnosis was accepted."])
+        {
+            IsEvidenceOnly = true,
+            RequestsMade = 2
+        };
     }
 
     public static LocalInvestigationExplanation ParseExplanation(
@@ -129,18 +261,21 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
 
         string summary = ReadText(json, "summary", 1000);
         var evidenceById = evidence.ToDictionary(e => e.Id, StringComparer.Ordinal);
-        JsonElement hypotheses = RequireArray(json, "hypotheses", 3);
+        // Small local models sometimes ignore array-size instructions.
+        // Only displayed entries may contribute claims, and each is validated.
+        JsonElement hypotheses = RequireArray(json, "hypotheses", 24);
+        int extraHypotheses = Math.Max(0, hypotheses.GetArrayLength() - 3);
         var claims = new List<LocalInvestigationHypothesis>();
-        foreach (JsonElement item in hypotheses.EnumerateArray())
+        foreach (JsonElement item in hypotheses.EnumerateArray().Take(3))
         {
             if (item.ValueKind != JsonValueKind.Object)
                 throw new InvalidDataException("Malformed explanation hypothesis.");
             string claim = ReadText(item, "claim", 650);
-            JsonElement ids = RequireArray(item, "evidence_ids", 4);
+            JsonElement ids = RequireArray(item, "evidence_ids", 24);
             if (ids.GetArrayLength() == 0)
                 throw new InvalidDataException("Uncited hypothesis rejected.");
             var references = new List<InvestigationPromptEvidence>();
-            foreach (JsonElement value in ids.EnumerateArray())
+            foreach (JsonElement value in ids.EnumerateArray().Take(4))
             {
                 if (value.ValueKind != JsonValueKind.String ||
                     !evidenceById.TryGetValue(value.GetString() ?? "",
@@ -155,6 +290,9 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
 
         var checks = ReadTexts(json, "next_checks", 5, 500);
         var unknowns = ReadTexts(json, "unknowns", 4, 500).ToList();
+        if (extraHypotheses > 0)
+            unknowns.Insert(0, extraHypotheses + " extra model hypothesis(es) " +
+                "were omitted to keep the response bounded.");
         bool hasCode = evidence.Any(item => item.Id.StartsWith('C'));
         // Cite an actual *supporting* entry, not just the primary L1 failure.
         // A separate LOG line or an indexed guard at a matched logging
@@ -216,15 +354,15 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     private static IReadOnlyList<string> ReadTexts(
         JsonElement root, string name, int maxCount, int maxLength)
     {
-        JsonElement list = RequireArray(root, name, maxCount);
-        return list.EnumerateArray()
+        JsonElement list = RequireArray(root, name, 32);
+        return list.EnumerateArray().Take(maxCount)
             .Select(item => item.ValueKind == JsonValueKind.String
                 ? item.GetString() ?? ""
                 : throw new InvalidDataException($"Invalid '{name}' element."))
             .Select(value => value.Trim())
-            .Select(value => value.Length is > 0 && value.Length <= maxLength
-                ? value
-                : throw new InvalidDataException($"Oversized or empty '{name}' element."))
+            .Select(value => value.Length == 0
+                ? throw new InvalidDataException($"Empty '{name}' element.")
+                : value.Length <= maxLength ? value : value[..(maxLength - 3)] + "...")
             .ToArray();
     }
 
@@ -232,10 +370,10 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
     {
         if (!item.TryGetProperty(key, out JsonElement value) ||
             value.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(value.GetString()) ||
-            value.GetString()!.Length > maxLength)
-            throw new InvalidDataException($"Invalid or oversized '{key}' in model response.");
-        return value.GetString()!.Trim();
+            string.IsNullOrWhiteSpace(value.GetString()))
+            throw new InvalidDataException($"Invalid '{key}' in model response.");
+        string text = value.GetString()!.Trim();
+        return text.Length <= maxLength ? text : text[..(maxLength - 3)] + "...";
     }
 
     private static async Task<string> ReadBoundedAsync(

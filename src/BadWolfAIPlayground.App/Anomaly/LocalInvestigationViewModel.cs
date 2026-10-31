@@ -240,7 +240,8 @@ public sealed partial class AnomalyViewModel
                 foreach (string unknown in answer.Unknowns)
                     LocalAiUnknowns.Add(unknown);
                 LocalAiStatus = $"{answer.Notice} Local model: {model}. " +
-                    $"{prompt.Evidence.Count} excerpts submitted; " +
+                    $"{prompt.Evidence.Count} excerpts submitted in " +
+                    $"{answer.RequestsMade} loopback request(s); " +
                     "no cloud request or persisted conversation.";
             });
         }

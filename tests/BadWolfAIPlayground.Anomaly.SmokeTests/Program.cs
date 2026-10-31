@@ -32,7 +32,11 @@ var checks = new (string Name, Action Execute)[]
     ("Local Ollama explanation validates every evidence reference", OllamaInvestigationClient),
     ("Source-aware AI includes branch conditions, calls and ambiguity audit", CodeAwareInvestigationQuality),
     ("Sparse evidence suppresses unsupported causal model claims", SparseEvidenceRefusesCausalClaims),
-    ("Mirrored log targets cannot manufacture independent AI evidence", MirroredLogsAreNotCorroboration)
+    ("Mirrored log targets cannot manufacture independent AI evidence", MirroredLogsAreNotCorroboration),
+    ("Small chat models may exceed the display item counts without breaking analysis", ExtraLocalModelItems),
+    ("Truncated Qwen output retries with unchanged previewed LOG/C# evidence", TruncatedLocalModelRetry),
+    ("Legacy JSON mode can retry a rejected schema without changing messages", LegacyLocalModelFormatRetry),
+    ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback)
 };
 
 int failed = 0;
@@ -1340,8 +1344,18 @@ static void OllamaInvestigationClient()
         JsonElement root = data.RootElement;
         Ensure(root.GetProperty("model").GetString() == "qwen3:4b-instruct" &&
                !root.GetProperty("stream").GetBoolean() &&
-               root.GetProperty("format").GetString() == "json" &&
+               root.GetProperty("format").GetProperty("type").GetString() == "object" &&
+               root.GetProperty("format").GetProperty("properties")
+                   .GetProperty("hypotheses").GetProperty("maxItems").GetInt32() == 3 &&
+               root.GetProperty("format").GetProperty("properties")
+                   .GetProperty("hypotheses").GetProperty("items")
+                   .GetProperty("properties").GetProperty("evidence_ids")
+                   .GetProperty("items").GetProperty("enum").EnumerateArray()
+                   .Select(item => item.GetString())
+                   .SequenceEqual(prompt.Evidence.Select(item => item.Id)) &&
+               !root.GetProperty("think").GetBoolean() &&
                root.GetProperty("options").GetProperty("num_ctx").GetInt32() == 8192 &&
+               root.GetProperty("options").GetProperty("num_predict").GetInt32() == 1400 &&
                root.GetProperty("messages")[0].GetProperty("role").GetString() == "system" &&
                root.GetProperty("messages")[1].GetProperty("content").GetString() ==
                    prompt.UserMessage,
@@ -1733,6 +1747,172 @@ static void MirroredLogsAreNotCorroboration()
            added.Evidence[1].Excerpt.Contains("before printing",
                StringComparison.Ordinal),
         "Distinct DEBUG state evidence must survive mirror deduplication.");
+}
+
+static void ExtraLocalModelItems()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What facts are recorded?");
+    using JsonDocument tooMany = JsonDocument.Parse(JsonSerializer.Serialize(new
+    {
+        summary = "A transport failure was recorded.",
+        hypotheses = Enumerable.Range(1, 6).Select(number => new
+        {
+            claim = "Tentative pattern " + number,
+            evidence_ids = new[] { "L1", "L2" }
+        }),
+        next_checks = Enumerable.Range(1, 9)
+            .Select(number => "Review diagnostic check " + number),
+        unknowns = Enumerable.Range(1, 7)
+            .Select(number => "Unknown condition " + number)
+    }));
+
+    LocalInvestigationExplanation answer =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            tooMany.RootElement, prompt.Evidence);
+    Ensure(answer.Hypotheses.Count == 3 &&
+           answer.Hypotheses.All(item => item.References.Any(reference =>
+               reference.Id == "L2")) &&
+           answer.NextChecks.Count == 5 &&
+           answer.Unknowns.Count <= 4 &&
+           answer.Unknowns.Any(item => item.Contains("extra model hypothesis",
+               StringComparison.Ordinal)),
+        "Small-model overproduction must be capped, not rejected, without " +
+        "publishing unvalidated evidence references.");
+}
+
+static void TruncatedLocalModelRetry()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What happened?");
+    int calls = 0;
+    string[] exactMessages = [prompt.SystemMessage, prompt.UserMessage];
+    var handler = new InvestigationHttpHandler(async (request, token) =>
+    {
+        calls++;
+        using JsonDocument sent = JsonDocument.Parse(
+            await request.Content!.ReadAsStringAsync(token));
+        JsonElement payload = sent.RootElement;
+        Ensure(request.RequestUri?.ToString() ==
+                   "http://127.0.0.1:11434/api/chat" &&
+               payload.GetProperty("format").ValueKind == JsonValueKind.Object &&
+               payload.GetProperty("think").GetBoolean() == false &&
+               payload.GetProperty("messages").EnumerateArray()
+                   .Select(item => item.GetProperty("content").GetString())
+                   .SequenceEqual(exactMessages) &&
+               payload.GetProperty("options").GetProperty("num_predict").GetInt32() ==
+                   (calls == 1 ? 1400 : 2200),
+            "Each local retry must use exactly the previewed messages and " +
+            "increase only the output-token budget.");
+        if (calls == 1)
+            return LocalChatReply("{\"summary\": \"incomplete", "length");
+        string valid = """
+            {"summary":"A transport error was logged.",
+             "hypotheses":[{"claim":"A different state may explain it.",
+                            "evidence_ids":["L2"]}],
+             "next_checks":["Check the operation state."],
+             "unknowns":["Failure cause remains unknown."]}
+            """;
+        string fence = new((char)96, 3);
+        return LocalChatReply(fence + "json\n" + valid + "\n" + fence);
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation result = client.ExplainAsync(
+        prompt, "qwen3:4b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && result.RequestsMade == 2 &&
+           !result.IsEvidenceOnly && result.Hypotheses.Count == 1 &&
+           result.Hypotheses[0].References.Single().Id == "L2",
+        "Truncated Qwen output must be retried at most once and the " +
+        "second fenced JSON reply must still pass citation checks.");
+}
+
+static void LegacyLocalModelFormatRetry()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "Explain the logged failure.");
+    int calls = 0;
+    var handler = new InvestigationHttpHandler(async (request, token) =>
+    {
+        calls++;
+        using JsonDocument sent = JsonDocument.Parse(
+            await request.Content!.ReadAsStringAsync(token));
+        JsonElement payload = sent.RootElement;
+        Ensure(payload.GetProperty("messages")[1]
+                   .GetProperty("content").GetString() == prompt.UserMessage &&
+               payload.GetProperty("messages")[0]
+                   .GetProperty("content").GetString() == prompt.SystemMessage,
+            "A format compatibility retry must preserve both exact messages.");
+        if (calls == 1)
+        {
+            Ensure(payload.GetProperty("format").ValueKind == JsonValueKind.Object,
+                "The first request must use a bounded response JSON Schema.");
+            return new HttpResponseMessage(HttpStatusCode.BadRequest);
+        }
+        Ensure(payload.GetProperty("format").GetString() == "json",
+            "Only the single compatibility retry may use legacy JSON mode.");
+        return LocalChatReply("""
+            {"summary":"The network request failed.",
+             "hypotheses":[],
+             "next_checks":["Check earlier request events."],
+             "unknowns":["Causal origin is unknown."]}
+            """);
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation answer = client.ExplainAsync(
+        prompt, "qwen2.5:1.5b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && answer.RequestsMade == 2 &&
+           !answer.IsEvidenceOnly && answer.Hypotheses.Count == 0,
+        "Older JSON-only Ollama should work without a third request.");
+}
+
+static void InvalidLocalModelFallback()
+{
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        SampleLocalInvestigation(), "What caused this failure?");
+    int calls = 0;
+    var handler = new InvestigationHttpHandler((_, _) =>
+    {
+        calls++;
+        return Task.FromResult(LocalChatReply(
+            "{\"summary\":\"Printer hardware broken\", \"hypotheses\": ["));
+    });
+    using var http = new HttpClient(handler)
+    {
+        BaseAddress = new Uri(LocalOllamaInvestigationClient.LocalEndpoint)
+    };
+    using var client = new LocalOllamaInvestigationClient(http);
+    LocalInvestigationExplanation answer = client.ExplainAsync(
+        prompt, "qwen3:4b-instruct").GetAwaiter().GetResult();
+    Ensure(calls == 2 && answer.RequestsMade == 2 &&
+           answer.IsEvidenceOnly && answer.Hypotheses.Count == 0 &&
+           answer.Notice.Contains("no AI diagnosis", StringComparison.Ordinal) &&
+           !answer.Summary.Contains("hardware broken",
+               StringComparison.OrdinalIgnoreCase) &&
+           answer.Unknowns.Any(value => value.Contains("two bounded attempts",
+               StringComparison.Ordinal)),
+        "Two invalid JSON responses must never publish model assertions " +
+        "or issue additional requests.");
+}
+
+static HttpResponseMessage LocalChatReply(string content, string reason = "stop")
+{
+    return new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(JsonSerializer.Serialize(new
+        {
+            message = new { role = "assistant", content },
+            done = true,
+            done_reason = reason
+        }), Encoding.UTF8, "application/json")
+    };
 }
 
 sealed class InvestigationHttpHandler(

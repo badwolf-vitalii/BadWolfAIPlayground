@@ -65,16 +65,40 @@ bodies to be submitted. A model or question change cannot silently
 replace the chosen evidence; reanalysis, new logs or Include/Exclude
 discard the prepared prompt and any previous AI explanation.
 
-The response is requested as structured JSON. Each proposed hypothesis
-must reference one or more actual labeled evidence IDs; fabricated
-references, absent citations, malformed JSON and oversized replies
-are **rejected**. Source-ID validation guarantees provenance, not
+The model response is requested using a JSON Schema tied to the packet's
+actual evidence IDs. Fabricated or missing citations in displayed claims are
+**rejected**, and a response larger than the 64 KiB network budget is never
+published. Older local models may ignore list-size instructions: extra items
+are omitted rather than causing the entire investigation to fail. Source-ID validation guarantees provenance, not
 the semantic correctness of the model's conclusion: inspect the
 original referenced lines. The UI shows next checks and remaining
 unknowns separately and supports cancellation. No prompts or
 generated responses are persisted by the application (Ollama itself
 may keep service logs according to its configuration). Missing
 Ollama/model does not break the deterministic log analyzer.
+
+
+### Robust local model responses (v0.5.0)
+
+Ollama now receives a bounded response **JSON Schema**, with valid evidence
+IDs enumerated for the current case, and `think: false` to keep Qwen3 from
+spending the response allowance on a separate reasoning trace. The first
+response has an expanded 1,400-token generation limit. A truncated, invalid
+or structurally unusable reply may trigger **one automatic local retry** with
+the *same* previewed system/user messages and a 2,200-token limit. If an old
+Ollama service rejects the schema with HTTP 400, only the second request uses
+the simpler `format: "json"`. Both attempts are authorized by the single
+explicit **Explain** click; no new LOG/C# content is retrieved or sent.
+
+Small-model responses with more than three hypotheses, five next checks or
+four unknowns are safely bounded to the displayed limits instead of causing
+a full response failure. Every **displayed** hypothesis must still have valid
+evidence references; the v0.5.0 conservative causal-support checks remain
+active. If both attempts fail, the UI displays an explicitly marked
+**evidence-only fallback** with no accepted AI hypothesis or invented cause.
+The UI also reports how many loopback requests were made. A successful
+request cannot establish semantic or causal correctness, and no prompt/model
+response is persisted by this application.
 
 ### Code-aware, evidence-audited investigation (v0.5.0)
 

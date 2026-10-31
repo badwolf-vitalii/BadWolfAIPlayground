@@ -579,7 +579,7 @@
                               BorderBrush="#335474" BorderThickness="1"
                               Padding="11" Margin="0,3,0,12">
                         <StackPanel>
-                            <TextBlock Text="Only an explicit Explain click sends the previewed excerpts to http://127.0.0.1:11434. Local model output is a hypothesis, not an established diagnosis."
+                            <TextBlock Text="Only Explain sends previewed excerpts to local Ollama (127.0.0.1:11434). Invalid JSON may trigger one repeat with the SAME previewed evidence. Model explanations are unverified."
                                        FontSize="11" Foreground="#D9BF9C"
                                        TextWrapping="Wrap" Margin="0,0,0,9"/>
                             <TextBlock Text="{Binding PreparedEvidenceTitle}" Foreground="#A8DBF1"

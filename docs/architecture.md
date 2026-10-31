@@ -375,6 +375,39 @@ controls and that preview/prepare remain local without
 sending a request. Real-model behavior still requires
 manual verification on the user's own machine.
 
+
+### Local Ollama structured-response interoperability (v0.5.0 follow-up)
+
+`LocalOllamaInvestigationClient.ExplainAsync` now sends a JSON Schema
+as `format` on the first `/api/chat` request. The schema requires
+`summary`, `hypotheses`, `next_checks` and `unknowns`, constrains
+array sizes, and enumerates the *actual selected packet IDs* as the only
+valid evidence reference values. The request sets `think=false`
+(avoiding Qwen3 reasoning-token starvation), `temperature=0`,
+`num_predict=1400` and `num_ctx=8192`. A second local attempt
+uses the exact same previewed system/user message bodies and raises
+`num_predict` to 2200. An HTTP 400 on the schema request can
+trigger a single compatibility retry with `format="json"`.
+
+The parser accepts an otherwise valid JSON answer wrapped in a single
+Markdown code fence, and bounds overlong model arrays to three visible
+hypotheses, five checks and four unknowns. It validates the citations
+of **every published hypothesis**, including the existing L2/C# guard
+support requirement. Surplus unshown model entries never become claims.
+Raw responses remain capped at 64 KiB and neither an invalid citation
+nor a malformed/partial JSON message can be published as an AI finding.
+
+One user-initiated click can therefore send **at most two** local
+loopback requests containing precisely the already previewed evidence.
+If both attempts fail to produce a valid structured answer, the
+client supplies a separately labelled **deterministic evidence-only
+fallback**, with no AI-generated hypotheses and no false diagnosis.
+The WPF status lists the request count and makes this distinction
+visible. All retries support cancellation. CI covers mock Qwen3
+truncation and fenced JSON, excessive arrays from small models,
+HTTP 400 compatibility, and persistent malformed output; **actual
+Ollama model quality requires manual Windows validation**.
+
 ### Code-aware local investigation, evidence audit and conservative claims (v0.5.0)
 
 The selected `SourceInvestigationCase` remains the **only source** of model
