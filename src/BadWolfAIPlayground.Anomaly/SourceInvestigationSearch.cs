@@ -83,6 +83,10 @@ public static partial class SourceInvestigationAnalyzer
             .Where(id => id.Length > 0)
             .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var idSet = new HashSet<string>(ids, StringComparer.OrdinalIgnoreCase);
+        var selectedById = chosen.Values
+            .Where(entry => ReadOperationId(entry.Message).Length > 0)
+            .ToDictionary(entry => ReadOperationId(entry.Message),
+                StringComparer.OrdinalIgnoreCase);
         var correlated = new Dictionary<string, CorrelatedEvents>(
             StringComparer.OrdinalIgnoreCase);
         if (idSet.Count > 0)
@@ -100,7 +104,10 @@ public static partial class SourceInvestigationAnalyzer
                 if (id.Length == 0 || !idSet.Contains(id))
                     continue;
                 if (!correlated.TryGetValue(id, out CorrelatedEvents? group))
-                    correlated[id] = group = new CorrelatedEvents();
+                {
+                    selectedById.TryGetValue(id, out LogEvent? focus);
+                    correlated[id] = group = new CorrelatedEvents(focus);
+                }
                 group.Add(entry);
             }
         }

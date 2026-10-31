@@ -376,6 +376,40 @@ sending a request. Real-model behavior still requires
 manual verification on the user's own machine.
 
 
+### Failure-focused bounded sample of large operation_id groups (v0.5.0)
+
+Earlier the `CorrelatedEvents` aggregator kept the first few matching
+events; `InvestigationPromptBuilder` then transmitted the first six,
+which hid near-failure state for long operations (e.g., 72 events and a
+late `Purge() FAILED`). The aggregator now maintains **bounded**
+first/recent/late-problem/caller pools and (for explicit search results)
+a rolling window of three correlated records on either side of the
+selected original `LogEvent`. All candidates share the **exact**
+operation_id. This is evidence correlation, not an inferred runtime
+call graph. Source caller discovery also considers recent and focus-window
+caller locations, which still must validate against the indexed checkout.
+
+The UI retains at most twelve distinct events, sorted by timestamp,
+from a diversified operation sample. The prompt builder independently
+selects up to six distinct supporting LOG records, prioritizing the
+two nearest preceding records, the next record, a C# caller location,
+a late warning/error, and a beginning/outcome anchor; remaining slots
+are filled by time proximity or late events. The original selected
+failure is excluded from L2+ as a duplicate of L1. Mirror copies with
+equal timestamp+message are still deduplicated, and no other operation
+IDs or excluded LOG files can be included. Original observation
+timestamps (ISO 8601) accompany numbered evidence to avoid suggesting
+a cross-file ordering without showing actual times.
+
+Both in-memory group sampling and Ollama prompts remain bounded. The
+system instruction now explicitly warns that a six-event excerpt is
+**not an exhaustive audit** of a much larger operation. The selection
+does not establish that a C# method executed or that a later error was
+caused by an earlier event. New synthetic regression coverage uses a
+72-entry card-issuing/Purge failure with relevant pre-/post-failure
+events, a source caller, foreign operation ID, and included-only
+filtering to guard against first-six bias and incorrect correlation.
+
 ### Bounded local context for ID-less log investigations (v0.5.0)
 
 `SourceInvestigationAnalyzer.Search` retains its strict operation_id-only

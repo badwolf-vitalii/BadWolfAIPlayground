@@ -37,7 +37,8 @@ var checks = new (string Name, Action Execute)[]
     ("Truncated Qwen output retries with unchanged previewed LOG/C# evidence", TruncatedLocalModelRetry),
     ("Legacy JSON mode can retry a rejected schema without changing messages", LegacyLocalModelFormatRetry),
     ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback),
-    ("ID-less same-file LOG context is bounded, labeled and never causally linked", SameFileLogContext)
+    ("ID-less same-file LOG context is bounded, labeled and never causally linked", SameFileLogContext),
+    ("Long operations preserve pre-failure context, outcome and source hints", FocusedLongOperationSampling)
 };
 
 int failed = 0;
@@ -2019,6 +2020,105 @@ static void SameFileLogContext()
            InvestigationPromptBuilder.Build(limited, "Investigate.")
                .Evidence.Count <= 1 + InvestigationPromptBuilder.MaxRelatedLogs,
         "Large files cannot expand the bounded same-file context beyond six LOG records.");
+}
+
+static void FocusedLongOperationSampling()
+{
+    const string id = "5b8a87e4e4194e2084bb884b22d0a652";
+    const string unrelatedId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const string mainFile = "App_2026-10-30.log";
+    const string printerFile = "CardPrinter_2026-10-30.log";
+    var start = new DateTimeOffset(2026, 10, 30, 16, 25, 0, TimeSpan.Zero);
+    var entries = new List<LogEvent>();
+    for (int i = 0; i < 72; i++)
+    {
+        string message = i switch
+        {
+            0 => "CheckCardIssuing started",
+            66 => "UCCardIssuing.xaml.cs: line 1200",
+            67 => "CheckCardIssuing parsed the card structure",
+            68 => "Purge() requested",
+            69 => "Purge() FAILED",
+            70 => "Receipt printing was skipped after the error",
+            71 => "CheckCardIssuing ended with unsuccessful status",
+            _ => "Read-card diagnostic step " + i
+        };
+        LogSeverity severity = i == 69 ? LogSeverity.Error :
+            i == 71 ? LogSeverity.Warning : LogSeverity.Debug;
+        entries.Add(new LogEvent(start.AddMilliseconds(i * 100),
+            severity, message + " | operation_id=" + id, 1500 + i)
+        {
+            SourceFile = i % 2 == 0 ? printerFile : mainFile
+        });
+    }
+    entries.Add(new LogEvent(start.AddMilliseconds(69 * 100),
+        LogSeverity.Error, "An unrelated operation failed | operation_id=" +
+            unrelatedId, 10000) { SourceFile = printerFile });
+    LogParseResult all = new(
+        entries.OrderBy(entry => entry.Timestamp).ToArray(),
+        entries.Count, 0, 0);
+
+    SourceInvestigationSearchResult search =
+        SourceInvestigationAnalyzer.Search(all, null, "Purge() FAILED");
+    SourceInvestigationCase selected = search.Cases.Single();
+    Ensure(selected.RelatedEventCount == 72 &&
+           selected.OperationId == id &&
+           selected.RelatedEvents.Count <=
+               SourceInvestigationAnalyzer.MaxRelatedEventsDisplayed &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("Purge() requested", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("CheckCardIssuing started", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.Any(item =>
+               item.Message.Contains("unsuccessful status", StringComparison.Ordinal)) &&
+           selected.RelatedEvents.All(item =>
+               !item.Message.Contains(unrelatedId, StringComparison.Ordinal)),
+        "A 72-record operation must retain its real initial and terminal " +
+        "state plus the failure neighborhood without cross-operation joining.");
+
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(selected,
+        "Which checked stages preceded Purge() FAILED?");
+    Ensure(prompt.Evidence.Count == 1 +
+               InvestigationPromptBuilder.MaxRelatedLogs &&
+           prompt.Evidence[0].Excerpt.Contains("Purge() FAILED",
+               StringComparison.Ordinal) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("Purge() requested", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("parsed the card structure", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("unsuccessful status", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains("CheckCardIssuing started", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).Any(item =>
+               item.Excerpt.Contains(".cs: line 1200", StringComparison.Ordinal)) &&
+           prompt.Evidence.Skip(1).All(item =>
+               item.Kind.StartsWith("Related LOG entry", StringComparison.Ordinal) &&
+               item.Kind.Contains("timestamp", StringComparison.Ordinal)) &&
+           prompt.Audit.Contains("72 correlated entries in total",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters &&
+           prompt.SystemMessage.Contains("bounded six-entry sample",
+               StringComparison.Ordinal),
+        "The six selected LOG excerpts must be relevant to the failure " +
+        "rather than the six earliest DEBUG events; the model must see " +
+        "timestamps and understand that omitted events can still exist.");
+
+    LogParseResult includedOnly = all with
+    {
+        Events = all.Events.Where(entry => entry.SourceFile == mainFile).ToArray()
+    };
+    SourceInvestigationCase filtered =
+        SourceInvestigationAnalyzer.Search(includedOnly, null,
+            "Purge() FAILED").Cases.Single();
+    InvestigationPrompt afterFilter = InvestigationPromptBuilder.Build(filtered,
+        "Which events can still be inspected?");
+    Ensure(filtered.RelatedEventCount == 36 &&
+           afterFilter.Evidence.All(item => item.SourceFile == mainFile) &&
+           !afterFilter.UserMessage.Contains("Purge() requested",
+               StringComparison.Ordinal),
+        "Include/Exclude recomputation must remove all disabled-component " +
+        "event references, even from a long correlated operation.");
 }
 
 sealed class InvestigationHttpHandler(

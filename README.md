@@ -97,6 +97,27 @@ support for a causal hypothesis. This remains a bounded selection,
 not the entire history of the imported logs; missing surrounding entries
 in the packet do not prove none exist in the original files.
 
+### Failure-focused sampling of long operations (v0.5.0)
+
+A single explicit `operation_id` can contain dozens of DEBUG/INFO records.
+Previously the source-aware investigation showed mainly the earliest entries
+and sent the first six of those to Ollama, so a late failure like
+`Purge() FAILED` could be deprived of relevant context. The bounded
+correlation scan now retains a small **beginning**, **recent**,
+**WARN/ERROR**, **logger-reported C# caller**, and **selected-hit
+neighborhood** sample. Only the already included/imported events are used.
+
+Preparing the AI request selects up to six **distinct operation-correlated
+LOG** entries with priority for the last steps **before the selected
+event**, the next step, a possible source caller, an error/outcome and the
+start of the operation. The user preview now includes original timestamps
+for every numbered LOG entry and explicitly warns that a short sample
+does **not** prove other entries are absent from the full imported logs.
+The separate primary LOG entry remains `L1`. Source locations are
+validated only against the selected local C# checkout, when provided.
+No new network/file access, automatic model call or extra context budget
+has been introduced.
+
 ### Robust local model responses (v0.5.0)
 
 Ollama now receives a bounded response **JSON Schema**, with valid evidence
