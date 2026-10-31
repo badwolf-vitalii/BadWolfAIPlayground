@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -36,6 +37,17 @@ internal static class Program
             window.Show();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
             window.UpdateLayout();
+
+            var appAssembly = typeof(MainWindow).Assembly;
+            string? informationalVersion = appAssembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+                .InformationalVersion;
+            string expectedVersion = informationalVersion?.Split('+')[0] ??
+                appAssembly.GetName().Version?.ToString(3) ?? "unknown";
+            Assert(window.FindName("AppVersionText") is TextBlock versionText &&
+                   versionText.Text == $"v{expectedVersion}  ·  .NET 8",
+                "The sidebar version must match the application assembly version.");
+            Console.WriteLine("PASS sidebar app version matches assembly metadata");
 
             if (window.DataContext is not MainViewModel viewModel)
             {
