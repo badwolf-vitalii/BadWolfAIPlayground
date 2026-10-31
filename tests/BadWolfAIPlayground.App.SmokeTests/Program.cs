@@ -474,6 +474,40 @@ internal static class Program
                     row.Candidates.Any(candidate =>
                         candidate.Source.RelativePath == "DemoWorker.cs")),
                     "Source investigation candidates must render in real WPF expanders.");
+                Assert(anomalyView.FindName("AnomalyLocalOllamaPanel") is Expander &&
+                       anomalyView.FindName("AnomalyOllamaRefreshModels") is Button &&
+                       anomalyView.FindName("AnomalyOllamaModelSelector") is ComboBox &&
+                       anomalyView.FindName("AnomalyOllamaQuestion") is TextBox &&
+                       anomalyView.FindName("AnomalyOllamaExplainButton") is Button &&
+                       anomalyView.FindName("AnomalyOllamaPromptPreview") is TextBox,
+                    "Real WPF controls must expose opt-in Ollama model, question, " +
+                    "exact prompt preview and the explicit Explain action.");
+
+                Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
+                       analyzer.LocalAiHypotheses.Count == 0 &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "No evidence prepared", StringComparison.Ordinal),
+                    "Importing a source checkout must never send logs to Ollama.");
+                analyzer.PrepareLocalEvidence(sourceCase);
+                Assert(analyzer.ExplainLocalEvidenceCommand.CanExecute(null) == false &&
+                       analyzer.LocalAiExpanded &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "[BEGIN EVIDENCE L1]", StringComparison.Ordinal) &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "DemoWorker.cs", StringComparison.Ordinal) &&
+                       analyzer.LocalAiHypotheses.Count == 0,
+                    "Preparing a bounded prompt is local and requires a separately " +
+                    "chosen chat model and explicit Explain click.");
+                analyzer.InvestigationQuestion = "What can this synthetic log prove?";
+                Assert(!analyzer.ExplainLocalEvidenceCommand.CanExecute(null) &&
+                       analyzer.LocalPromptPreview.Contains(
+                           "Question edited", StringComparison.Ordinal),
+                    "Changing the question invalidates previously previewed prompt bytes.");
+                analyzer.PrepareLocalEvidence(sourceCase);
+                Assert(analyzer.LocalPromptPreview.Contains(
+                           "What can this synthetic log prove?", StringComparison.Ordinal),
+                    "Preparing again must incorporate the new question.");
+
             }
             finally
             {

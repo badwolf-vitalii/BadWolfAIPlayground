@@ -143,7 +143,13 @@ public sealed partial class AnomalyViewModel
                 foreach (LocalOllamaModel model in models)
                     LocalOllamaModels.Add(model.Name);
                 if (!LocalOllamaModels.Contains(SelectedLocalModel))
-                    SelectedLocalModel = LocalOllamaModels.FirstOrDefault() ?? "";
+                {
+                    // Refresh holds Busy=true: update the catalog selection
+                    // directly instead of rejecting it in the user-facing setter.
+                    _selectedLocalModel = LocalOllamaModels.FirstOrDefault() ?? "";
+                    OnPropertyChanged(nameof(SelectedLocalModel));
+                    ClearLocalAnswer();
+                }
                 LocalAiStatus = LocalOllamaModels.Count == 0
                     ? "Ollama is running but no models were found. Install a local chat model."
                     : $"Found {LocalOllamaModels.Count} locally installed model(s). " +

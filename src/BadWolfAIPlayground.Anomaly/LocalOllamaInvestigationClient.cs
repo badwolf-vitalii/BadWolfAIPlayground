@@ -39,7 +39,8 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         _http = http ?? new HttpClient(new HttpClientHandler
         {
             AllowAutoRedirect = false,
-            UseCookies = false
+            UseCookies = false,
+            UseProxy = false
         })
         {
             BaseAddress = new Uri(LocalEndpoint),
