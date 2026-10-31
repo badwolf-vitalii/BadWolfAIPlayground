@@ -56,7 +56,7 @@ statistical anomaly detection still work entirely locally without a model.
    hypotheses, not confirmed diagnoses**.
 
 The prompt includes only one primary selected LOG entry, up to **six
-explicitly related LOG events** and **three indexed C# excerpts**,
+additional LOG entries** (operation-correlated or clearly labeled nearby same-file context) and **three indexed C# excerpts**,
 all clipped to bounded lengths. Its entire user message is limited
 to **7,200 characters**. It never automatically reads or sends whole
 log/source files. Skipped, excluded or unimported files cannot be
@@ -77,6 +77,25 @@ generated responses are persisted by the application (Ollama itself
 may keep service logs according to its configuration). Missing
 Ollama/model does not break the deterministic log analyzer.
 
+
+### Same-file context for logs without operation_id (v0.5.0)
+
+Source-aware search can now supply nearby entries when the selected LOG
+event has **no explicit operation_id**. The analyzer inspects only the
+already imported, currently included, retained entries from the **same
+original file**, selecting up to three earlier and three later events,
+within 60 physical lines and two minutes. Records tagged with a different
+explicit operation_id are excluded; neighboring events from another
+component are never linked simply by matching timestamps.
+
+The Prepare audit and exact preview distinguish **operation-correlated
+LOG evidence** from **nearby same-file context**. A nearby record is useful
+for understanding sequence and state, but physical/time proximity is **not
+proof** of a common transaction, executed C# path, or root cause. The
+conservative citation gate does not accept a nearby-only reference as
+support for a causal hypothesis. This remains a bounded selection,
+not the entire history of the imported logs; missing surrounding entries
+in the packet do not prove none exist in the original files.
 
 ### Robust local model responses (v0.5.0)
 
@@ -133,7 +152,7 @@ entry or indexed logging-site guard supporting it: a reference to the
 primary error line `L1` alone is insufficient even when other evidence
 exists in the packet.
 
-The same explicit local-only flow, limits (one primary LOG, six related LOG,
+The same explicit local-only flow, limits (one primary LOG, six additional LOG,
 three C#, 7,200-character user prompt), no-cloud policy, input exclusions,
 strict citation IDs and cancellation behavior remain in place. This release
 does not add whole-repository retrieval or a runtime call graph.

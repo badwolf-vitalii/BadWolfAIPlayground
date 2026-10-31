@@ -376,6 +376,42 @@ sending a request. Real-model behavior still requires
 manual verification on the user's own machine.
 
 
+### Bounded local context for ID-less log investigations (v0.5.0)
+
+`SourceInvestigationAnalyzer.Search` retains its strict operation_id-only
+**cross-component correlation**. For a selected record with no operation_id,
+a separate same-file context pass indexes only the already enabled/retained
+`LogParseResult.Events` for the chosen original source files. It gathers at
+most three prior and three subsequent parsed entries within 60 physical
+lines and +/-120 seconds. Entries with an unrelated explicit operation_id
+are excluded, and no same-timestamp entries from a different file are
+joined. It does not open any new file or inspect unimported records.
+The per-file lookup is built once per bounded search rather than rescanned
+separately for every selected case.
+
+These entries are stored on `SourceInvestigationCase.NearbyEvents`, not in
+`RelatedEvents`. `InvestigationPromptBuilder` admits up to six additional
+LOG entries shared between true operation-correlated events and nearby
+context, deduplicating timestamp+message mirrored observations. The
+read-only audit and exact Ollama prompt label each nearby record explicitly
+as **NOT operation-correlated**. The model's system instruction forbids
+treating physical/time proximity as a runtime call, shared transaction or
+cause, and forbids claiming missing logs do not exist.
+
+`LocalOllamaInvestigationClient` additionally restricts L2+ citations
+eligible to support a proposed *causal* hypothesis to actual
+`Related LOG` evidence. Same-file context entries are not qualifying
+corroboration merely by being adjacent. They can, however, inform the
+model's suggested next diagnostic checks. A deterministic unknown notes
+the limitation. Every hypothesis continues to require an actual allowed
+citation, and no semantic root cause is proven by this policy.
+
+A synthetic regression case tests same-file previous/next inclusion,
+window bounds, explicit foreign operation exclusion, different-file
+isolation, correct audit labels, non-causal citation enforcement, and
+refreshing the prompt from a reduced included-only event set. CI does
+not exercise proprietary production logs.
+
 ### Local Ollama structured-response interoperability (v0.5.0 follow-up)
 
 `LocalOllamaInvestigationClient.ExplainAsync` now sends a JSON Schema
@@ -413,7 +449,8 @@ Ollama model quality requires manual Windows validation**.
 The selected `SourceInvestigationCase` remains the **only source** of model
 context: no additional disk, private source, excluded LOG or cloud access is
 introduced. `InvestigationPromptBuilder` selects one original LOG record,
-at most six distinct related LOG lines, and at most three C# candidates.
+at most six additional LOG entries (operation-correlated or nearby same-file
+context), and at most three C# candidates.
 Candidate selection first diversifies across source evidence kinds (logger
 location, exact/formatted logging template, stack frame and method-name hint)
 so repetitive caller locations cannot evict all logging-template evidence.

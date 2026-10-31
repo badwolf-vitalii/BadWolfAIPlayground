@@ -36,7 +36,8 @@ var checks = new (string Name, Action Execute)[]
     ("Small chat models may exceed the display item counts without breaking analysis", ExtraLocalModelItems),
     ("Truncated Qwen output retries with unchanged previewed LOG/C# evidence", TruncatedLocalModelRetry),
     ("Legacy JSON mode can retry a rejected schema without changing messages", LegacyLocalModelFormatRetry),
-    ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback)
+    ("Repeated malformed local model replies show evidence-only fallback", InvalidLocalModelFallback),
+    ("ID-less same-file LOG context is bounded, labeled and never causally linked", SameFileLogContext)
 };
 
 int failed = 0;
@@ -1913,6 +1914,111 @@ static HttpResponseMessage LocalChatReply(string content, string reason = "stop"
             done_reason = reason
         }), Encoding.UTF8, "application/json")
     };
+}
+
+
+static void SameFileLogContext()
+{
+    const string name = "CardPrinter_2026-10-30.log";
+    const string otherName = "WebClient_2026-10-30.log";
+    const string messages = """
+        2026-10-30 16:20:00 INFO Stale device state from six minutes earlier
+        2026-10-30 16:26:50 INFO Purge operation requested
+        2026-10-30 16:26:51 DEBUG Receipt queue size 3
+        2026-10-30 16:26:51 DEBUG Unrelated operation | operation_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        2026-10-30 16:26:52 ERROR Purge failed without a detailed reason
+        2026-10-30 16:26:53 DEBUG Printer state after request: offline flag not logged
+        2026-10-30 16:26:54 INFO Purge request finished
+        2026-10-30 16:30:00 INFO Future event outside two-minute context window
+        """;
+    LogParseResult parsed = LogParser.Parse(messages, sourceFile: name);
+    LogEvent primary = parsed.Events.Single(e => e.Message.Contains(
+        "Purge failed", StringComparison.Ordinal));
+    LogEvent unrelatedFile = new(primary.Timestamp, LogSeverity.Debug,
+        "Another component recorded unrelated IO data", 3)
+    {
+        SourceFile = otherName
+    };
+    LogParseResult mixed = parsed with
+    {
+        Events = parsed.Events.Append(unrelatedFile).ToArray()
+    };
+    SourceInvestigationCase selected = SourceInvestigationAnalyzer.Search(
+        mixed, null, "Purge failed").Cases.Single();
+
+    Ensure(selected.OperationId.Length == 0 &&
+           selected.RelatedEvents.Count == 0 &&
+           selected.NearbyEvents.Count == 4 &&
+           selected.NearbyEvents.All(e => e.SourceFile == name) &&
+           selected.NearbyEvents.Select(e => e.SourceLine).SequenceEqual([2, 3, 6, 7]) &&
+           !selected.NearbyEvents.Any(e => e.Message.Contains("Unrelated operation",
+               StringComparison.Ordinal)) &&
+           !selected.NearbyEvents.Any(e => e.Message.Contains("Stale device",
+               StringComparison.Ordinal)),
+        "Nearby context must be same-file, tightly bounded by line/time, " +
+        "and must never borrow different explicit operation IDs or other files.");
+
+    InvestigationPrompt prompt = InvestigationPromptBuilder.Build(
+        selected, "What do the nearby records show?");
+    Ensure(prompt.Evidence.Count == 5 &&
+           prompt.Evidence.Skip(1).All(e =>
+               e.Kind.StartsWith("Nearby same-file LOG context",
+                   StringComparison.Ordinal)) &&
+           prompt.Audit.Contains("4/4 nearby same-file LOG context entries",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("Purge operation requested",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("Receipt queue size 3",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Contains("NOT operation-correlated",
+               StringComparison.Ordinal) &&
+           prompt.UserMessage.Length <= InvestigationPromptBuilder.MaxPromptCharacters,
+        "The exact Ollama preview must contain the useful nearby state " +
+        "without mislabeling same-file neighbors as operation-correlated.");
+
+    using JsonDocument unsupported = JsonDocument.Parse(
+        """
+        {"summary":"The printer was disconnected.",
+         "hypotheses":[{"claim":"A disconnected printer caused the purge error.",
+                        "evidence_ids":["L2"]}],
+         "next_checks":["Inspect printer status before the purge."],
+         "unknowns":["The failure cause remains unverified."]}
+        """);
+    LocalInvestigationExplanation result =
+        LocalOllamaInvestigationClient.ParseExplanation(
+            unsupported.RootElement, prompt.Evidence);
+    Ensure(result.Hypotheses.Count == 0 &&
+           !result.Summary.Contains("disconnected",
+               StringComparison.OrdinalIgnoreCase) &&
+           result.Unknowns.Any(text => text.Contains("context only",
+               StringComparison.OrdinalIgnoreCase)),
+        "Citing a neighboring LOG line must not turn time proximity into " +
+        "a confirmed runtime cause.");
+
+    LogParseResult onlyPrimary = mixed with { Events = [primary] };
+    SourceInvestigationCase filtered = SourceInvestigationAnalyzer.Search(
+        onlyPrimary, null, "Purge failed").Cases.Single();
+    Ensure(filtered.NearbyEvents.Count == 0 &&
+           InvestigationPromptBuilder.Build(filtered, "What happened?")
+               .Evidence.Count == 1,
+        "Excluded/unretained log files and events must never reappear " +
+        "as model evidence.");
+
+    var manyEvents = Enumerable.Range(0, 30).Select(i =>
+        new LogEvent(primary.Timestamp.AddMilliseconds(i - 15),
+            LogSeverity.Debug, "Synthetic neighbor #" + i, 50 + i)
+        {
+            SourceFile = name
+        }).Append(primary with { LineNumber = 90 })
+          .OrderBy(e => e.LineNumber).ToArray();
+    LogParseResult noisy = new(manyEvents, manyEvents.Length, 0, 0);
+    SourceInvestigationCase limited = SourceInvestigationAnalyzer.Search(
+        noisy, null, "Purge failed").Cases.Single();
+    Ensure(limited.NearbyEvents.Count <=
+               SourceInvestigationAnalyzer.MaxNearbyContextEvents &&
+           InvestigationPromptBuilder.Build(limited, "Investigate.")
+               .Evidence.Count <= 1 + InvestigationPromptBuilder.MaxRelatedLogs,
+        "Large files cannot expand the bounded same-file context beyond six LOG records.");
 }
 
 sealed class InvestigationHttpHandler(

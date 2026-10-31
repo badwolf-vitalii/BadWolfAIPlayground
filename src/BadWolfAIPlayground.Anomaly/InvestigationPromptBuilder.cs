@@ -42,6 +42,10 @@ public static class InvestigationPromptBuilder
         an observed fact unless those facts are independently logged.
         A C# logging template establishes only a possible logging site.
         A logger/catch/stack location does NOT identify the origin of a fault.
+        A NEARBY same-file LOG entry is context, NOT proof that events belong
+        to one operation or that one caused another. Do NOT infer call flow
+        from timestamp or file proximity. If no previous/subsequent event
+        was supplied, never claim no such entries exist in the full logs.
         Source conditions and method invocations are STATIC syntax: they may
         not have executed in the observed operation. A matching method name
         does not prove a runtime call path. Checkouts may differ from deployed code.
@@ -114,6 +118,28 @@ public static class InvestigationPromptBuilder
             relatedUsed++;
         }
 
+        // A selected ID-less log event can have surrounding records in the
+        // same physical file. They are labeled NON-CORRELATED context and
+        // must not be promoted to runtime or causal proof.
+        int nearbyUsed = 0;
+        foreach (SourceInvestigationLogEvent entry in source.NearbyEvents)
+        {
+            if (relatedUsed + nearbyUsed >= MaxRelatedLogs)
+                break;
+            if (!knownLines.Add(entry.SourceFile + ":" + entry.SourceLine))
+                continue;
+            if (!knownObservations.Add(entry.Timestamp.UtcDateTime.Ticks +
+                    "|" + entry.Message.Trim()))
+                continue;
+            evidence.Add(new InvestigationPromptEvidence(
+                "L" + (relatedUsed + nearbyUsed + 2),
+                "Nearby same-file LOG context (NOT operation-correlated; " +
+                    entry.Severity + ")",
+                SafeLocation(entry.SourceFile), Math.Max(0, entry.SourceLine),
+                Limit(entry.Message, MaxExcerptCharacters)));
+            nearbyUsed++;
+        }
+
         IReadOnlyList<SourceInvestigationCandidate> codeCandidates =
             SelectCodeCandidates(source.Candidates);
         int nextCodeId = 1;
@@ -127,7 +153,7 @@ public static class InvestigationPromptBuilder
                 CodeExcerpt(candidate)));
         }
 
-        string audit = BuildAudit(source, relatedUsed, codeCandidates.Count);
+        string audit = BuildAudit(source, relatedUsed, nearbyUsed, codeCandidates.Count);
         var text = new StringBuilder();
         text.AppendLine("Developer question (written by the user):");
         text.AppendLine(question);
@@ -139,6 +165,9 @@ public static class InvestigationPromptBuilder
         if (codeCandidates.Count == 0)
             text.AppendLine("NO C# source candidate was included. The application " +
                 "control flow has NOT been inspected by this model.");
+        if (nearbyUsed > 0)
+            text.AppendLine("The nearby same-file LOG excerpts show only " +
+                "physical/time proximity, NOT operation correlation or causation.");
         text.AppendLine();
         text.AppendLine("Case metadata (not proof of causation):");
         text.AppendLine("Category: " + Limit(source.Category, 90));
@@ -187,10 +216,12 @@ public static class InvestigationPromptBuilder
     }
 
     private static string BuildAudit(
-        SourceInvestigationCase source, int relatedUsed, int codeUsed)
+        SourceInvestigationCase source, int relatedUsed, int nearbyUsed, int codeUsed)
     {
         string summary = "1 primary LOG; " + relatedUsed + "/" +
-            source.RelatedEvents.Count + " visible related LOG entries; " +
+            source.RelatedEvents.Count + " operation-correlated LOG entries; " +
+            nearbyUsed + "/" + source.NearbyEvents.Count +
+            " nearby same-file LOG context entries (NOT operation-correlated); " +
             codeUsed + "/" + source.Candidates.Count + " indexed C# candidates selected.";
         if (source.RelatedEventCount > source.RelatedEvents.Count)
             summary += " The operation contains " + source.RelatedEventCount +
@@ -203,9 +234,12 @@ public static class InvestigationPromptBuilder
                 "and none is a verified runtime root cause.";
         else
             summary += " A source match is NOT proof that this code executed.";
-        if (relatedUsed == 0 && codeUsed == 0)
+        if (relatedUsed == 0 && nearbyUsed == 0 && codeUsed == 0)
             summary += " Only the primary LOG entry is available: " +
                 "its root cause cannot be established.";
+        else if (relatedUsed == 0 && nearbyUsed > 0)
+            summary += " The neighboring entries are context only: " +
+                "a common operation or causal link has NOT been established.";
         return summary;
     }
 

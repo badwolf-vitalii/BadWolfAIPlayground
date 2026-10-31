@@ -15,12 +15,18 @@ public static partial class SourceInvestigationAnalyzer
 {
     public const int MaxSearchGroups = 40;
     public const int MaxSearchQueryLength = 256;
+    public const int MaxNearbyContextEvents = 6;
+    public const int MaxNearbyPhysicalLineDistance = 60;
+    public const int MaxNearbySeconds = 120;
 
     /// <summary>
     /// Searches every retained event (INFO/DEBUG included) by message,
     /// continuation and original/alias filename. Results are grouped by an
     /// explicit operation_id when present, otherwise by source line.
-    /// No timestamp-only joins, source execution, network or cloud access.
+    /// Cross-file/operation correlation still requires an explicit ID.
+    /// Separately labeled nearby lines from the SAME physical log file are
+    /// contextual observations only, not correlated operations or causation.
+    /// No source execution, network request or cloud access occurs.
     /// </summary>
     public static SourceInvestigationSearchResult Search(
         LogParseResult source, SourceInvestigationIndex? index,
@@ -99,6 +105,35 @@ public static partial class SourceInvestigationAnalyzer
             }
         }
 
+        // Collect a small amount of same-file context even for older LOG
+        // formats without operation_id. We inspect ONLY the already imported,
+        // currently enabled retained events; no disk scan or cross-file
+        // timestamp association is performed. Build a per-file lookup once,
+        // avoiding rescanning a million events for each search result.
+        var contextFiles = chosen.Values
+            .Where(entry => ReadOperationId(entry.Message).Length == 0 &&
+                            !string.IsNullOrWhiteSpace(entry.SourceFile))
+            .Select(entry => entry.SourceFile)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var nearbyByFile = new Dictionary<string, List<LogEvent>>(
+            StringComparer.OrdinalIgnoreCase);
+        if (contextFiles.Count > 0)
+        {
+            for (int i = 0; i < source.Events.Count; i++)
+            {
+                if ((i & 1023) == 0)
+                    cancellationToken.ThrowIfCancellationRequested();
+                LogEvent entry = source.Events[i];
+                if (!contextFiles.Contains(entry.SourceFile))
+                    continue;
+                if (!nearbyByFile.TryGetValue(entry.SourceFile, out List<LogEvent>? events))
+                    nearbyByFile[entry.SourceFile] = events = [];
+                events.Add(entry);
+            }
+            foreach (List<LogEvent> events in nearbyByFile.Values)
+                events.Sort((left, right) => left.LineNumber.CompareTo(right.LineNumber));
+        }
+
         SourceInvestigationCase[] cases = chosen.Values
             .OrderByDescending(entry => entry.Timestamp)
             .ThenByDescending(entry => entry.Severity)
@@ -124,7 +159,13 @@ public static partial class SourceInvestigationAnalyzer
                     candidates,
                     "Search results are original log observations, not " +
                     "anomaly classifications or confirmed diagnoses.",
-                    id, linked) with { ObservedAt = entry.Timestamp };
+                    id, linked) with
+                {
+                    ObservedAt = entry.Timestamp,
+                    NearbyEvents = id.Length == 0
+                        ? CollectNearby(entry, nearbyByFile)
+                        : []
+                };
                 return index is null
                     ? result with
                     {
@@ -136,6 +177,82 @@ public static partial class SourceInvestigationAnalyzer
             }).ToArray();
 
         return new SourceInvestigationSearchResult(cases, matchedCount);
+    }
+
+
+    private static IReadOnlyList<SourceInvestigationLogEvent> CollectNearby(
+        LogEvent primary, Dictionary<string, List<LogEvent>> byFile)
+    {
+        if (string.IsNullOrWhiteSpace(primary.SourceFile) ||
+            !byFile.TryGetValue(primary.SourceFile, out List<LogEvent>? events))
+            return [];
+
+        int position = events.BinarySearch(primary,
+            Comparer<LogEvent>.Create((a, b) =>
+                a.LineNumber.CompareTo(b.LineNumber)));
+        if (position < 0)
+            return [];
+
+        var before = new List<LogEvent>();
+        var after = new List<LogEvent>();
+        int perSide = MaxNearbyContextEvents / 2;
+
+        for (int i = position - 1; i >= 0 && before.Count < perSide; i--)
+        {
+            LogEvent candidate = events[i];
+            if (primary.LineNumber - candidate.LineNumber >
+                MaxNearbyPhysicalLineDistance)
+                break;
+            if (EligibleNearby(primary, candidate))
+                before.Add(candidate);
+        }
+        for (int i = position + 1; i < events.Count && after.Count < perSide; i++)
+        {
+            LogEvent candidate = events[i];
+            if (candidate.LineNumber - primary.LineNumber >
+                MaxNearbyPhysicalLineDistance)
+                break;
+            if (EligibleNearby(primary, candidate))
+                after.Add(candidate);
+        }
+
+        // Preserve physical file order; this is local context, not a call trace.
+        return before.AsEnumerable().Reverse().Concat(after)
+            .DistinctBy(entry => (entry.Timestamp.UtcTicks, entry.Message),
+                new TimestampAndMessageComparer())
+            .Select(entry => new SourceInvestigationLogEvent(
+                entry.Timestamp, entry.Severity,
+                entry.Message.Length > 450
+                    ? entry.Message[..450] + "..." : entry.Message,
+                entry.SourceFile, entry.LineNumber))
+            .ToArray();
+    }
+
+    private static bool EligibleNearby(LogEvent primary, LogEvent candidate)
+    {
+        // Ignore different explicit operations; never borrow those as context
+        // for an untagged event just because the timestamps are close.
+        if (ReadOperationId(candidate.Message).Length > 0)
+            return false;
+        if (candidate.Timestamp == primary.Timestamp &&
+            string.Equals(candidate.Message, primary.Message,
+                StringComparison.OrdinalIgnoreCase))
+            return false;
+        return Math.Abs((candidate.Timestamp - primary.Timestamp).TotalSeconds)
+               <= MaxNearbySeconds;
+    }
+
+    private sealed class TimestampAndMessageComparer :
+        IEqualityComparer<(long Timestamp, string Message)>
+    {
+        public bool Equals((long Timestamp, string Message) a,
+                           (long Timestamp, string Message) b) =>
+            a.Timestamp == b.Timestamp &&
+            StringComparer.OrdinalIgnoreCase.Equals(a.Message, b.Message);
+
+        public int GetHashCode((long Timestamp, string Message) value) =>
+            HashCode.Combine(value.Timestamp,
+                StringComparer.OrdinalIgnoreCase.GetHashCode(value.Message));
     }
 
     private static bool ContainsQuery(LogEvent entry, string query) =>

@@ -22,6 +22,9 @@ public sealed record SourceInvestigationCase(
     public string OperationId { get; init; } = "";
     public int RelatedEventCount { get; init; }
     public IReadOnlyList<SourceInvestigationLogEvent> RelatedEvents { get; init; } = [];
+    // Same-file nearby entries are local context only, never operation_id
+    // correlation or evidence that a method/operation actually executed.
+    public IReadOnlyList<SourceInvestigationLogEvent> NearbyEvents { get; init; } = [];
     public DateTimeOffset? ObservedAt { get; init; }
 }
 

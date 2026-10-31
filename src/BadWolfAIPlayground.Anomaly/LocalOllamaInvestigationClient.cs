@@ -298,7 +298,8 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         // A separate LOG line or an indexed guard at a matched logging
         // template is a prerequisite, not proof that a proposed cause is true.
         HashSet<string> supportingIds = evidence.Where(item =>
-            (item.Id.StartsWith('L') && item.Id != "L1") ||
+            (item.Id.StartsWith('L') && item.Id != "L1" &&
+             item.Kind.StartsWith("Related LOG", StringComparison.Ordinal)) ||
             (item.Id.StartsWith('C') &&
              (item.Kind.Contains("logging literal", StringComparison.OrdinalIgnoreCase) ||
               item.Kind.Contains("logging template", StringComparison.OrdinalIgnoreCase)) &&
@@ -313,6 +314,11 @@ public sealed class LocalOllamaInvestigationClient : IDisposable
         if (!hasCode)
             unknowns.Insert(0, "No indexed C# source candidate was supplied. " +
                 "The application control flow was not verified.");
+
+        if (evidence.Any(item => item.Kind.StartsWith(
+                "Nearby same-file LOG context", StringComparison.Ordinal)))
+            unknowns.Insert(0, "Nearby same-file LOG entries provide context only. " +
+                "They do not establish a shared operation or a causal sequence.");
 
         if (supportingIds.Count == 0 || (withheld > 0 && claims.Count == 0))
         {
