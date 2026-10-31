@@ -571,6 +571,107 @@
                     <TextBlock Text="Only source syntax and explicit log evidence are joined. Matching code is not a confirmed runtime call path or root cause."
                                FontSize="11" Foreground="#D1BFA9"
                                TextWrapping="Wrap" Margin="0,0,0,10"/>
+
+                    <Expander x:Name="AnomalyLocalOllamaPanel"
+                              Header="Local Ollama — explain selected evidence (opt-in)"
+                              IsExpanded="{Binding LocalAiExpanded, Mode=TwoWay}"
+                              Foreground="#DDEEFE" Background="#10263D"
+                              BorderBrush="#335474" BorderThickness="1"
+                              Padding="11" Margin="0,3,0,12">
+                        <StackPanel>
+                            <TextBlock Text="Only an explicit Explain click sends the previewed excerpts to http://127.0.0.1:11434. Local model output is a hypothesis, not an established diagnosis."
+                                       FontSize="11" Foreground="#D9BF9C"
+                                       TextWrapping="Wrap" Margin="0,0,0,9"/>
+                            <TextBlock Text="{Binding PreparedEvidenceTitle}" Foreground="#A8DBF1"
+                                       TextWrapping="Wrap" FontSize="11" Margin="0,0,0,8"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,9">
+                                <Button x:Name="AnomalyOllamaRefreshModels"
+                                        Content="Refresh installed models"
+                                        Style="{StaticResource SecondaryButton}"
+                                        Command="{Binding RefreshLocalModelsCommand}"
+                                        Margin="0,0,10,0"/>
+                                <ComboBox x:Name="AnomalyOllamaModelSelector"
+                                          ItemsSource="{Binding LocalOllamaModels}"
+                                          SelectedItem="{Binding SelectedLocalModel, Mode=TwoWay}"
+                                          Width="250" MinHeight="33"
+                                          Foreground="#E6F5FC" Background="#162E47"/>
+                            </StackPanel>
+                            <TextBlock Text="Question for the local model" Foreground="#B5D4E7"
+                                       FontSize="11" Margin="0,0,0,5"/>
+                            <TextBox x:Name="AnomalyOllamaQuestion"
+                                     Text="{Binding InvestigationQuestion, UpdateSourceTrigger=PropertyChanged}"
+                                     Foreground="#E5F5FC" Background="#0D2034"
+                                     BorderBrush="#36536B" TextWrapping="Wrap"
+                                     Padding="8" FontSize="11" MinHeight="48"
+                                     Margin="0,0,0,8"/>
+                            <Button x:Name="AnomalyOllamaExplainButton"
+                                    Content="Explain with local Ollama"
+                                    HorizontalAlignment="Left"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding ExplainLocalEvidenceCommand}"
+                                    Margin="0,0,0,7"/>
+                            <TextBlock Text="{Binding LocalAiStatus}" TextWrapping="Wrap"
+                                       Foreground="#9AD6C9" FontSize="11"
+                                       Margin="0,0,0,10"/>
+                            <TextBlock Text="Exact messages and evidence prepared for Ollama"
+                                       Foreground="#D9E9F7" FontWeight="SemiBold"
+                                       FontSize="11" Margin="0,0,0,5"/>
+                            <TextBox x:Name="AnomalyOllamaPromptPreview"
+                                     IsReadOnly="True"
+                                     Text="{Binding LocalPromptPreview, Mode=OneWay}"
+                                     FontFamily="Consolas" FontSize="10"
+                                     Foreground="#BCD5E8" Background="#081A2D"
+                                     BorderBrush="#2B4E68" BorderThickness="1"
+                                     TextWrapping="Wrap" AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     MaxHeight="230" MinHeight="80"
+                                     Padding="8" Margin="0,0,0,12"/>
+                            <TextBlock Text="Model explanation (unverified)"
+                                       FontWeight="SemiBold" FontSize="12"
+                                       Foreground="#E7D6BD" Margin="0,0,0,5"/>
+                            <TextBlock Text="{Binding LocalAnswerSummary}" TextWrapping="Wrap"
+                                       Foreground="#E6F2F9" FontSize="11"
+                                       Margin="0,0,0,9"/>
+                            <TextBlock Text="Possible explanations (evidence IDs required)"
+                                       FontWeight="SemiBold" Foreground="#C9DEEE"
+                                       Margin="0,0,0,4"/>
+                            <ItemsControl ItemsSource="{Binding LocalAiHypotheses}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,0,0,7">
+                                            <TextBlock Text="{Binding Claim}" FontSize="11"
+                                                       Foreground="#E3EDF6" TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding References}"
+                                                       FontFamily="Consolas" FontSize="10"
+                                                       Foreground="#8AD3BD" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="Suggested diagnostic checks" FontWeight="SemiBold"
+                                       Foreground="#C9DEEE" Margin="0,8,0,3"/>
+                            <ItemsControl ItemsSource="{Binding LocalAiNextChecks}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                   Foreground="#E4EFF8" FontSize="11"
+                                                   Margin="0,0,0,4"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <TextBlock Text="Unknowns and limitations" FontWeight="SemiBold"
+                                       Foreground="#C9DEEE" Margin="0,8,0,3"/>
+                            <ItemsControl ItemsSource="{Binding LocalAiUnknowns}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" TextWrapping="Wrap"
+                                                   Foreground="#E2C7A7" FontSize="11"
+                                                   Margin="0,0,0,4"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Expander>
                     <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto">
                         <ItemsControl x:Name="AnomalyInvestigationCases"
                                       ItemsSource="{Binding Investigations}">
@@ -608,6 +709,11 @@
                                                     HorizontalAlignment="Left" Margin="0,7,0,9"
                                                     Style="{StaticResource SecondaryButton}"
                                                     Command="{Binding DataContext.OpenInvestigationLogCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <Button Content="Prepare AI explanation from this case"
+                                                    HorizontalAlignment="Left" Margin="0,0,0,9"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Command="{Binding DataContext.PrepareLocalEvidenceCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
                                                     CommandParameter="{Binding}"/>
 
                                             <TextBlock Text="{Binding RelatedSummary}"
